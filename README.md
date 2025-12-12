@@ -1,7 +1,5 @@
-# bio-neighbor
-BioNeighbor: A molecular similarity engine inspired by collaborative filtering — find “neighbor” molecules to existing drugs and bioactive compounds.
-
 # BioNeighbor
+BioNeighbor: A molecular similarity engine inspired by collaborative filtering — find “neighbor” molecules to existing drugs and bioactive compounds.
 
 **Discover structurally and functionally similar molecules to explore biochemical pathways and improve drug efficacy.**
 
