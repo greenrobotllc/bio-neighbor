@@ -63,8 +63,11 @@ The frontend communicates with the local Python engine via:
 Initial datasets include publicly available sources:
 
 - **ChEMBL:** Approved drugs, small molecules, activity data, and targets.  
+  - Note: ChEMBL API may experience occasional downtime (see [issue #134](https://github.com/chembl/chembl_webresource_client/issues/134))
+- **PubChem:** Free, reliable alternative data source for FDA-approved drugs and small molecules.
+  - Automatically used as fallback if ChEMBL is unavailable
 - **BindingDB:** Molecule × protein binding affinities for constructing similarity/recommendation matrices.  
-- **PubChem Bioassays:** Optional for expanded molecular sets.  
+- **Sample Data:** Built-in sample molecules for testing when APIs are unavailable.
 
 Users can also extend the datasets with custom molecules or assay results.
 
@@ -82,14 +85,122 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
 
 ---
 
-## Getting Started (Research / Prototype Mode)
+## Getting Started
 
-1. Install Python dependencies: RDKit, FAISS, stanscofi/benchscofi.  
-2. Load precomputed embeddings or compute fingerprints for molecules.  
-3. Run the local Python engine to query nearest-neighbor molecules.  
-4. Launch KMP frontend to select a molecule and visualize results.  
+### Prerequisites
 
-> A full Mac app prototype can be built with Kotlin Multiplatform + SwiftUI/JavaScript visualization, calling the local Python engine for similarity computation.
+- **macOS** 13.0 or later
+- **Python 3.9+** (Python 3.11 or 3.12 recommended)
+  - Install via Homebrew: `brew install python3` or `brew install python@3.12`
+  - Or use conda: `conda install python=3.11`
+- **Xcode 14+** (for macOS app development)
+- **Internet connection** (for initial dataset download)
+
+### Quick Start
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd bio-neighbor
+   ```
+
+2. **Run the setup script:**
+   ```bash
+   ./setup.sh
+   ```
+   This will:
+   - Create a Python virtual environment
+   - Install all Python dependencies (RDKit, FAISS, etc.)
+   - Create necessary directories
+   
+   **Note:** If RDKit installation fails via pip, you can use conda:
+   ```bash
+   conda install -c conda-forge rdkit
+   ```
+   Or see [INSTALL_RDKIT.md](INSTALL_RDKIT.md) for alternative installation methods.
+
+3. **Run the setup script:**
+   ```bash
+   ./setup.sh
+   ```
+   This will:
+   - Create a Python virtual environment (if not using conda)
+   - Install remaining Python dependencies (FAISS, etc.)
+   - Create necessary directories
+
+3. **Activate the virtual environment:**
+   ```bash
+   source venv/bin/activate
+   ```
+
+4. **Set up the data and build the search index:**
+   ```bash
+   python backend/main.py setup --max-molecules 10000
+   ```
+   This will:
+   - Download molecules from ChEMBL (may take 10-30 minutes)
+   - Compute molecular fingerprints
+   - Build the FAISS similarity search index
+
+5. **Test the backend (optional):**
+   ```bash
+   # Search for molecules similar to aspirin
+   python backend/main.py search "CC(=O)Oc1ccccc1C(=O)O" --top-k 5
+   
+   # Start the API server
+   python backend/api.py --mode http
+   ```
+
+6. **Build and run the macOS app:**
+   - Open Xcode
+   - Create a new macOS App project in `macos_app/` directory
+   - Add all Swift files from `macos_app/BioNeighbor/`
+   - Build and run (⌘R)
+   - The app will automatically start the backend if needed
+
+### Backend API
+
+The backend provides a REST API on `http://127.0.0.1:5000`:
+
+- `GET /health` - Health check
+- `POST /search` - Search by SMILES string
+- `POST /search/chembl` - Search by ChEMBL ID
+- `GET /molecule/<index>` - Get molecule by index
+- `POST /render` - Render molecule structure image
+
+### Command Line Interface
+
+The backend also provides a CLI for testing:
+
+```bash
+# Setup data and index
+python backend/main.py setup --max-molecules 10000
+
+# Search by SMILES
+python backend/main.py search "CC(=O)Oc1ccccc1C(=O)O" --top-k 10
+
+# Search by ChEMBL ID
+python backend/main.py search-chembl CHEMBL25 --top-k 5
+```
+
+### Project Structure
+
+```
+bio-neighbor/
+├── backend/              # Python backend
+│   ├── data_loader.py    # ChEMBL dataset loading
+│   ├── fingerprints.py   # Molecular fingerprint computation
+│   ├── index_builder.py # FAISS index building
+│   ├── search_engine.py  # Similarity search engine
+│   ├── api.py           # HTTP API server
+│   ├── molecule_renderer.py # 2D structure rendering
+│   └── main.py          # CLI entry point
+├── macos_app/           # SwiftUI macOS app
+│   └── BioNeighbor/     # Swift source files
+├── data/                # Data files (datasets, indices)
+├── venv/                # Python virtual environment
+└── setup.sh             # Setup script
+```
 
 ---
 
