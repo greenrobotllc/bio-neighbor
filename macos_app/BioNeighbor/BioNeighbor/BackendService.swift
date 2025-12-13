@@ -687,6 +687,311 @@ class BackendService: ObservableObject {
         return (response.drugs ?? [], response.molecules ?? [])
     }
     
+    func getDatabaseStats() async throws -> DatabaseStats {
+        guard let url = URL(string: "\(baseURL)/stats") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(StatsResponse.self, from: data)
+        
+        guard response.success, let stats = response.stats else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return stats
+    }
+    
+    func searchMolecules(query: String, limit: Int = 20) async throws -> [SearchResult] {
+        var urlComponents = URLComponents(string: "\(baseURL)/search/molecules")
+        urlComponents?.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: "\(limit)")
+        ]
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(AutocompleteResponse.self, from: data)
+        
+        guard response.success, let results = response.results else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return results
+    }
+    
+    func searchDrugs(query: String, limit: Int = 20) async throws -> [SearchResult] {
+        var urlComponents = URLComponents(string: "\(baseURL)/search/drugs")
+        urlComponents?.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: "\(limit)")
+        ]
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(AutocompleteResponse.self, from: data)
+        
+        guard response.success, let results = response.results else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return results
+    }
+    
+    func searchDiseases(query: String, limit: Int = 20) async throws -> [SearchResult] {
+        var urlComponents = URLComponents(string: "\(baseURL)/search/diseases")
+        urlComponents?.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: "\(limit)")
+        ]
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(AutocompleteResponse.self, from: data)
+        
+        guard response.success, let results = response.results else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return results
+    }
+    
+    func downloadMolecules(count: Int? = nil, source: String? = nil, names: [String]? = nil) async throws -> DownloadResponse {
+        guard let url = URL(string: "\(baseURL)/download/molecules") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.timeoutInterval = 60.0
+        
+        let request = DownloadMoleculesRequest(count: count, source: source, names: names)
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DownloadResponse.self, from: data)
+        
+        guard response.success else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return response
+    }
+    
+    func downloadDrugs(names: [String]? = nil, disease: String? = nil, count: Int? = nil) async throws -> DownloadResponse {
+        guard let url = URL(string: "\(baseURL)/download/drugs") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.timeoutInterval = 60.0
+        
+        let request = DownloadDrugsRequest(names: names, disease: disease, count: count)
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DownloadResponse.self, from: data)
+        
+        guard response.success else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return response
+    }
+    
+    func downloadDiseases(names: [String]? = nil, count: Int? = nil) async throws -> DownloadResponse {
+        guard let url = URL(string: "\(baseURL)/download/diseases") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.timeoutInterval = 60.0
+        
+        let request = DownloadDiseasesRequest(names: names, count: count)
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DownloadResponse.self, from: data)
+        
+        guard response.success else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return response
+    }
+    
+    func getDownloadStatus(taskId: String) async throws -> DownloadStatusResponse {
+        guard let url = URL(string: "\(baseURL)/download/status/\(taskId)") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 10.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DownloadStatusResponse.self, from: data)
+        
+        guard response.success else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return response
+    }
+    
     private func getProjectRoot() -> URL? {
         // Try to find the project root by looking for backend/api.py
         let fileManager = FileManager.default

@@ -588,6 +588,264 @@ def search_by_disease():
         }), 500
 
 
+@app.route('/download/status/<task_id>', methods=['GET'])
+def get_download_status(task_id: str):
+    """
+    Get status of a download task.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "running": true/false,
+        "exit_code": null or int,
+        "message": "..."
+    }
+    """
+    try:
+        import os
+        
+        try:
+            pid = int(task_id)
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid task ID'
+            }), 400
+        
+        # Try psutil first (more reliable)
+        try:
+            import psutil
+            try:
+                process = psutil.Process(pid)
+                is_running = process.is_running()
+                
+                if is_running:
+                    return jsonify({
+                        'success': True,
+                        'running': True,
+                        'exit_code': None,
+                        'message': 'Download in progress'
+                    })
+                else:
+                    # Process finished - try to get exit code
+                    try:
+                        exit_code = process.returncode
+                    except:
+                        exit_code = None
+                    return jsonify({
+                        'success': True,
+                        'running': False,
+                        'exit_code': exit_code,
+                        'message': 'Download completed' if exit_code == 0 else 'Download failed'
+                    })
+            except psutil.NoSuchProcess:
+                return jsonify({
+                    'success': True,
+                    'running': False,
+                    'exit_code': None,
+                    'message': 'Process not found (may have completed)'
+                })
+        except ImportError:
+            # psutil not available, use basic os.kill check
+            pass
+        
+        # Fallback: use os.kill to check if process exists
+        try:
+            # Signal 0 doesn't kill, just checks if process exists
+            os.kill(pid, 0)
+            return jsonify({
+                'success': True,
+                'running': True,
+                'exit_code': None,
+                'message': 'Download in progress'
+            })
+        except ProcessLookupError:
+            # Process doesn't exist
+            return jsonify({
+                'success': True,
+                'running': False,
+                'exit_code': None,
+                'message': 'Process not found (may have completed)'
+            })
+        except PermissionError:
+            # Process exists but we can't access it (likely finished)
+            return jsonify({
+                'success': True,
+                'running': False,
+                'exit_code': None,
+                'message': 'Process status unknown'
+            })
+        except OSError:
+            return jsonify({
+                'success': True,
+                'running': False,
+                'exit_code': None,
+                'message': 'Process not found'
+            })
+    
+    except Exception as e:
+        import traceback
+        print(f"❌ Error checking download status: {e}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Error checking status: {str(e)}'
+        }), 500
+
+
+@app.route('/stats', methods=['GET'])
+def get_stats():
+    """
+    Get database statistics.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "stats": {
+            "molecules": 10000,
+            "drugs": 150,
+            "diseases": 50,
+            "relationships": 200
+        }
+    }
+    """
+    try:
+        engine = get_engine()
+        stats = engine.get_database_stats()
+        
+        return jsonify({
+            'success': True,
+            'stats': stats
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /stats endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/search/molecules', methods=['GET'])
+def search_molecules():
+    """
+    Search molecules by name for autocomplete.
+    
+    Query parameters:
+    - q (string): Search query
+    - limit (int): Maximum results (default: 20)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "results": [...]
+    }
+    """
+    try:
+        query = request.args.get('q', '', type=str)
+        limit = request.args.get('limit', 20, type=int)
+        limit = min(max(limit, 1), 100)  # Clamp between 1 and 100
+        
+        engine = get_engine()
+        results = engine.search_molecules_by_name(query, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /search/molecules endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/search/drugs', methods=['GET'])
+def search_drugs():
+    """
+    Search drugs by name for autocomplete.
+    
+    Query parameters:
+    - q (string): Search query
+    - limit (int): Maximum results (default: 20)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "results": [...]
+    }
+    """
+    try:
+        query = request.args.get('q', '', type=str)
+        limit = request.args.get('limit', 20, type=int)
+        limit = min(max(limit, 1), 100)  # Clamp between 1 and 100
+        
+        engine = get_engine()
+        results = engine.search_drugs_by_name(query, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /search/drugs endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/search/diseases', methods=['GET'])
+def search_diseases():
+    """
+    Search diseases by name for autocomplete.
+    
+    Query parameters:
+    - q (string): Search query
+    - limit (int): Maximum results (default: 20)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "results": [...]
+    }
+    """
+    try:
+        query = request.args.get('q', '', type=str)
+        limit = request.args.get('limit', 20, type=int)
+        limit = min(max(limit, 1), 100)  # Clamp between 1 and 100
+        
+        engine = get_engine()
+        results = engine.search_diseases_by_name(query, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /search/diseases endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
 @app.route('/drugs', methods=['GET'])
 def list_drugs():
     """
@@ -733,6 +991,337 @@ def get_disease_drugs(disease_name: str):
         import traceback
         error_msg = str(e)
         print(f"❌ Unexpected error in /diseases/<disease_name>/drugs endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/download/molecules', methods=['POST'])
+def download_molecules():
+    """
+    Download molecules by count or name.
+    
+    Request body (JSON):
+    {
+        "count": 1000,  // Optional: number of molecules to download
+        "source": "pubchem",  // Optional: "pubchem", "chembl", "zinc"
+        "names": ["aspirin", "ibuprofen"]  // Optional: list of molecule names
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "message": "Download started",
+        "task_id": "..."
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        count = data.get('count')
+        source = data.get('source', 'pubchem')
+        names = data.get('names', [])
+        
+        if not count and not names:
+            return jsonify({
+                'success': False,
+                'error': 'Either count or names must be provided'
+            }), 400
+        
+        # Build command
+        import subprocess
+        import sys
+        import os
+        from pathlib import Path
+        
+        script_path = Path(__file__).parent / "download_molecules.py"
+        
+        # Validate script exists
+        if not script_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Download script not found: {script_path}'
+            }), 500
+        
+        # Use venv Python if available
+        venv_python = Path(__file__).parent.parent / "venv" / "bin" / "python"
+        python_exec = str(venv_python) if venv_python.exists() else sys.executable
+        
+        if names:
+            # Download by names
+            names_str = ','.join(names)
+            cmd = [python_exec, str(script_path), '--names', names_str]
+        else:
+            # Download by count
+            cmd = [python_exec, str(script_path), '--count', str(count), '--source', source]
+        
+        # Validate command
+        print(f"🔍 Running download command: {' '.join(cmd)}")
+        
+        # Run in background with proper environment
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=str(Path(__file__).parent)
+            )
+            
+            # Check if process started successfully
+            if process.poll() is not None:
+                # Process already finished (likely an error)
+                stdout, stderr = process.communicate()
+                error_msg = stderr or stdout or "Process failed immediately"
+                print(f"❌ Download process failed: {error_msg}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Download failed: {error_msg[:200]}'
+                }), 500
+            
+            print(f"✅ Download process started with PID: {process.pid}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Download started',
+                'task_id': str(process.pid)
+            })
+        
+        except Exception as e:
+            print(f"❌ Error starting download process: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'Failed to start download: {str(e)}'
+            }), 500
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /download/molecules endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/download/drugs', methods=['POST'])
+def download_drugs():
+    """
+    Download drugs by name or disease.
+    
+    Request body (JSON):
+    {
+        "names": ["donepezil", "rivastigmine"],  // Optional: list of drug names
+        "disease": "Alzheimer's disease",  // Optional: disease name
+        "count": 10  // Optional: number of drugs per disease
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "message": "Download started"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        names = data.get('names', [])
+        disease = data.get('disease')
+        count = data.get('count', 10)
+        
+        if not names and not disease:
+            return jsonify({
+                'success': False,
+                'error': 'Either names or disease must be provided'
+            }), 400
+        
+        import subprocess
+        import sys
+        import os
+        from pathlib import Path
+        
+        # Use venv Python if available
+        venv_python = Path(__file__).parent.parent / "venv" / "bin" / "python"
+        python_exec = str(venv_python) if venv_python.exists() else sys.executable
+        
+        if names:
+            # Download by names
+            script_path = Path(__file__).parent / "download_by_name.py"
+            if not script_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Download script not found: {script_path}'
+                }), 500
+            names_str = ','.join(names)
+            cmd = [python_exec, str(script_path), 'drugs', '--names', names_str]
+        else:
+            # Download by disease (use existing script)
+            script_path = Path(__file__).parent / "download_disease_drugs.py"
+            if not script_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Download script not found: {script_path}'
+                }), 500
+            if 'alzheimer' in disease.lower():
+                cmd = [python_exec, str(script_path), '--alzheimers-only']
+            else:
+                cmd = [python_exec, str(script_path), '--top-100', '--max-diseases', '1', '--max-drugs-per-disease', str(count)]
+        
+        print(f"🔍 Running download command: {' '.join(cmd)}")
+        
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=str(Path(__file__).parent)
+            )
+            
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                error_msg = stderr or stdout or "Process failed immediately"
+                print(f"❌ Download process failed: {error_msg}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Download failed: {error_msg[:200]}'
+                }), 500
+            
+            print(f"✅ Download process started with PID: {process.pid}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Download started',
+                'task_id': str(process.pid)
+            })
+        
+        except Exception as e:
+            print(f"❌ Error starting download process: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'Failed to start download: {str(e)}'
+            }), 500
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /download/drugs endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/download/diseases', methods=['POST'])
+def download_diseases():
+    """
+    Download diseases by name or bulk.
+    
+    Request body (JSON):
+    {
+        "names": ["Alzheimer's disease", "diabetes"],  // Optional: list of disease names
+        "count": 100  // Optional: number of top diseases to download
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "message": "Download started"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        names = data.get('names', [])
+        count = data.get('count')
+        
+        if not names and not count:
+            return jsonify({
+                'success': False,
+                'error': 'Either names or count must be provided'
+            }), 400
+        
+        import subprocess
+        import sys
+        import os
+        from pathlib import Path
+        
+        # Use venv Python if available
+        venv_python = Path(__file__).parent.parent / "venv" / "bin" / "python"
+        python_exec = str(venv_python) if venv_python.exists() else sys.executable
+        
+        if names:
+            # Download by names
+            script_path = Path(__file__).parent / "download_by_name.py"
+            if not script_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Download script not found: {script_path}'
+                }), 500
+            names_str = ','.join(names)
+            cmd = [python_exec, str(script_path), 'diseases', '--names', names_str]
+        else:
+            # Bulk download
+            script_path = Path(__file__).parent / "download_disease_drugs.py"
+            if not script_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Download script not found: {script_path}'
+                }), 500
+            cmd = [python_exec, str(script_path), '--top-100', '--max-diseases', str(count)]
+        
+        print(f"🔍 Running download command: {' '.join(cmd)}")
+        
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=str(Path(__file__).parent)
+            )
+            
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                error_msg = stderr or stdout or "Process failed immediately"
+                print(f"❌ Download process failed: {error_msg}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Download failed: {error_msg[:200]}'
+                }), 500
+            
+            print(f"✅ Download process started with PID: {process.pid}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Download started',
+                'task_id': str(process.pid)
+            })
+        
+        except Exception as e:
+            print(f"❌ Error starting download process: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'Failed to start download: {str(e)}'
+            }), 500
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /download/diseases endpoint: {error_msg}")
         print(traceback.format_exc())
         return jsonify({
             'success': False,

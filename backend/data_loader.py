@@ -1189,13 +1189,12 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
                     time.sleep(2)
                 else:
                     raise
+        
+        # Create index on chembl_id for faster lookups
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chembl_id ON molecules(chembl_id)")
+        conn.commit()
     finally:
         conn.close()
-    
-    # Create index on chembl_id for faster lookups
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_chembl_id ON molecules(chembl_id)")
-    conn.commit()
-    conn.close()
     
     print("✅ Database saved")
 

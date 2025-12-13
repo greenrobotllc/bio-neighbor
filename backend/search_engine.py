@@ -801,6 +801,202 @@ class SearchEngine:
             return []
         finally:
             conn.close()
+    
+    def get_database_stats(self) -> Dict[str, int]:
+        """
+        Get statistics about the database.
+        
+        Returns:
+            Dictionary with counts: {'molecules': int, 'drugs': int, 'diseases': int, 'relationships': int}
+        """
+        stats = {
+            'molecules': 0,
+            'drugs': 0,
+            'diseases': 0,
+            'relationships': 0
+        }
+        
+        if not DB_PATH.exists():
+            return stats
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Count molecules
+            cursor.execute("SELECT COUNT(*) FROM molecules")
+            result = cursor.fetchone()
+            if result:
+                stats['molecules'] = result[0]
+            
+            # Count drugs (if table exists)
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='drugs'")
+            if cursor.fetchone():
+                cursor.execute("SELECT COUNT(*) FROM drugs")
+                result = cursor.fetchone()
+                if result:
+                    stats['drugs'] = result[0]
+            
+            # Count diseases (if table exists)
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='diseases'")
+            if cursor.fetchone():
+                cursor.execute("SELECT COUNT(*) FROM diseases")
+                result = cursor.fetchone()
+                if result:
+                    stats['diseases'] = result[0]
+            
+            # Count relationships (if table exists)
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='drug_diseases'")
+            if cursor.fetchone():
+                cursor.execute("SELECT COUNT(*) FROM drug_diseases")
+                result = cursor.fetchone()
+                if result:
+                    stats['relationships'] = result[0]
+        
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            conn.close()
+        
+        return stats
+    
+    def search_molecules_by_name(self, query: str, limit: int = 20) -> List[Dict]:
+        """
+        Search molecules by name for autocomplete.
+        
+        Args:
+            query: Search query (case-insensitive partial match)
+            limit: Maximum number of results
+            
+        Returns:
+            List of molecule dictionaries with name and id
+        """
+        if not DB_PATH.exists() or not query:
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute(
+                "SELECT rowid, name, chembl_id, smiles FROM molecules WHERE LOWER(name) LIKE LOWER(?) LIMIT ?",
+                (f'%{query}%', limit)
+            )
+            rows = cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                results.append({
+                    'id': row[0],
+                    'name': row[1] or row[2] or 'Unknown',
+                    'chembl_id': row[2],
+                    'smiles': row[3]
+                })
+            
+            return results
+        
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+    
+    def search_drugs_by_name(self, query: str, limit: int = 20) -> List[Dict]:
+        """
+        Search drugs by name for autocomplete.
+        
+        Args:
+            query: Search query (case-insensitive partial match)
+            limit: Maximum number of results
+            
+        Returns:
+            List of drug dictionaries with name and id
+        """
+        if not DB_PATH.exists() or not query:
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='drugs'")
+            if not cursor.fetchone():
+                return []
+            
+            cursor.execute(
+                "SELECT id, name, generic_name, brand_names FROM drugs WHERE LOWER(name) LIKE LOWER(?) OR LOWER(generic_name) LIKE LOWER(?) LIMIT ?",
+                (f'%{query}%', f'%{query}%', limit)
+            )
+            rows = cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                brand_names = []
+                if row[3]:
+                    try:
+                        brand_names = json.loads(row[3])
+                    except:
+                        pass
+                
+                display_name = row[1]
+                if row[2] and row[2] != row[1]:
+                    display_name = f"{row[1]} ({row[2]})"
+                
+                results.append({
+                    'id': row[0],
+                    'name': display_name,
+                    'generic_name': row[2],
+                    'brand_names': brand_names
+                })
+            
+            return results
+        
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+    
+    def search_diseases_by_name(self, query: str, limit: int = 20) -> List[Dict]:
+        """
+        Search diseases by name for autocomplete.
+        
+        Args:
+            query: Search query (case-insensitive partial match)
+            limit: Maximum number of results
+            
+        Returns:
+            List of disease dictionaries with name and id
+        """
+        if not DB_PATH.exists() or not query:
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='diseases'")
+            if not cursor.fetchone():
+                return []
+            
+            cursor.execute(
+                "SELECT id, name, mesh_id FROM diseases WHERE LOWER(name) LIKE LOWER(?) LIMIT ?",
+                (f'%{query}%', limit)
+            )
+            rows = cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                results.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'mesh_id': row[2]
+                })
+            
+            return results
+        
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
 
 
 # Global search engine instance (lazy loading)

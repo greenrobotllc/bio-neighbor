@@ -250,3 +250,89 @@ struct DrugMoleculesResponse: Codable {
     let error: String?
 }
 
+struct DatabaseStats: Codable {
+    let molecules: Int
+    let drugs: Int
+    let diseases: Int
+    let relationships: Int
+}
+
+struct StatsResponse: Codable {
+    let success: Bool
+    let stats: DatabaseStats?
+    let error: String?
+}
+
+struct DownloadMoleculesRequest: Codable {
+    let count: Int?
+    let source: String?
+    let names: [String]?
+}
+
+struct DownloadDrugsRequest: Codable {
+    let names: [String]?
+    let disease: String?
+    let count: Int?
+}
+
+struct DownloadDiseasesRequest: Codable {
+    let names: [String]?
+    let count: Int?
+}
+
+struct DownloadResponse: Codable {
+    let success: Bool
+    let message: String?
+    let taskId: String?
+    let error: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case success
+        case message
+        case taskId = "task_id"
+        case error
+    }
+}
+
+struct SearchResult: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let chemblId: String?
+    let smiles: String?
+    let genericName: String?
+    let brandNames: [String]?
+    let meshId: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case chemblId = "chembl_id"
+        case smiles
+        case genericName = "generic_name"
+        case brandNames = "brand_names"
+        case meshId = "mesh_id"
+    }
+}
+
+struct AutocompleteResponse: Codable {
+    let success: Bool
+    let results: [SearchResult]?
+    let error: String?
+}
+
+struct DownloadStatusResponse: Codable {
+    let success: Bool
+    let running: Bool?
+    let exitCode: Int?
+    let message: String?
+    let error: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case success
+        case running
+        case exitCode = "exit_code"
+        case message
+        case error
+    }
+}
+
