@@ -29,6 +29,25 @@ BioNeighbor combines:
 
 ---
 
+## Screenshots
+
+![Screen 1](images/screen1.png)
+*Molecules tab - Browse and explore molecules in the database*
+
+![Screen 2](images/screen2.png)
+*Diseases tab - Browse diseases and their associated drugs and molecules*
+
+![Screen 3](images/screen3.png)
+*Drugs tab - View all drugs with detailed information*
+
+![Screen 4](images/screen4.png)
+*Download Data tab - Download molecules, drugs, and diseases with real-time progress tracking*
+
+![Screen 5](images/screen5.png)
+*Advanced Search tab - Search for similar molecules by SMILES or ChEMBL ID*
+
+---
+
 ## Use Cases
 
 - **Drug repurposing:** Discover alternative molecules similar to existing drugs to target new pathways.  
@@ -42,55 +61,72 @@ BioNeighbor combines:
 
 BioNeighbor separates **frontend** and **backend logic** while remaining fully offline:
 
-1. **Frontend:** Kotlin Multiplatform (KMP) application (Mac, Windows, or Web).  
-   - Allows users to input/select molecules and view similarity results.  
-   - Visualizes molecules using embedded 2D/3D viewers.  
+1. **Frontend:** SwiftUI macOS application  
+   - Allows users to browse molecules, diseases, and drugs  
+   - Search for similar molecules by SMILES or ChEMBL ID  
+   - Visualizes molecules using embedded 2D/3D viewers  
+   - Download data from multiple sources with real-time progress tracking  
+   - Built with RxSwift for reactive programming patterns  
 
-2. **Backend / local engine:** Python script with:  
+2. **Backend / local engine:** Python Flask API server with:  
    - RDKit for fingerprint and descriptor computation  
-   - FAISS (or Milvus) for nearest-neighbor vector search  
-   - Optional collaborative filtering model (from stanscofi/benchscofi)  
-   - Precomputed embeddings or similarity matrices shipped with the app  
+   - FAISS for nearest-neighbor vector search  
+   - SQLite database for molecules, drugs, diseases, and relationships  
+   - Multi-API integration (openFDA, ClinicalTrials.gov, PubChem, RxNorm, NLM)  
+   - Real-time progress tracking for downloads  
+   - Database schema management and migrations  
 
 The frontend communicates with the local Python engine via:  
-- Process calls (`Process` in Swift/KMP) or  
-- PythonKit integration  
+- HTTP REST API on `http://127.0.0.1:5000`  
+- Automatic backend process management  
 
 ---
 
 ## Datasets
 
-BioNeighbor supports multiple data sources with automatic fallback:
+BioNeighbor supports multiple data sources with automatic fallback and comprehensive disease-drug relationships:
 
-1. **ZINC Database** (Primary - Recommended)
+**Molecules:**
+1. **PubChem FTP** (Primary - Recommended for bulk downloads)
+   - Full SDF files via FTP (300-500 MB per file, ~500,000 compounds)
+   - No API rate limits
+   - URL: https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/CURRENT-Full/
+   - Automatically downloads, decompresses, and converts to SMILES
+
+2. **PubChem API** (Fallback)
+   - Individual molecule downloads by name or CID
+   - Rate-limited but reliable for smaller batches
+   - Automatic retry with exponential backoff
+
+3. **ZINC Database** (Alternative)
    - Curated drug-like and lead-like subsets
-   - Bulk SMILES file downloads (no API rate limits)
-   - Reliable, free, and designed for virtual screening
+   - Bulk SMILES file downloads
    - URL: https://zinc.docking.org/
-   - Automatically downloads and caches locally
 
-2. **PubChem** (Fallback)
-   - Bulk downloads via FTP or API
-   - Large database of chemical compounds
-   - Rate-limited API, but provides bulk download options
-
-3. **ChEMBL** (Legacy - Often Unavailable)
-   - Note: ChEMBL API has been down for 2+ years (see [issue #134](https://github.com/chembl/chembl_webresource_client/issues/134))
+4. **ChEMBL** (Legacy - Often Unavailable)
+   - Note: ChEMBL API has been down for 2+ years
    - Will be tried but typically fails
 
-4. **Sample Data** (Last Resort)
-   - Built-in curated list of 35+ FDA-approved drugs
-   - Can generate variations for testing
-   - Works offline, no internet required
+**Drugs:**
+- **RxNorm API** - Standardized drug names and ingredients (bulk downloads)
+- **PubChem** - Comprehensive drug information (indications, MOA, ingredients)
+- **openFDA** - FDA-approved drugs by condition
+- **ClinicalTrials.gov** - Drugs in clinical trials
+
+**Diseases:**
+- **NLM Clinical Tables** - 2,400+ medical conditions with ICD codes and synonyms
+  - Bulk download via JSON file: https://clinicaltables.nlm.nih.gov/ctss-downloads/
+  - API access: https://clinicaltables.nlm.nih.gov/apidoc/conditions/v3/doc.html
 
 **Data Download Priority:**
-1. ZINC database (drug-like subset) - **Recommended for 10,000+ molecules**
-2. PubChem bulk download
-3. ChEMBL API (if available)
-4. PubChem API (rate-limited)
-5. Sample data (for testing)
+1. PubChem FTP (for bulk molecule downloads)
+2. RxNorm + PubChem (for bulk drug downloads)
+3. NLM Clinical Tables (for disease data)
+4. PubChem API (for individual downloads)
+5. ZINC database (alternative source)
+6. Sample data (for testing)
 
-Users can also extend the datasets with custom molecules or manually download ZINC files.
+Users can download data through the in-app interface with real-time progress tracking.
 
 ---
 
@@ -196,13 +232,43 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
 
 ### Backend API
 
-The backend provides a REST API on `http://127.0.0.1:5000`:
+The backend provides a comprehensive REST API on `http://127.0.0.1:5000`:
 
-- `GET /health` - Health check
-- `POST /search` - Search by SMILES string
+**Search & Discovery:**
+- `POST /search` - Search for similar molecules by SMILES string
 - `POST /search/chembl` - Search by ChEMBL ID
+- `POST /search/by-disease` - Search similar molecules to disease-related drugs
+- `GET /search/molecules` - Autocomplete search for molecules
+- `GET /search/drugs` - Autocomplete search for drugs
+- `GET /search/diseases` - Autocomplete search for diseases
+
+**Molecules:**
+- `GET /molecules` - List molecules with pagination and search
 - `GET /molecule/<index>` - Get molecule by index
+- `GET /molecule/<index>/thumbnail` - Get molecule thumbnail image
+- `GET /molecule/<index>/3d` - Get 3D coordinates for molecule
 - `POST /render` - Render molecule structure image
+
+**Diseases:**
+- `GET /diseases` - List all diseases
+- `GET /diseases/<name>/molecules` - Get molecules for a disease
+- `GET /diseases/<name>/drugs` - Get drugs for a disease
+- `GET /diseases/<name>/top-molecules` - Get top molecules for a disease
+
+**Drugs:**
+- `GET /drugs` - List all drugs
+- `GET /drugs/<drug_id>` - Get drug by ID
+- `GET /drugs/<drug_id>/molecules` - Get active ingredient molecules for a drug
+
+**Data Downloads:**
+- `POST /download/molecules` - Download molecules (by count, name, or full SDF file)
+- `POST /download/drugs` - Download drugs (by name, disease, or bulk)
+- `POST /download/diseases` - Download diseases (by name or bulk from NLM)
+- `GET /download/status/<task_id>` - Get download progress status
+
+**Statistics:**
+- `GET /stats` - Get database statistics (molecules, drugs, diseases, relationships)
+- `GET /health` - Health check
 
 ### Command Line Interface
 
@@ -250,19 +316,43 @@ See [backend/SCHEMA.md](backend/SCHEMA.md) for complete schema documentation.
 
 ```
 bio-neighbor/
-├── backend/              # Python backend
-│   ├── data_loader.py    # ChEMBL dataset loading
-│   ├── fingerprints.py   # Molecular fingerprint computation
-│   ├── index_builder.py # FAISS index building
-│   ├── search_engine.py  # Similarity search engine
-│   ├── api.py           # HTTP API server
-│   ├── molecule_renderer.py # 2D structure rendering
-│   └── main.py          # CLI entry point
-├── macos_app/           # SwiftUI macOS app
-│   └── BioNeighbor/     # Swift source files
-├── data/                # Data files (datasets, indices)
-├── venv/                # Python virtual environment
-└── setup.sh             # Setup script
+├── backend/                      # Python backend
+│   ├── api.py                    # Flask HTTP API server
+│   ├── main.py                   # CLI entry point
+│   ├── search_engine.py          # Similarity search engine
+│   ├── data_loader.py            # Dataset loading utilities
+│   ├── fingerprints.py           # Molecular fingerprint computation
+│   ├── index_builder.py          # FAISS index building
+│   ├── molecule_renderer.py      # 2D structure rendering
+│   ├── db_schema.py              # Database schema definitions
+│   ├── db_migrations.py          # Schema migration system
+│   ├── download_molecules.py     # Molecule download scripts
+│   ├── download_drugs_*.py       # Drug download scripts (RxNorm, bulk)
+│   ├── download_diseases_nlm.py  # Disease download from NLM
+│   ├── download_by_name.py       # Download by name (molecules/drugs/diseases)
+│   ├── multi_api_disease_loader.py # Multi-API drug search
+│   ├── progress_tracker.py        # Real-time progress tracking
+│   ├── stream_process_output.py   # Subprocess output streaming
+│   └── test_*.py                 # Test suites
+├── macos_app/                    # SwiftUI macOS app
+│   └── BioNeighbor/
+│       ├── BioNeighborApp.swift  # Main app entry point
+│       ├── BrowseView.swift      # Molecules tab
+│       ├── DiseaseBrowseView.swift # Diseases tab
+│       ├── DrugsView.swift        # Drugs tab
+│       ├── DrugDataDownloadView.swift # Download Data tab
+│       ├── SearchView.swift       # Advanced Search tab
+│       ├── ReactiveDownloadService.swift # RxSwift download service
+│       └── Models.swift           # Data models
+├── data/                         # Data files
+│   ├── molecules.db              # SQLite database
+│   ├── faiss_index.bin           # FAISS search index
+│   ├── fingerprints.pkl         # Molecular fingerprints
+│   └── progress/                 # Progress tracking files
+├── images/                       # Screenshots
+├── venv/                         # Python virtual environment
+├── setup.sh                      # Setup script
+└── README.md                     # This file
 ```
 
 ---
@@ -274,12 +364,22 @@ The project name **BioNeighbor** reflects its CF-inspired approach:
 
 ---
 
+## Features
+
+- **Real-time Progress Tracking:** See exactly what's happening during downloads with detailed progress information
+- **Multi-API Integration:** Automatically searches multiple APIs (openFDA, ClinicalTrials.gov, PubChem, RxNorm) for comprehensive drug discovery
+- **Database Schema Management:** Versioned schema with automatic migrations
+- **Reactive Programming:** Built with RxSwift for responsive, asynchronous operations
+- **Comprehensive Testing:** Unit tests, UI tests, and integration tests
+- **Bulk Downloads:** Download entire datasets (molecules, drugs, diseases) with progress tracking
+- **Offline Operation:** All data stored locally in SQLite database
+
 ## Future Work
 
-- Integration of additional datasets (ZINC, FDA-approved drugs).  
-- Optional training of collaborative filtering models locally.  
-- Improved offline performance with optimized vector search indices.  
-- Enhanced visualization of molecular clusters and pathways.  
+- Optional training of collaborative filtering models locally  
+- Enhanced visualization of molecular clusters and pathways  
+- Additional dataset integrations  
+- Performance optimizations for large-scale searches  
 
 ---
 
