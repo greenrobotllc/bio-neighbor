@@ -181,20 +181,26 @@ def download_from_pubchem_ftp(count: Optional[int] = None, full_file: bool = Fal
         else:
             print(f"⚠️  FTP download failed (exit code: {result.returncode})")
             # Fall back to API if FTP fails
+            if count is None:
+                return pd.DataFrame()
             print("   Falling back to PubChem API (with retry logic)...")
             return download_from_pubchem(count)
     
     except subprocess.TimeoutExpired:
         print("⚠️  FTP download timed out (may be downloading large files)")
+        if count is None:
+            return pd.DataFrame()
         print("   Falling back to PubChem API (with retry logic)...")
         return download_from_pubchem(count)
     except Exception as e:
         print(f"⚠️  FTP download error: {e}")
+        if count is None:
+            return pd.DataFrame()
         print("   Falling back to PubChem API (with retry logic)...")
         return download_from_pubchem(count)
 
 
-def parse_ftp_smiles_file(file_path: Path, max_molecules: int) -> pd.DataFrame:
+def parse_ftp_smiles_file(file_path: Path, max_molecules: Optional[int]) -> pd.DataFrame:
     """
     Parse SMILES file downloaded from PubChem FTP.
     
@@ -217,8 +223,8 @@ def parse_ftp_smiles_file(file_path: Path, max_molecules: int) -> pd.DataFrame:
     print(f"📖 Parsing SMILES file: {file_path}")
     
     with open(file_path, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            if len(molecules_data) >= max_molecules:
+        for _line_num, line in enumerate(f, 1):
+            if max_molecules is not None and len(molecules_data) >= max_molecules:
                 break
             
             line = line.strip()

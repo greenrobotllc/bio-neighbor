@@ -166,8 +166,9 @@ def initialize_schema(conn: sqlite3.Connection, force_recreate: bool = False) ->
     try:
         if force_recreate:
             print("⚠️  WARNING: Force recreating all tables - this will DELETE ALL DATA!")
+            cursor.execute("DROP TABLE IF EXISTS schema_version")
             for table_name in get_all_tables():
-                if table_name != 'schema_version':  # Keep schema_version
+                if table_name != 'schema_version':
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
             conn.commit()
         
@@ -243,6 +244,10 @@ def migrate_database(conn: Optional[sqlite3.Connection] = None, force_recreate: 
         should_close = True
     
     try:
+        if force_recreate:
+            print("⚠️  Force recreate requested; reinitializing schema from scratch...")
+            return initialize_schema(conn, force_recreate=True)
+        
         # Get current version
         current_version = get_current_schema_version(conn)
         target_version = SCHEMA_VERSION

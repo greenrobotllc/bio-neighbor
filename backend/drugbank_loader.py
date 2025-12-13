@@ -341,9 +341,14 @@ def load_drugs_from_pubchem(
     try:
         from .pubchem_disease_loader import load_disease_drugs_from_pubchem
     except ImportError:
-        # Try absolute import if relative fails
-        from pubchem_disease_loader import load_disease_drugs_from_pubchem
-        
+        try:
+            # Try absolute import if relative fails
+            from pubchem_disease_loader import load_disease_drugs_from_pubchem
+        except ImportError:
+            print("⚠️  PubChem disease loader not available")
+            return []
+    
+    try:
         relationships = load_disease_drugs_from_pubchem(
             disease_name=disease_name,
             known_drugs=known_drugs,
@@ -364,9 +369,6 @@ def load_drugs_from_pubchem(
             })
         
         return result
-    except ImportError:
-        print("⚠️  PubChem disease loader not available")
-        return []
     except Exception as e:
         print(f"⚠️  Error loading from PubChem: {e}")
         return []
@@ -409,9 +411,14 @@ def load_drugbank_data(
         try:
             from .top_100_diseases import get_disease_by_name, get_alzheimers_drugs
         except ImportError:
-            # Try absolute import if relative fails
-            from top_100_diseases import get_disease_by_name, get_alzheimers_drugs
-            
+            try:
+                # Try absolute import if relative fails
+                from top_100_diseases import get_disease_by_name, get_alzheimers_drugs
+            except ImportError:
+                print("⚠️  top_100_diseases module not available")
+                return []
+        
+        try:
             # Get known drugs for this disease
             disease_info = get_disease_by_name(target_disease)
             known_drugs = None

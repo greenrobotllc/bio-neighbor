@@ -248,10 +248,10 @@ def download_drugs_bulk(max_drugs: Optional[int] = None, use_cid_search: bool = 
                 drug_info = load_drug_info(drug_name, molecule_df=molecule_df)
                 
                 if drug_info:
-                # Save drug to database
-                try:
-                    save_drugs_to_db([drug_info])
-                    drugs_downloaded += 1
+                    # Save drug to database
+                    try:
+                        save_drugs_to_db([drug_info])
+                        drugs_downloaded += 1
                         print(f"  ✅ Downloaded: {drug_info.get('name', drug_name)}")
                         consecutive_errors = 0
                     except Exception as save_error:
