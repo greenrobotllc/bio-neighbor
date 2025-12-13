@@ -150,11 +150,12 @@ class SearchEngine:
             
         Returns:
             List of dictionaries with similar molecules, each containing:
-            - index: Index in the database
+            - index: FAISS index position
             - chembl_id: ChEMBL ID
             - name: Molecule name
             - smiles: SMILES string
-            - similarity_score: Similarity score (lower distance = higher similarity)
+            - distance_l2_squared: Squared L2 distance from FAISS (lower = more similar)
+            - similarity: Converted similarity score (0-1, higher = more similar)
             - molecular_weight: Molecular weight
             - is_approved: Whether it's an approved drug
         """
@@ -171,29 +172,33 @@ class SearchEngine:
             faiss.normalize_L2(query_fp)
         
         # Search FAISS index
+        # Note: FAISS IndexFlatL2 returns squared L2 distances (||x-y||²)
         distances, indices = self.index.search(query_fp, min(top_k, self.index.ntotal))
         
         # Build results
         results = []
-        for dist, idx in zip(distances[0], indices[0]):
+        for dist, idx in zip(distances[0], indices[0], strict=True):
             if idx < 0:  # Invalid index
                 continue
             
             molecule_info = self._get_molecule_info(int(idx))
             # Convert NumPy float32 to Python float for JSON serialization
-            dist_float = float(dist.item() if hasattr(dist, 'item') else dist)
-            molecule_info['similarity_score'] = dist_float
+            # dist is already squared L2 distance from FAISS
+            dist_squared = float(dist.item() if hasattr(dist, 'item') else dist)
+            molecule_info['distance_l2_squared'] = dist_squared
             
-            # Convert distance to similarity based on index type
+            # Convert squared distance to similarity based on index type
             if self.metadata.get('index_type') == 'cosine':
                 # For cosine similarity with L2-normalized vectors:
-                # L2 distance on unit vectors: dist² ≈ 2(1 - cos(θ))
-                # For small angles: cos(θ) ≈ 1 - dist²/2
-                # Use distance directly (lower is better) or convert properly
-                molecule_info['similarity'] = max(0.0, 1.0 - (dist_float ** 2) / 2.0)
+                # L2 distance on unit vectors: dist² = ||x-y||² ≈ 2(1 - cos(θ))
+                # Therefore: cos(θ) ≈ 1 - dist²/2
+                # FAISS returns dist², so we use it directly (no need to square again)
+                molecule_info['similarity'] = max(0.0, 1.0 - (dist_squared / 2.0))
             else:
-                # L2 distance: lower is better, convert to similarity score
-                molecule_info['similarity'] = float(1.0 / (1.0 + dist_float) if dist_float >= 0 else 0.0)
+                # For L2 distance: lower is better, convert to similarity score
+                # Use sqrt of squared distance for conversion
+                dist_euclidean = dist_squared ** 0.5
+                molecule_info['similarity'] = float(1.0 / (1.0 + dist_euclidean) if dist_euclidean >= 0 else 0.0)
             
             results.append(molecule_info)
         
@@ -276,29 +281,46 @@ class SearchEngine:
         
         molecules = []
         for idx, row in page_df.iterrows():
-            # Use the original dataframe index, but validate it's within bounds
-            original_idx = int(idx)
-            if original_idx < 0 or original_idx >= len(self.molecule_df):
-                # Skip invalid indices
+            # Look up by chembl_id to find FAISS index (not database index)
+            # This ensures consistency with _get_molecule_info() which expects FAISS indices
+            chembl_id = str(row.get('chembl_id', ''))
+            if not chembl_id:
+                # Skip molecules without chembl_id
                 continue
-            # Convert all values to Python native types for JSON serialization
-            mw = row.get('molecular_weight', 0)
-            mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
-            smiles = str(row.get('smiles', ''))
-            # Use stored formula if available, otherwise calculate
-            formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
-            molecule_info = {
-                'index': original_idx,
-                'chembl_id': str(row.get('chembl_id', '')),
-                'name': str(row.get('name', '')),
-                'smiles': smiles,
-                'molecular_weight': mw_float,
-                'is_approved': bool(row.get('is_approved', False)),
-                'formula': formula,
-                'inchi': str(row.get('inchi', '')),
-                'inchikey': str(row.get('inchikey', '')),
-                'pubchem_cid': str(row.get('pubchem_cid', ''))
-            }
+            
+            # Find FAISS index for this chembl_id
+            faiss_index = None
+            if 'chembl_ids' in self.metadata:
+                chembl_ids = self.metadata['chembl_ids']
+                if isinstance(chembl_ids, list):
+                    try:
+                        faiss_index = chembl_ids.index(chembl_id)
+                    except ValueError:
+                        # chembl_id not in FAISS index, skip
+                        continue
+            
+            if faiss_index is None:
+                # Not in FAISS index, return basic info from DataFrame
+                mw = row.get('molecular_weight', 0)
+                mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+                smiles = str(row.get('smiles', ''))
+                formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
+                molecule_info = {
+                    'index': int(idx),  # Database index as fallback
+                    'chembl_id': chembl_id,
+                    'name': str(row.get('name', '')),
+                    'smiles': smiles,
+                    'molecular_weight': mw_float,
+                    'is_approved': bool(row.get('is_approved', False)),
+                    'formula': formula,
+                    'inchi': str(row.get('inchi', '')),
+                    'inchikey': str(row.get('inchikey', '')),
+                    'pubchem_cid': str(row.get('pubchem_cid', ''))
+                }
+            else:
+                # Use _get_molecule_info to get consistent data structure
+                molecule_info = self._get_molecule_info(faiss_index)
+            
             molecules.append(molecule_info)
         
         pagination = {
@@ -329,25 +351,45 @@ class SearchEngine:
         
         molecules = []
         for i, (idx, row) in enumerate(sampled_df.iterrows()):
-            # Use the actual position in the dataframe as the index
-            # Convert all values to Python native types for JSON serialization
-            mw = row.get('molecular_weight', 0)
-            mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
-            smiles = str(row.get('smiles', ''))
-            # Use stored formula if available, otherwise calculate
-            formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
-            molecule_info = {
-                'index': int(idx),  # Keep original index for random samples
-                'chembl_id': str(row.get('chembl_id', '')),
-                'name': str(row.get('name', '')),
-                'smiles': smiles,
-                'molecular_weight': mw_float,
-                'is_approved': bool(row.get('is_approved', False)),
-                'formula': formula,
-                'inchi': str(row.get('inchi', '')),
-                'inchikey': str(row.get('inchikey', '')),
-                'pubchem_cid': str(row.get('pubchem_cid', ''))
-            }
+            # Look up by chembl_id to find FAISS index (not database index)
+            chembl_id = str(row.get('chembl_id', ''))
+            if not chembl_id:
+                # Skip molecules without chembl_id
+                continue
+            
+            # Find FAISS index for this chembl_id
+            faiss_index = None
+            if 'chembl_ids' in self.metadata:
+                chembl_ids = self.metadata['chembl_ids']
+                if isinstance(chembl_ids, list):
+                    try:
+                        faiss_index = chembl_ids.index(chembl_id)
+                    except ValueError:
+                        # chembl_id not in FAISS index, skip
+                        continue
+            
+            if faiss_index is None:
+                # Not in FAISS index, return basic info from DataFrame
+                mw = row.get('molecular_weight', 0)
+                mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+                smiles = str(row.get('smiles', ''))
+                formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
+                molecule_info = {
+                    'index': int(idx),  # Database index as fallback
+                    'chembl_id': chembl_id,
+                    'name': str(row.get('name', '')),
+                    'smiles': smiles,
+                    'molecular_weight': mw_float,
+                    'is_approved': bool(row.get('is_approved', False)),
+                    'formula': formula,
+                    'inchi': str(row.get('inchi', '')),
+                    'inchikey': str(row.get('inchikey', '')),
+                    'pubchem_cid': str(row.get('pubchem_cid', ''))
+                }
+            else:
+                # Use _get_molecule_info to get consistent data structure
+                molecule_info = self._get_molecule_info(faiss_index)
+            
             molecules.append(molecule_info)
         
         return molecules
@@ -457,7 +499,9 @@ class SearchEngine:
                 return []
             
             # Get all molecule indices for this disease
-            molecule_indices = []
+            # Note: molecule_index in drug_diseases table is a database row ID, not a FAISS index
+            # We need to look up the molecule by row ID, get its chembl_id, then find FAISS index
+            molecule_row_ids = []
             for disease_row in disease_rows:
                 disease_id = disease_row[0]
                 cursor.execute(
@@ -465,31 +509,66 @@ class SearchEngine:
                     (disease_id,)
                 )
                 indices = cursor.fetchall()
-                # Filter out None values and convert to int, only include valid indices
+                # Filter out None values and convert to int
                 for idx_tuple in indices:
                     idx = idx_tuple[0]
                     if idx is not None:
                         try:
                             idx_int = int(idx)
-                            if idx_int >= 0:  # Only positive indices
-                                molecule_indices.append(idx_int)
+                            if idx_int >= 0:
+                                molecule_row_ids.append(idx_int)
                         except (ValueError, TypeError):
                             continue
             
             # Remove duplicates
-            molecule_indices = sorted(list(set(molecule_indices)))
+            molecule_row_ids = sorted(list(set(molecule_row_ids)))
             
             # Apply limit if specified
             if limit:
-                molecule_indices = molecule_indices[:limit]
+                molecule_row_ids = molecule_row_ids[:limit]
             
-            # Get molecule information
+            # Get molecule information by looking up chembl_id from database row ID
             molecules = []
-            for idx in molecule_indices:
-                # idx is already validated as non-None and >= 0 from above
-                if 0 <= idx < len(self.molecule_df):
-                    molecule_info = self._get_molecule_info(int(idx))
-                    molecules.append(molecule_info)
+            for row_id in molecule_row_ids:
+                # Look up molecule by row ID in DataFrame
+                if self.molecule_df is not None and 0 <= row_id < len(self.molecule_df):
+                    row = self.molecule_df.iloc[row_id]
+                    chembl_id = str(row.get('chembl_id', ''))
+                    
+                    if chembl_id:
+                        # Find FAISS index for this chembl_id
+                        faiss_index = None
+                        if 'chembl_ids' in self.metadata:
+                            chembl_ids = self.metadata['chembl_ids']
+                            if isinstance(chembl_ids, list):
+                                try:
+                                    faiss_index = chembl_ids.index(chembl_id)
+                                except ValueError:
+                                    # chembl_id not in FAISS index, use DataFrame data
+                                    pass
+                        
+                        if faiss_index is not None:
+                            # Use _get_molecule_info to get consistent data structure
+                            molecule_info = self._get_molecule_info(faiss_index)
+                        else:
+                            # Not in FAISS index, return basic info from DataFrame
+                            mw = row.get('molecular_weight', 0)
+                            mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+                            smiles = str(row.get('smiles', ''))
+                            formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
+                            molecule_info = {
+                                'index': row_id,  # Database row ID as fallback
+                                'chembl_id': chembl_id,
+                                'name': str(row.get('name', '')),
+                                'smiles': smiles,
+                                'molecular_weight': mw_float,
+                                'is_approved': bool(row.get('is_approved', False)),
+                                'formula': formula,
+                                'inchi': str(row.get('inchi', '')),
+                                'inchikey': str(row.get('inchikey', '')),
+                                'pubchem_cid': str(row.get('pubchem_cid', ''))
+                            }
+                        molecules.append(molecule_info)
             
             return molecules
         
@@ -749,13 +828,53 @@ class SearchEngine:
             return []
         
         # Get molecule information for each index
+        # Note: active_indices are database row IDs, not FAISS indices
         molecules = []
         for idx in active_indices:
             if isinstance(idx, dict):
                 idx = idx.get('molecule_index', idx.get('index'))
-            if idx is not None and 0 <= idx < len(self.molecule_df) if self.molecule_df is not None else False:
-                molecule_info = self._get_molecule_info(int(idx))
-                molecules.append(molecule_info)
+            if idx is None:
+                continue
+            
+            # Look up molecule by database row ID
+            if self.molecule_df is not None and 0 <= idx < len(self.molecule_df):
+                row = self.molecule_df.iloc[idx]
+                chembl_id = str(row.get('chembl_id', ''))
+                
+                if chembl_id:
+                    # Find FAISS index for this chembl_id
+                    faiss_index = None
+                    if 'chembl_ids' in self.metadata:
+                        chembl_ids = self.metadata['chembl_ids']
+                        if isinstance(chembl_ids, list):
+                            try:
+                                faiss_index = chembl_ids.index(chembl_id)
+                            except ValueError:
+                                # chembl_id not in FAISS index, use DataFrame data
+                                pass
+                    
+                    if faiss_index is not None:
+                        # Use _get_molecule_info to get consistent data structure
+                        molecule_info = self._get_molecule_info(faiss_index)
+                    else:
+                        # Not in FAISS index, return basic info from DataFrame
+                        mw = row.get('molecular_weight', 0)
+                        mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+                        smiles = str(row.get('smiles', ''))
+                        formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
+                        molecule_info = {
+                            'index': int(idx),  # Database row ID as fallback
+                            'chembl_id': chembl_id,
+                            'name': str(row.get('name', '')),
+                            'smiles': smiles,
+                            'molecular_weight': mw_float,
+                            'is_approved': bool(row.get('is_approved', False)),
+                            'formula': formula,
+                            'inchi': str(row.get('inchi', '')),
+                            'inchikey': str(row.get('inchikey', '')),
+                            'pubchem_cid': str(row.get('pubchem_cid', ''))
+                        }
+                    molecules.append(molecule_info)
         
         return molecules
     

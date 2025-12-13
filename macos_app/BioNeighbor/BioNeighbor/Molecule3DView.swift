@@ -66,9 +66,15 @@ struct WebViewRepresentable: NSViewRepresentable {
         let webView = WKWebView()
         webView.navigationDelegate = context.coordinator
         
-        // Load HTML with 3Dmol.js
+        // Load HTML with 3Dmol.js from local bundle
         let html = generateHTML(coordinates: coordinates, representation: representation)
-        webView.loadHTMLString(html, baseURL: nil)
+        
+        // Get the bundle URL for loading local resources
+        if let bundleURL = Bundle.main.resourceURL {
+            webView.loadHTMLString(html, baseURL: bundleURL)
+        } else {
+            webView.loadHTMLString(html, baseURL: nil)
+        }
         
         return webView
     }
@@ -139,12 +145,14 @@ struct WebViewRepresentable: NSViewRepresentable {
             """
         }
         
+        // Load 3Dmol.js from local bundle (3Dmol-min.js is included in app resources)
+        // This ensures offline functionality and eliminates CDN dependency
         return """
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="utf-8">
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
+            <script src="3Dmol-min.js"></script>
             <style>
                 body { margin: 0; padding: 0; overflow: hidden; }
                 #container { width: 100%; height: 100vh; }
