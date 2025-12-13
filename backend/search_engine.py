@@ -1190,7 +1190,7 @@ if __name__ == "__main__":
             for i, result in enumerate(results, 1):
                 print(f"    {i}. {result['name'] or result['chembl_id']} "
                       f"(similarity: {result['similarity']:.4f}, "
-                      f"distance: {result['similarity_score']:.4f})")
+                      f"distance: {result['distance_l2_squared']:.4f})")
         except Exception as e:
             print(f"  ❌ Error: {e}")
 

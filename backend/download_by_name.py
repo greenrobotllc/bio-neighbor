@@ -133,7 +133,8 @@ def download_diseases(names: List[str], max_drugs_per_disease: int = 10) -> int:
     from progress_tracker import write_progress
     
     start_time = time.time()
-    task_id = str(os.getpid())
+    # Get task_id from environment variable (set by API) or fall back to PID
+    task_id = os.environ.get('BIO_NEIGHBOR_TASK_ID', str(os.getpid()))
     
     print(f"📥 Downloading {len(names)} diseases and their drugs...")
     print(f"   Target: {max_drugs_per_disease} drugs per disease")

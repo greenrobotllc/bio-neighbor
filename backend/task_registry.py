@@ -18,7 +18,7 @@ TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
 _registry_lock = Lock()
 
 
-def register_task(pid: int, cmd: list, task_type: str = "download") -> str:
+def register_task(pid: int, cmd: list, task_type: str = "download", task_id: Optional[str] = None) -> str:
     """
     Register a new task and return its UUID.
     
@@ -26,11 +26,15 @@ def register_task(pid: int, cmd: list, task_type: str = "download") -> str:
         pid: Process ID
         cmd: Command that was executed
         task_type: Type of task (e.g., "download")
+        task_id: Optional pre-generated UUID (if None, generates new one)
         
     Returns:
         UUID string for the task
     """
-    task_id = str(uuid.uuid4())
+    if task_id is None:
+        task_id = str(uuid.uuid4())
+    else:
+        task_id = str(task_id)  # Ensure it's a string
     
     task_info = {
         'task_id': task_id,

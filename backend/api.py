@@ -1123,9 +1123,15 @@ def download_molecules():
         # Validate command
         print(f"🔍 Running download command: {' '.join(cmd)}")
         
+        # Generate UUID task_id BEFORE starting process so it can be passed to script
+        import uuid
+        from task_registry import register_task
+        task_id = str(uuid.uuid4())
+        
         # Run in background with proper environment
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
+        env['BIO_NEIGHBOR_TASK_ID'] = task_id  # Pass task_id to subprocess
         
         try:
             process = subprocess.Popen(
@@ -1138,6 +1144,9 @@ def download_molecules():
                 bufsize=1  # Line buffered
             )
             
+            # Register task with actual PID and pre-generated task_id
+            register_task(process.pid, cmd, task_type="download_molecules", task_id=task_id)
+            
             # Check if process started successfully
             if process.poll() is not None:
                 # Process already finished (likely an error)
@@ -1149,12 +1158,8 @@ def download_molecules():
                     'error': f'Download failed: {error_msg[:200]}'
                 }), 500
             
-            print(f"✅ Download process started with PID: {process.pid}")
+            print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
             print(f"📊 Streaming output in real-time...")
-            
-            # Register task with UUID
-            from task_registry import register_task
-            task_id = register_task(process.pid, cmd, task_type="download_molecules")
             
             # Stream output in background thread
             from stream_process_output import stream_output
@@ -1294,8 +1299,14 @@ def download_drugs():
         
         print(f"🔍 Running download command: {' '.join(cmd)}")
         
+        # Generate UUID task_id BEFORE starting process so it can be passed to script
+        import uuid
+        from task_registry import register_task
+        task_id = str(uuid.uuid4())
+        
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
+        env['BIO_NEIGHBOR_TASK_ID'] = task_id  # Pass task_id to subprocess
         
         try:
             process = subprocess.Popen(
@@ -1308,6 +1319,9 @@ def download_drugs():
                 bufsize=1  # Line buffered
             )
             
+            # Register task with actual PID and pre-generated task_id
+            register_task(process.pid, cmd, task_type="download_drugs", task_id=task_id)
+            
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
                 error_msg = stderr or stdout or "Process failed immediately"
@@ -1317,12 +1331,8 @@ def download_drugs():
                     'error': f'Download failed: {error_msg[:200]}'
                 }), 500
             
-            print(f"✅ Download process started with PID: {process.pid}")
+            print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
             print(f"📊 Streaming output in real-time...")
-            
-            # Register task with UUID
-            from task_registry import register_task
-            task_id = register_task(process.pid, cmd, task_type="download_drugs")
             
             # Stream output in background thread
             from stream_process_output import stream_output
@@ -1438,8 +1448,14 @@ def download_diseases():
         
         print(f"🔍 Running download command: {' '.join(cmd)}")
         
+        # Generate UUID task_id BEFORE starting process so it can be passed to script
+        import uuid
+        from task_registry import register_task
+        task_id = str(uuid.uuid4())
+        
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
+        env['BIO_NEIGHBOR_TASK_ID'] = task_id  # Pass task_id to subprocess
         
         try:
             process = subprocess.Popen(
@@ -1452,6 +1468,9 @@ def download_diseases():
                 bufsize=1  # Line buffered
             )
             
+            # Register task with actual PID and pre-generated task_id
+            register_task(process.pid, cmd, task_type="download_diseases", task_id=task_id)
+            
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
                 error_msg = stderr or stdout or "Process failed immediately"
@@ -1461,12 +1480,8 @@ def download_diseases():
                     'error': f'Download failed: {error_msg[:200]}'
                 }), 500
             
-            print(f"✅ Download process started with PID: {process.pid}")
+            print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
             print(f"📊 Streaming output in real-time...")
-            
-            # Register task with UUID
-            from task_registry import register_task
-            task_id = register_task(process.pid, cmd, task_type="download_diseases")
             
             # Stream output in background thread
             from stream_process_output import stream_output
