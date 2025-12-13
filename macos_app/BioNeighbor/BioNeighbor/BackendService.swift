@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import AppKit
+import Darwin
 
 enum BackendError: LocalizedError {
     case invalidSMILES
@@ -105,7 +106,7 @@ class BackendService: ObservableObject {
             }
             
             // If process exists but isn't running, clean it up first
-            if let existingProcess = backendProcess {
+            if backendProcess != nil {
                 _stopBackendSync()
             }
             
@@ -282,9 +283,11 @@ class BackendService: ObservableObject {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             
-            // If still running, force kill
+            // If still running, force kill using SIGKILL
             if process.isRunning {
-                process.kill()
+                // Process doesn't have kill() method, use signal() to send SIGKILL
+                let pid = process.processIdentifier
+                kill(pid, SIGKILL)
                 // Give it a moment to die
                 Thread.sleep(forTimeInterval: 0.5)
             }
