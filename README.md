@@ -108,9 +108,10 @@ BioNeighbor supports multiple data sources with automatic fallback and comprehen
    - Bulk SMILES file downloads
    - URL: [ZINC Database](https://zinc.docking.org/)
 
-4. **ChEMBL** (Legacy - Often Unavailable)
-   - Note: ChEMBL API has been down for 2+ years
-   - Will be tried but typically fails
+4. **ChEMBL** (Legacy - Currently Unavailable)
+   - Note: ChEMBL API has been experiencing 500 errors since 2023
+   - Issue tracked: [chembl/chembl_webresource_client#134](https://github.com/chembl/chembl_webresource_client/issues/134)
+   - Will be tried but typically fails with server errors
 
 **Drugs:**
 - **RxNorm API** - Standardized drug names and ingredients (bulk downloads)

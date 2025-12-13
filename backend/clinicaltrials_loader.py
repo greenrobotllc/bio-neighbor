@@ -190,6 +190,10 @@ if __name__ == "__main__":
             print(f"  - {drug['name']} ({drug.get('intervention_type', 'N/A')})")
             if drug.get('conditions'):
                 print(f"    Conditions: {', '.join(drug['conditions'][:3])}")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Request error: {e}")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        import traceback
+        print(f"❌ Unexpected error: {e}")
+        traceback.print_exc()
 

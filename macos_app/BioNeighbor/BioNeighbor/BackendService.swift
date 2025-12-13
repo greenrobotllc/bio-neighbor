@@ -105,8 +105,20 @@ class BackendService: ObservableObject {
                 }
             }
             
-            // If process exists but isn't running, clean it up first
-            if backendProcess != nil {
+            // If process exists, clean it up first (terminate if still running)
+            if let existingProcess = backendProcess {
+                if existingProcess.isRunning {
+                    existingProcess.terminate()
+                    // Best-effort wait a bit, then force kill if needed
+                    let deadline = Date().addingTimeInterval(2.0)
+                    while existingProcess.isRunning && Date() < deadline {
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+                    if existingProcess.isRunning {
+                        let pid = existingProcess.processIdentifier
+                        kill(pid, SIGKILL)
+                    }
+                }
                 _stopBackendSync()
             }
             
@@ -1248,7 +1260,7 @@ class BackendService: ObservableObject {
         // 4. Try going up from bundle path to find project root
         if let bundlePath = Bundle.main.bundlePath as String? {
             var currentPath = URL(fileURLWithPath: bundlePath)
-            var candidateRoot: URL? = nil
+            var candidateRoot: URL?
             
             // Go up from .app bundle to find project root
             // Path structure: .../bio-neighbor/macos_app/BioNeighbor/DerivedData/.../BioNeighbor.app

@@ -1200,7 +1200,45 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                df_copy.to_sql('molecules', conn, if_exists='replace', index=False)
+                # Use upsert strategy based on chembl_id to preserve relationships
+                # This prevents data corruption when molecule_index is used as a foreign key
+                if 'chembl_id' in df_copy.columns:
+                    # Create temp table with new data
+                    df_copy.to_sql('molecules_temp', conn, if_exists='replace', index=False)
+                    
+                    # Upsert: insert new rows, update existing ones
+                    cursor.execute("""
+                        INSERT INTO molecules (chembl_id, smiles, name, molecular_weight, is_approved, targets, formula, inchi, inchikey, pubchem_cid)
+                        SELECT chembl_id, smiles, name, molecular_weight, is_approved, targets, formula, inchi, inchikey, pubchem_cid
+                        FROM molecules_temp
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM molecules WHERE molecules.chembl_id = molecules_temp.chembl_id
+                        )
+                    """)
+                    
+                    # Update existing rows
+                    cursor.execute("""
+                        UPDATE molecules
+                        SET smiles = (SELECT smiles FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            name = (SELECT name FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            molecular_weight = (SELECT molecular_weight FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            is_approved = (SELECT is_approved FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            targets = (SELECT targets FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            formula = (SELECT formula FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            inchi = (SELECT inchi FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            inchikey = (SELECT inchikey FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                            pubchem_cid = (SELECT pubchem_cid FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id)
+                        WHERE EXISTS (
+                            SELECT 1 FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id
+                        )
+                    """)
+                    
+                    # Drop temp table
+                    cursor.execute("DROP TABLE IF EXISTS molecules_temp")
+                else:
+                    # Fallback to replace if chembl_id is missing (shouldn't happen, but be safe)
+                    print("  ⚠️  Warning: chembl_id column missing, using replace strategy (may corrupt relationships)")
+                    df_copy.to_sql('molecules', conn, if_exists='replace', index=False)
                 break
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() and attempt < max_retries - 1:

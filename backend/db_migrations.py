@@ -107,30 +107,42 @@ def _rebuild_table_from_schema(conn: sqlite3.Connection, table_name: str) -> Non
     """
     cursor = conn.cursor()
     tmp = f"{table_name}__old"
+    savepoint_name = f"rebuild_{table_name}"
     
-    # Rename old table
-    cursor.execute(f"ALTER TABLE {table_name} RENAME TO {tmp}")
-    
-    # Create new table from schema
-    cursor.execute(get_create_table_sql(table_name))
-    
-    # Get intersecting columns (excluding id which may be auto-increment)
-    cursor.execute(f"PRAGMA table_info({tmp})")
-    old_cols = {r[1] for r in cursor.fetchall()}
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    new_cols = {r[1] for r in cursor.fetchall()}
-    
-    # Find common columns (excluding id if it's auto-increment)
-    cols = [c for c in old_cols & new_cols if c != "id"]
-    
-    if cols:
-        cols_sql = ", ".join(cols)
-        cursor.execute(
-            f"INSERT INTO {table_name} ({cols_sql}) SELECT {cols_sql} FROM {tmp}"
-        )
-    
-    # Drop old table
-    cursor.execute(f"DROP TABLE {tmp}")
+    # Use savepoint for atomic operation
+    cursor.execute(f"SAVEPOINT {savepoint_name}")
+    try:
+        # Rename old table
+        cursor.execute(f"ALTER TABLE {table_name} RENAME TO {tmp}")
+        
+        # Create new table from schema
+        cursor.execute(get_create_table_sql(table_name))
+        
+        # Get intersecting columns (excluding id which may be auto-increment)
+        cursor.execute(f"PRAGMA table_info({tmp})")
+        old_cols = {r[1] for r in cursor.fetchall()}
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        new_cols = {r[1] for r in cursor.fetchall()}
+        
+        # Find common columns (excluding id if it's auto-increment)
+        cols = [c for c in old_cols & new_cols if c != "id"]
+        
+        if cols:
+            cols_sql = ", ".join(cols)
+            cursor.execute(
+                f"INSERT INTO {table_name} ({cols_sql}) SELECT {cols_sql} FROM {tmp}"
+            )
+        
+        # Drop old table
+        cursor.execute(f"DROP TABLE {tmp}")
+        
+        # Release savepoint on success
+        cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+    except Exception:
+        # Rollback to savepoint on error
+        cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+        cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        raise
 
 
 def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int) -> bool:

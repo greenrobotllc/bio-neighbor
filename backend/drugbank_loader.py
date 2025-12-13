@@ -7,8 +7,14 @@ import os
 import json
 import sqlite3
 import requests
-import xml.etree.ElementTree as ET
 import time
+# Use defusedxml for safe XML parsing (prevents XXE attacks)
+try:
+    from defusedxml import ElementTree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET
+    # Note: defusedxml is recommended for untrusted XML sources
+    # Install with: pip install defusedxml
 from pathlib import Path
 from typing import List, Dict, Optional, Set
 from rdkit import Chem
@@ -96,11 +102,11 @@ def match_drug_to_molecule(
     
     # Strategy 2: Match by InChI/InChIKey
     if drug_inchi:
-        # Try InChI match
+        # Try InChI match - use exact full-string match (InChI is canonical)
         if 'inchi' in molecule_df.columns:
-            matches = molecule_df[molecule_df['inchi'].str.contains(
-                drug_inchi[:20], na=False, regex=False
-            )]
+            # Normalize InChI by stripping whitespace
+            drug_inchi_normalized = drug_inchi.strip()
+            matches = molecule_df[molecule_df['inchi'].str.strip() == drug_inchi_normalized]
             if len(matches) > 0:
                 return int(matches.index[0])
         
