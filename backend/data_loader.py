@@ -1190,6 +1190,7 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
     
     # Use timeout and WAL mode for better concurrency
     conn = sqlite3.connect(DB_PATH, timeout=timeout)
+    cursor = conn.cursor()
     try:
         conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
         
@@ -1248,9 +1249,10 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
                     raise
         
         # Create index on chembl_id for faster lookups
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_chembl_id ON molecules(chembl_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chembl_id ON molecules(chembl_id)")
         conn.commit()
     finally:
+        cursor.close()
         conn.close()
     
     print("✅ Database saved")
