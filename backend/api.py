@@ -615,16 +615,19 @@ def get_download_status(task_id: str):
     try:
         import os
         from progress_tracker import read_progress
+        from task_registry import get_task_info
         
-        try:
-            pid = int(task_id)
-        except ValueError:
+        # Resolve UUID to PID via registry
+        task_info = get_task_info(task_id)
+        if not task_info:
             return jsonify({
                 'success': False,
-                'error': 'Invalid task ID'
-            }), 400
+                'error': 'Task not found'
+            }), 404
         
-        # Read progress from file
+        pid = task_info['pid']
+        
+        # Read progress from file (using UUID, not PID)
         progress_data = read_progress(task_id)
         
         # Try psutil first (more reliable)
@@ -1149,6 +1152,10 @@ def download_molecules():
             print(f"✅ Download process started with PID: {process.pid}")
             print(f"📊 Streaming output in real-time...")
             
+            # Register task with UUID
+            from task_registry import register_task
+            task_id = register_task(process.pid, cmd, task_type="download_molecules")
+            
             # Stream output in background thread
             from stream_process_output import stream_output
             stream_output(process, log_callback=lambda msg: print(msg))
@@ -1156,7 +1163,7 @@ def download_molecules():
             return jsonify({
                 'success': True,
                 'message': 'Download started',
-                'task_id': str(process.pid)
+                'task_id': task_id
             })
         
         except Exception as e:
@@ -1313,6 +1320,10 @@ def download_drugs():
             print(f"✅ Download process started with PID: {process.pid}")
             print(f"📊 Streaming output in real-time...")
             
+            # Register task with UUID
+            from task_registry import register_task
+            task_id = register_task(process.pid, cmd, task_type="download_drugs")
+            
             # Stream output in background thread
             from stream_process_output import stream_output
             stream_output(process, log_callback=lambda msg: print(msg))
@@ -1320,7 +1331,7 @@ def download_drugs():
             return jsonify({
                 'success': True,
                 'message': 'Download started',
-                'task_id': str(process.pid)
+                'task_id': task_id
             })
         
         except Exception as e:
@@ -1453,6 +1464,10 @@ def download_diseases():
             print(f"✅ Download process started with PID: {process.pid}")
             print(f"📊 Streaming output in real-time...")
             
+            # Register task with UUID
+            from task_registry import register_task
+            task_id = register_task(process.pid, cmd, task_type="download_diseases")
+            
             # Stream output in background thread
             from stream_process_output import stream_output
             stream_output(process, log_callback=lambda msg: print(msg))
@@ -1460,7 +1475,7 @@ def download_diseases():
             return jsonify({
                 'success': True,
                 'message': 'Download started',
-                'task_id': str(process.pid)
+                'task_id': task_id
             })
         
         except Exception as e:
