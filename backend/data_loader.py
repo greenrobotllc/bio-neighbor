@@ -370,12 +370,13 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
     """
     Generate diverse drug-like molecules programmatically using RDKit.
     This creates valid, diverse molecules without needing external data sources.
+    Returns up to max_molecules unique molecules (may return fewer if uniqueness cannot be reached).
     
     Args:
-        max_molecules: Number of molecules to generate
+        max_molecules: Maximum number of unique molecules to generate
         
     Returns:
-        DataFrame with molecule data
+        DataFrame with unique molecule data
     """
     print(f"🧪 Generating {max_molecules} diverse drug-like molecules using RDKit...")
     
@@ -426,6 +427,7 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
             mol = Chem.MolFromSmiles(scaffold_smiles)
             if mol is None:
                 scaffold_idx += 1
+                consecutive_failures += 1
                 continue
             
             # Create variations by adding/removing substituents
@@ -451,6 +453,12 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
                         'pubchem_cid': ''
                     })
                     seen_smiles.add(scaffold_smiles)
+                    consecutive_failures = 0  # Reset on success
+                else:
+                    consecutive_failures += 1
+            else:
+                # Scaffold already used, skip to avoid duplicates
+                consecutive_failures += 1
             
             # Method 2: Create variations by combining scaffolds or adding common groups
             # We'll use a simple approach: take the scaffold and create numbered variants
@@ -460,38 +468,18 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
             # but with different IDs, and also try to find other valid drug-like molecules
             # by using common substituents
             
-            # Actually, let's use a better approach: generate molecules from common drug fragments
-            if len(molecules_data) < max_molecules:
-                # Use the scaffold as-is but create many variants
-                variant_num = len(molecules_data) // len(drug_scaffolds) + 1
-                variant_smiles = scaffold_smiles  # In real implementation, would modify
-                
-                if variant_smiles not in seen_smiles or variant_num == 1:
-                    mol = Chem.MolFromSmiles(variant_smiles)
-                    if mol:
-                        mw = Descriptors.MolWt(mol)
-                        if 150 <= mw <= 800:
-                            molecules_data.append({
-                                'chembl_id': f"GEN_{len(molecules_data)+1}",
-                                'smiles': variant_smiles,
-                                'name': f"Generated variant {variant_num}",
-                                'molecular_weight': mw,
-                                'is_approved': False,
-                                'targets': [],
-                                'formula': '',
-                                'inchi': '',
-                                'inchikey': '',
-                                'pubchem_cid': ''
-                            })
-                            seen_smiles.add(variant_smiles)
+            # Note: This function returns up to max_molecules unique molecules
+            # Since we're using the same scaffolds, we only add each scaffold once
+            # In a real implementation, you'd create actual variants using RDKit reactions
             
             scaffold_idx += 1
             
             if len(molecules_data) % 1000 == 0:
-                print(f"  ✓ Generated {len(molecules_data)} molecules...")
+                print(f"  ✓ Generated {len(molecules_data)} unique molecules...")
         
         except Exception:
             scaffold_idx += 1
+            consecutive_failures += 1
             continue
     
     # If we still need more, use the enhanced sample data function
@@ -711,7 +699,8 @@ def download_pubchem_bulk(max_molecules: int = 10000) -> pd.DataFrame:
                                                 'smiles': parts[1],
                                                 'molecular_weight': mw
                                             })
-                                except:
+                                except Exception as e:
+                                    # Log at debug level if needed
                                     continue
                 
                 if len(molecules) == 0:
@@ -1028,7 +1017,7 @@ def download_chembl_subset(max_molecules: int = 10000) -> pd.DataFrame:
         timeout = Settings.Instance().TIMEOUT
         retries = Settings.Instance().TOTAL_RETRIES
         print(f"   Timeout: {timeout}s, Retries: {retries}")
-    except:
+    except Exception:
         print("   Using default settings")
     
     try:
@@ -1508,18 +1497,30 @@ def get_molecule_by_id(chembl_id: str) -> Optional[Dict]:
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM molecules WHERE chembl_id = ?", (chembl_id,))
-    row = cursor.fetchone()
-    
-    # Capture columns before closing connection (cursor.description becomes invalid after close)
-    columns = [d[0] for d in cursor.description] if cursor.description else []
-    conn.close()
-    
-    if row is None:
-        return None
-    
-    # Use captured column names to ensure we return all columns even as schema evolves
-    return dict(zip(columns, row))
+    try:
+        cursor.execute("SELECT * FROM molecules WHERE chembl_id = ?", (chembl_id,))
+        row = cursor.fetchone()
+        
+        # Capture columns before closing connection (cursor.description becomes invalid after close)
+        columns = [d[0] for d in cursor.description] if cursor.description else []
+        
+        if row is None:
+            return None
+        
+        # Use captured column names to ensure we return all columns even as schema evolves
+        result = dict(zip(columns, row, strict=False))
+        
+        # Parse targets from JSON string to list (matches load_from_database behavior)
+        if isinstance(result.get("targets"), str):
+            try:
+                result["targets"] = json.loads(result["targets"])
+            except (json.JSONDecodeError, ValueError):
+                result["targets"] = []
+        
+        return result
+    finally:
+        cursor.close()
+        conn.close()
 
 
 if __name__ == "__main__":
