@@ -68,6 +68,9 @@ data/*.index
 data/*.pkl
 data/chembl_*.csv
 data/chembl_*.sqlite
+data/downloads/*.smi
+data/downloads/*.txt
+data/downloads/*.sdf
 backend/*.index
 backend/*.pkl
 

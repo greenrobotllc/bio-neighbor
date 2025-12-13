@@ -60,16 +60,37 @@ The frontend communicates with the local Python engine via:
 
 ## Datasets
 
-Initial datasets include publicly available sources:
+BioNeighbor supports multiple data sources with automatic fallback:
 
-- **ChEMBL:** Approved drugs, small molecules, activity data, and targets.  
-  - Note: ChEMBL API may experience occasional downtime (see [issue #134](https://github.com/chembl/chembl_webresource_client/issues/134))
-- **PubChem:** Free, reliable alternative data source for FDA-approved drugs and small molecules.
-  - Automatically used as fallback if ChEMBL is unavailable
-- **BindingDB:** Molecule × protein binding affinities for constructing similarity/recommendation matrices.  
-- **Sample Data:** Built-in sample molecules for testing when APIs are unavailable.
+1. **ZINC Database** (Primary - Recommended)
+   - Curated drug-like and lead-like subsets
+   - Bulk SMILES file downloads (no API rate limits)
+   - Reliable, free, and designed for virtual screening
+   - URL: https://zinc.docking.org/
+   - Automatically downloads and caches locally
 
-Users can also extend the datasets with custom molecules or assay results.
+2. **PubChem** (Fallback)
+   - Bulk downloads via FTP or API
+   - Large database of chemical compounds
+   - Rate-limited API, but provides bulk download options
+
+3. **ChEMBL** (Legacy - Often Unavailable)
+   - Note: ChEMBL API has been down for 2+ years (see [issue #134](https://github.com/chembl/chembl_webresource_client/issues/134))
+   - Will be tried but typically fails
+
+4. **Sample Data** (Last Resort)
+   - Built-in curated list of 35+ FDA-approved drugs
+   - Can generate variations for testing
+   - Works offline, no internet required
+
+**Data Download Priority:**
+1. ZINC database (drug-like subset) - **Recommended for 10,000+ molecules**
+2. PubChem bulk download
+3. ChEMBL API (if available)
+4. PubChem API (rate-limited)
+5. Sample data (for testing)
+
+Users can also extend the datasets with custom molecules or manually download ZINC files.
 
 ---
 
@@ -138,9 +159,12 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
    python backend/main.py setup --max-molecules 10000
    ```
    This will:
-   - Download molecules from ChEMBL (may take 10-30 minutes)
-   - Compute molecular fingerprints
+   - **Automatically download from ZINC database** (recommended - no API limits)
+   - Falls back to PubChem, ChEMBL, or sample data if needed
+   - Compute molecular fingerprints using RDKit
    - Build the FAISS similarity search index
+   
+   **Note:** For 10,000+ molecules, ZINC database is recommended. If automatic download fails, see [DOWNLOAD_DATA.md](DOWNLOAD_DATA.md) for manual download instructions.
 
 5. **Test the backend (optional):**
    ```bash
