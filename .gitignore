@@ -71,6 +71,7 @@ data/chembl_*.sqlite
 data/downloads/*.smi
 data/downloads/*.txt
 data/downloads/*.sdf
+data/progress/*.json
 backend/*.index
 backend/*.pkl
 

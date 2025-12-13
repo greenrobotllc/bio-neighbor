@@ -93,10 +93,20 @@ class SearchEngine:
         Returns:
             Dictionary with molecule information
         """
-        if self.molecule_df is not None:
-            # Check if index is within bounds
-            if 0 <= index < len(self.molecule_df):
-                row = self.molecule_df.iloc[index]
+        # Always use metadata['chembl_ids'] for lookups to ensure correct mapping
+        # The FAISS index was built from valid_df (filtered/reset_index), which may
+        # not match the order of molecule_df loaded from database
+        chembl_id = None
+        if 'chembl_ids' in self.metadata:
+            chembl_ids = self.metadata['chembl_ids']
+            if isinstance(chembl_ids, list) and 0 <= index < len(chembl_ids):
+                chembl_id = chembl_ids[index]
+        
+        # If we have molecule_df and chembl_id, look up by chembl_id
+        if self.molecule_df is not None and chembl_id:
+            matches = self.molecule_df[self.molecule_df['chembl_id'] == chembl_id]
+            if len(matches) > 0:
+                row = matches.iloc[0]
                 # Convert all values to Python native types for JSON serialization
                 mw = row.get('molecular_weight', 0)
                 mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
@@ -115,26 +125,20 @@ class SearchEngine:
                     'inchikey': str(row.get('inchikey', '')),
                     'pubchem_cid': str(row.get('pubchem_cid', ''))
                 }
-        else:
-            # Fallback to metadata
-            chembl_id = None
-            if 'chembl_ids' in self.metadata:
-                chembl_ids = self.metadata['chembl_ids']
-                if isinstance(chembl_ids, list) and 0 <= index < len(chembl_ids):
-                    chembl_id = chembl_ids[index]
-            
-            return {
-                'index': int(index),
-                'chembl_id': chembl_id or f'molecule_{index}',
-                'name': '',
-                'smiles': '',
-                'molecular_weight': 0,
-                'is_approved': False,
-                'formula': None,
-                'inchi': '',
-                'inchikey': '',
-                'pubchem_cid': ''
-            }
+        
+        # Fallback to metadata only
+        return {
+            'index': int(index),
+            'chembl_id': chembl_id or f'molecule_{index}',
+            'name': '',
+            'smiles': '',
+            'molecular_weight': 0,
+            'is_approved': False,
+            'formula': None,
+            'inchi': '',
+            'inchikey': '',
+            'pubchem_cid': ''
+        }
     
     def search_similar(self, query_smiles: str, top_k: int = 10) -> List[Dict]:
         """
@@ -179,9 +183,18 @@ class SearchEngine:
             # Convert NumPy float32 to Python float for JSON serialization
             dist_float = float(dist.item() if hasattr(dist, 'item') else dist)
             molecule_info['similarity_score'] = dist_float
-            # Convert distance to similarity (for L2, lower distance = higher similarity)
-            # For cosine, distance is already similarity-like
-            molecule_info['similarity'] = float(1.0 / (1.0 + dist_float) if dist_float > 0 else 1.0)
+            
+            # Convert distance to similarity based on index type
+            if self.metadata.get('index_type') == 'cosine':
+                # For cosine similarity with L2-normalized vectors:
+                # L2 distance on unit vectors: dist² ≈ 2(1 - cos(θ))
+                # For small angles: cos(θ) ≈ 1 - dist²/2
+                # Use distance directly (lower is better) or convert properly
+                molecule_info['similarity'] = max(0.0, 1.0 - (dist_float ** 2) / 2.0)
+            else:
+                # L2 distance: lower is better, convert to similarity score
+                molecule_info['similarity'] = float(1.0 / (1.0 + dist_float) if dist_float >= 0 else 0.0)
+            
             results.append(molecule_info)
         
         return results

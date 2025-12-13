@@ -147,7 +147,7 @@ TOP_100_DISEASES = [
     ("Dysmenorrhea", "D004412", ["ibuprofen", "naproxen", "oral contraceptives"]),
     ("Premenstrual syndrome", "D011293", ["oral contraceptives", "fluoxetine", "spironolactone"]),
     ("Erectile dysfunction", "D007172", ["sildenafil", "tadalafil", "vardenafil"]),
-    ("Premature ejaculation", "D011293", ["sertraline", "paroxetine", "dapoxetine"]),
+    ("Premature ejaculation", "D061686", ["sertraline", "paroxetine", "dapoxetine"]),
     ("Infertility", "D007246", ["clomiphene", "letrozole", "gonadotropins"]),
     ("Hypogonadism", "D007006", ["testosterone", "human chorionic gonadotropin"]),
     ("Gynecomastia", "D006190", ["tamoxifen", "raloxifene", "anastrozole"]),

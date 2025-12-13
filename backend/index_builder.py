@@ -38,7 +38,8 @@ def build_faiss_index(fingerprints: np.ndarray, index_type: str = "L2") -> faiss
         index = faiss.IndexFlatL2(dimension)
     elif index_type == "cosine":
         # Cosine similarity: normalize vectors and use L2 index
-        # Normalize fingerprints to unit length
+        # Normalize fingerprints to unit length (avoid mutating original)
+        fingerprints = fingerprints.copy()
         faiss.normalize_L2(fingerprints)
         index = faiss.IndexFlatL2(dimension)
     else:

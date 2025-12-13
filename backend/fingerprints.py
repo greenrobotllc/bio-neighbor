@@ -113,11 +113,18 @@ def save_fingerprints(fingerprints: np.ndarray, metadata: pd.DataFrame, filepath
         raise ValueError(f"Fingerprint matrix ({len(fingerprints)} rows) and metadata ({len(metadata)} rows) must have same length")
     
     print(f"💾 Saving fingerprints to {filepath}...")
+    # Ensure target directory exists
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    
     data = {
         'fingerprints': fingerprints,
         'metadata': metadata
     }
     
+    # Note: pickle.load() can execute arbitrary code if the file is tampered with.
+    # For production, consider using np.savez_compressed() for arrays and
+    # metadata.to_parquet() or CSV for metadata, or ensure the cache location
+    # has restricted permissions.
     with open(filepath, 'wb') as f:
         pickle.dump(data, f)
     

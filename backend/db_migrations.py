@@ -118,8 +118,7 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
     try:
         for version in range(from_version + 1, to_version + 1):
             if version not in MIGRATIONS:
-                print(f"⚠️  No migration defined for version {version}, skipping...")
-                continue
+                raise ValueError(f"Migration version {version} is required but not defined in MIGRATIONS. Cannot proceed.")
             
             description, migration_sql, _ = MIGRATIONS[version]
             print(f"📦 Applying migration {version}: {description}")
@@ -133,10 +132,11 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         error_msg = str(e).lower()
                         if 'duplicate column' in error_msg or 'already exists' in error_msg:
                             print(f"   ⚠️  Skipping (already applied): {sql[:50]}...")
-                        else:
-                            raise
+                    else:
+                        raise
             
-            conn.commit()
+            # Make migration atomic: set version before committing
+            # (set_schema_version commits internally, so we don't commit here)
             set_schema_version(conn, version)
             print(f"   ✅ Migration {version} applied successfully")
         

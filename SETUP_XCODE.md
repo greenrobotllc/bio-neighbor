@@ -64,11 +64,13 @@ Your backend is ready:
    - **App Category:** Utilities (or Science)
 
 4. **Signing & Capabilities Tab:**
-   - **App Sandbox:** **DISABLE** (or configure network permissions)
-     - The app needs to:
-       - Start Python subprocess
-       - Make HTTP requests to localhost:5000
-       - Access files in the project directory
+   - **App Sandbox:** Keep enabled for security (recommended)
+     - Add minimal entitlements:
+       - **Outgoing Connections (Client)** - for HTTP requests to localhost:5000
+       - **User Selected File** - if you need file access
+     - If you must disable sandbox (not recommended):
+       - Only for development/testing
+       - Production apps should use proper entitlements
 
 5. **Build Settings:**
    - Search for "Swift Language Version"
@@ -115,8 +117,10 @@ python backend/api.py --mode http --host 127.0.0.1 --port 5000
 - Verify venv is activated and dependencies are installed
 
 ### App Sandbox issues
-- Disable App Sandbox in Signing & Capabilities
-- Or add network permissions: "Outgoing Connections (Client)"
+- Keep App Sandbox enabled and add minimal entitlements:
+  - "Outgoing Connections (Client)" for network access
+  - "User Selected File" if file access is needed
+- Only disable sandbox for development/testing (not recommended for production)
 
 ### Python backend path issues
 - The app looks for backend at: `../backend/api.py` relative to the app bundle

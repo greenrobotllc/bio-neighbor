@@ -1178,6 +1178,9 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
         conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
         
         # Use replace mode but with retry logic
+        # WARNING: if_exists='replace' will drop and recreate the entire molecules table,
+        # which can invalidate foreign key references in other tables (e.g., drug_diseases.molecule_index).
+        # For production, consider using upsert logic keyed by chembl_id instead.
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -1375,7 +1378,9 @@ def get_molecule_by_id(chembl_id: str) -> Optional[Dict]:
     if row is None:
         return None
     
-    columns = ['chembl_id', 'smiles', 'name', 'molecular_weight', 'is_approved', 'targets']
+    # Use cursor.description to get actual column names from schema
+    # This ensures we return all columns even as schema evolves
+    columns = [d[0] for d in cursor.description]
     return dict(zip(columns, row))
 
 

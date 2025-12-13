@@ -56,6 +56,16 @@ def update_drug_diseases_table(conn: sqlite3.Connection):
     """
     cursor = conn.cursor()
     
+    # Check if drug_diseases table exists
+    cursor.execute("""
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name='drug_diseases'
+    """)
+    
+    if not cursor.fetchone():
+        # Table doesn't exist, nothing to update
+        return
+    
     # Check if drug_id column exists
     cursor.execute("PRAGMA table_info(drug_diseases)")
     columns = [col[1] for col in cursor.fetchall()]
@@ -67,7 +77,7 @@ def update_drug_diseases_table(conn: sqlite3.Connection):
             ADD COLUMN drug_id INTEGER
         """)
         
-        # Add foreign key constraint
+        # Add index (not a foreign key constraint - SQLite doesn't enforce FKs by default)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_drug_diseases_drug_id 
             ON drug_diseases(drug_id)

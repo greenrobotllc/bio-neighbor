@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Set
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
+from rdkit.Chem.inchi import InchiToInchiKey
 import pandas as pd
 
 # Configuration
@@ -100,12 +101,18 @@ def match_drug_to_molecule(
         
         # Try InChIKey match (first 14 chars are standard)
         if 'inchikey' in molecule_df.columns:
-            inchikey_prefix = drug_inchi[:14] if len(drug_inchi) >= 14 else drug_inchi
-            matches = molecule_df[molecule_df['inchikey'].str.startswith(
-                inchikey_prefix, na=False
-            )]
-            if len(matches) > 0:
-                return int(matches.index[0])
+            # Convert InChI to InChIKey for proper matching
+            try:
+                drug_inchikey = InchiToInchiKey(drug_inchi)
+                inchikey_prefix = drug_inchikey[:14] if drug_inchikey and len(drug_inchikey) >= 14 else None
+            except Exception:
+                inchikey_prefix = None
+            if inchikey_prefix:
+                matches = molecule_df[molecule_df['inchikey'].str.startswith(
+                    inchikey_prefix, na=False
+                )]
+                if len(matches) > 0:
+                    return int(matches.index[0])
     
     # Strategy 3: Fuzzy name matching (case-insensitive partial match)
     if drug_name:

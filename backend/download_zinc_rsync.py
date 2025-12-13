@@ -21,6 +21,7 @@ import subprocess
 import sys
 import argparse
 from pathlib import Path
+from typing import Optional
 import gzip
 import shutil
 
@@ -44,7 +45,7 @@ def check_rsync_available():
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
-def download_tranche(tranche: str, output_dir: Path, max_files: int = None):
+def download_tranche(tranche: str, output_dir: Path, max_files: Optional[int] = None):
     """
     Download a ZINC22 tranche using rsync.
     
@@ -105,6 +106,11 @@ def download_tranche(tranche: str, output_dir: Path, max_files: int = None):
                     # Try without tranche subdirectory
                     downloaded_files = list(output_dir.glob("*.smi.gz"))
                 
+                # Apply max_files limit if specified
+                if max_files is not None and len(downloaded_files) > max_files:
+                    downloaded_files = downloaded_files[:max_files]
+                    print(f"   ⚠️  Limited to {max_files} files (max_files specified)")
+                
                 if downloaded_files:
                     print(f"✅ Downloaded {len(downloaded_files)} files from tranche {tranche}")
                     return downloaded_files
@@ -138,7 +144,7 @@ def download_tranche(tranche: str, output_dir: Path, max_files: int = None):
     print(f"      https://wiki.docking.org/index.php/ZINC22:Downloading")
     return []
 
-def decompress_files(gz_files: list, output_dir: Path):
+def decompress_files(gz_files: list, output_dir: Path, keep_gz: bool = False):
     """
     Decompress .smi.gz files to .smi files.
     
@@ -162,8 +168,12 @@ def decompress_files(gz_files: list, output_dir: Path):
             
             smi_files.append(smi_file)
             
-            # Optionally remove .gz file to save space
-            # gz_file.unlink()
+            # Remove .gz file to save space unless keep_gz is True
+            if not keep_gz:
+                try:
+                    gz_file.unlink()
+                except Exception as e:
+                    print(f"   ⚠️  Could not remove {gz_file.name}: {e}")
             
             if len(smi_files) % 10 == 0:
                 print(f"   ✓ Decompressed {len(smi_files)}/{len(gz_files)} files...")
@@ -246,6 +256,12 @@ Examples:
         help="Maximum number of molecules to include in combined file"
     )
     parser.add_argument(
+        "--max-files",
+        type=int,
+        default=None,
+        help="Maximum number of .smi.gz files to download per tranche"
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("data/downloads/zinc_combined.smi"),
@@ -288,7 +304,7 @@ Examples:
     # Download each tranche
     all_gz_files = []
     for tranche in tranches:
-        gz_files = download_tranche(tranche, args.output_dir)
+        gz_files = download_tranche(tranche, args.output_dir, max_files=args.max_files)
         all_gz_files.extend(gz_files)
     
     if not all_gz_files:
@@ -296,7 +312,7 @@ Examples:
         sys.exit(1)
     
     # Decompress files
-    smi_files = decompress_files(all_gz_files, args.output_dir)
+    smi_files = decompress_files(all_gz_files, args.output_dir, keep_gz=args.keep_gz)
     
     if not smi_files:
         print("\n❌ No files decompressed.")

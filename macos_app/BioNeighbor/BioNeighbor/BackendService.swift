@@ -1074,12 +1074,11 @@ class BackendService: ObservableObject {
             }
         }
         
-        // Fallback: Try common project locations
+        // Fallback: Try common project locations (relative to home directory)
         let homeDir = fileManager.homeDirectoryForCurrentUser
         let commonPaths = [
             homeDir.appendingPathComponent("Documents/GitHub/bio-neighbor"),
-            homeDir.appendingPathComponent("Developer/bio-neighbor"),
-            URL(fileURLWithPath: "/Users/andytriboletti/Documents/GitHub/bio-neighbor")
+            homeDir.appendingPathComponent("Developer/bio-neighbor")
         ]
         
         for path in commonPaths {

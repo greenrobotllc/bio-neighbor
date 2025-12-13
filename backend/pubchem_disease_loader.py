@@ -54,7 +54,10 @@ def search_drugs_by_disease(disease_name: str, max_drugs: int = 50) -> List[Dict
         
         try:
             # Search PubChem by name/text
-            compounds = pcp.get_compounds(search_term, 'name', listkey_count=min(50, max_drugs))
+            # Note: listkey_count is not supported for 'name' namespace in pubchempy
+            # It only applies to advanced searches. For name searches, we get all results
+            # and limit manually, or use get_cids() for better control.
+            compounds = pcp.get_compounds(search_term, 'name')
             
             for comp in compounds:
                 if len(drugs) >= max_drugs:

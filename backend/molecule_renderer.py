@@ -86,7 +86,11 @@ def render_molecule_2d_enhanced(smiles: str, width: int = 400, height: int = 400
             return img
         except:
             # Fallback to basic rendering with larger size for better quality
-            return render_molecule_2d(smiles, width * 2, height * 2)
+            # Cap dimensions to prevent memory spikes (max 2000px)
+            max_dimension = 2000
+            fallback_width = min(width * 2, max_dimension)
+            fallback_height = min(height * 2, max_dimension)
+            return render_molecule_2d(smiles, fallback_width, fallback_height)
     
     except Exception as e:
         print(f"Error rendering enhanced molecule: {e}")

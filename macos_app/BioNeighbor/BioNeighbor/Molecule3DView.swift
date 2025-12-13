@@ -99,6 +99,50 @@ struct WebViewRepresentable: NSViewRepresentable {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
         
+        // Determine initial style based on representation
+        // Note: Loading 3Dmol-min.js from CDN requires network access and may fail offline.
+        // For production, consider bundling the JS library or implementing a caching strategy.
+        let initialStyle: String
+        let initialScript: String
+        switch representation {
+        case .surface:
+            initialStyle = "surface"
+            initialScript = """
+                viewer.addModel(pdb, "pdb");
+                viewer.removeAllSurfaces();
+                viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+                viewer.zoomTo();
+                viewer.render();
+            """
+        case .ballAndStick:
+            initialStyle = "stick"
+            initialScript = """
+                viewer.addModel(pdb, "pdb");
+                viewer.removeAllSurfaces();
+                viewer.setStyle({}, {stick: {}});
+                viewer.zoomTo();
+                viewer.render();
+            """
+        case .spaceFilling:
+            initialStyle = "sphere"
+            initialScript = """
+                viewer.addModel(pdb, "pdb");
+                viewer.removeAllSurfaces();
+                viewer.setStyle({}, {sphere: {}});
+                viewer.zoomTo();
+                viewer.render();
+            """
+        case .wireframe:
+            initialStyle = "line"
+            initialScript = """
+                viewer.addModel(pdb, "pdb");
+                viewer.removeAllSurfaces();
+                viewer.setStyle({}, {line: {}});
+                viewer.zoomTo();
+                viewer.render();
+            """
+        }
+        
         return """
         <!DOCTYPE html>
         <html>
@@ -118,10 +162,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 
                 var pdb = `\(escapedPDB)`;
                 
-                viewer.addModel(pdb, "pdb");
-                viewer.setStyle({}, {stick: {}});
-                viewer.zoomTo();
-                viewer.render();
+                \(initialScript)
                 
                 // Handle mouse interactions
                 viewer.zoom(0.8);

@@ -7,8 +7,7 @@ API Documentation: https://clinicaltrials.gov/api
 
 import requests
 import time
-from typing import List, Dict, Optional
-from urllib.parse import quote
+from typing import List, Dict
 
 
 def search_drugs_by_condition(condition: str, max_results: int = 50) -> List[Dict]:
@@ -64,7 +63,8 @@ def search_drugs_by_condition(condition: str, max_results: int = 50) -> List[Dic
                                 # Get condition from study
                                 conditions_module = protocol_section.get('conditionsModule', {})
                                 conditions = conditions_module.get('conditions', [])
-                                condition_list = [c.get('name', '') for c in conditions if c.get('name')]
+                                # Conditions is an array of strings, not dicts
+                                condition_list = conditions if isinstance(conditions, list) else []
                                 
                                 # Get description
                                 description_module = protocol_section.get('descriptionModule', {})

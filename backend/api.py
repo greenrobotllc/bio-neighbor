@@ -558,6 +558,13 @@ def search_by_disease():
             return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
         
         disease_name = data.get('disease_name')
+        
+        # Validate disease name length
+        if isinstance(disease_name, str) and len(disease_name) > 200:
+            return jsonify({
+                'success': False,
+                'error': 'Disease name too long (max 200 chars)'
+            }), 400
         if not disease_name:
             return jsonify({'success': False, 'error': 'disease_name is required'}), 400
         
@@ -638,11 +645,14 @@ def get_download_status(task_id: str):
                         'progress': progress_data
                     })
                 else:
-                    # Process finished - try to get exit code
+                    # Process finished - need to wait() to get returncode
+                    # psutil.Process.returncode is only populated after wait() or wait_procs()
                     try:
+                        process.wait(timeout=0.1)  # Non-blocking wait
                         exit_code = process.returncode
-                    except:
-                        exit_code = None
+                    except (psutil.TimeoutExpired, AttributeError):
+                        # Fallback: check progress file for exit code
+                        exit_code = progress_data.get('exit_code') if progress_data else None
                     
                     message = 'Download completed' if exit_code == 0 else 'Download failed'
                     if progress_data:
@@ -1052,6 +1062,25 @@ def download_molecules():
         names = data.get('names', [])
         full_file = data.get('full_file', False)
         
+        # Validate inputs to prevent unbounded operations
+        if source not in {'pubchem', 'chembl', 'zinc'}:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid source. Must be one of: pubchem, chembl, zinc'
+            }), 400
+        
+        if isinstance(names, list) and len(names) > 200:
+            return jsonify({
+                'success': False,
+                'error': 'Too many names (max 200)'
+            }), 400
+        
+        if any(isinstance(n, str) and len(n) > 200 for n in (names or [])):
+            return jsonify({
+                'success': False,
+                'error': 'Name too long (max 200 chars)'
+            }), 400
+        
         if not count and not names and not full_file:
             return jsonify({
                 'success': False,
@@ -1174,6 +1203,25 @@ def download_drugs():
         disease = data.get('disease')
         count = data.get('count', 10)
         bulk = data.get('bulk', False)
+        
+        # Validate inputs
+        if isinstance(names, list) and len(names) > 200:
+            return jsonify({
+                'success': False,
+                'error': 'Too many names (max 200)'
+            }), 400
+        
+        if any(isinstance(n, str) and len(n) > 200 for n in (names or [])):
+            return jsonify({
+                'success': False,
+                'error': 'Name too long (max 200 chars)'
+            }), 400
+        
+        if isinstance(disease, str) and len(disease) > 200:
+            return jsonify({
+                'success': False,
+                'error': 'Disease name too long (max 200 chars)'
+            }), 400
         
         if not names and not disease and not bulk:
             return jsonify({
@@ -1321,6 +1369,19 @@ def download_diseases():
         data = request.get_json() or {}
         names = data.get('names', [])
         count = data.get('count')
+        
+        # Validate inputs
+        if isinstance(names, list) and len(names) > 200:
+            return jsonify({
+                'success': False,
+                'error': 'Too many names (max 200)'
+            }), 400
+        
+        if any(isinstance(n, str) and len(n) > 200 for n in (names or [])):
+            return jsonify({
+                'success': False,
+                'error': 'Name too long (max 200 chars)'
+            }), 400
         
         if not names and count is None:
             # If no names and no count, download all diseases from NLM
