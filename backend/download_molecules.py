@@ -302,6 +302,10 @@ def download_from_pubchem(count: int) -> pd.DataFrame:
     Returns:
         DataFrame with molecules
     """
+    if not PUBCHEM_AVAILABLE:
+        print("❌ PubChem not available. Install with: pip install pubchempy")
+        return pd.DataFrame()
+    
     molecules_data = []
     seen_cids = set()
     

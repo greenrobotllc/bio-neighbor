@@ -39,9 +39,7 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         "Make molecule_index nullable in drug_diseases and ensure drug_id column exists",
         [
             # SQLite doesn't support ALTER COLUMN, so we need to recreate the table
-            # But we'll handle this in the schema initialization instead
-            # Just ensure drug_id column exists
-            "ALTER TABLE drug_diseases ADD COLUMN drug_id INTEGER",
+            # This will be handled via python-level table rebuild in apply_migration()
         ],
         None
     ),
@@ -98,6 +96,43 @@ def set_schema_version(conn: sqlite3.Connection, version: int):
     conn.commit()
 
 
+def _rebuild_table_from_schema(conn: sqlite3.Connection, table_name: str) -> None:
+    """
+    Rebuild a table from the current schema definition.
+    This is used when SQLite's ALTER TABLE limitations prevent schema changes.
+    
+    Args:
+        conn: Database connection
+        table_name: Name of the table to rebuild
+    """
+    cursor = conn.cursor()
+    tmp = f"{table_name}__old"
+    
+    # Rename old table
+    cursor.execute(f"ALTER TABLE {table_name} RENAME TO {tmp}")
+    
+    # Create new table from schema
+    cursor.execute(get_create_table_sql(table_name))
+    
+    # Get intersecting columns (excluding id which may be auto-increment)
+    cursor.execute(f"PRAGMA table_info({tmp})")
+    old_cols = {r[1] for r in cursor.fetchall()}
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    new_cols = {r[1] for r in cursor.fetchall()}
+    
+    # Find common columns (excluding id if it's auto-increment)
+    cols = [c for c in old_cols & new_cols if c != "id"]
+    
+    if cols:
+        cols_sql = ", ".join(cols)
+        cursor.execute(
+            f"INSERT INTO {table_name} ({cols_sql}) SELECT {cols_sql} FROM {tmp}"
+        )
+    
+    # Drop old table
+    cursor.execute(f"DROP TABLE {tmp}")
+
+
 def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int) -> bool:
     """
     Apply migrations from one version to another.
@@ -122,6 +157,14 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
             
             description, migration_sql, _ = MIGRATIONS[version]
             print(f"📦 Applying migration {version}: {description}")
+            
+            # Special handling for migration 3: rebuild table to make molecule_index nullable
+            if version == 3:
+                _rebuild_table_from_schema(conn, "drug_diseases")
+                conn.commit()
+                set_schema_version(conn, version)
+                print(f"   ✅ Migration {version} applied successfully")
+                continue
             
             for sql in migration_sql:
                 if sql.strip():  # Skip empty statements

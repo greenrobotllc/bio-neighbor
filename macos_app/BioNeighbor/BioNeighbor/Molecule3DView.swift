@@ -76,8 +76,11 @@ struct WebViewRepresentable: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         // Update representation when it changes
         if representation != context.coordinator.lastRepresentation {
-            updateRepresentation(webView: webView, representation: representation)
-            context.coordinator.lastRepresentation = representation
+            updateRepresentation(webView: webView, representation: representation) { didApply in
+                if didApply {
+                    context.coordinator.lastRepresentation = representation
+                }
+            }
         }
     }
     
@@ -93,23 +96,16 @@ struct WebViewRepresentable: NSViewRepresentable {
         // Convert coordinates to PDB format string
         let pdbString = generatePDBString(coordinates: coordinates)
         
-        // Escape the PDB string for JavaScript template literal
-        // Escape backticks and ${ to prevent breaking the template literal
-        let escapedPDB = pdbString
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "`", with: "\\`")
-            .replacingOccurrences(of: "${", with: "\\${")
+        // Encode the PDB string as base64 for safe JS injection (avoids template literal injection)
+        let pdbBase64 = Data(pdbString.utf8).base64EncodedString()
         
         // Determine initial style based on representation
         // Note: Loading 3Dmol-min.js from CDN requires network access and may fail offline.
-        // For production, consider bundling the JS library or implementing a caching strategy.
-        let initialStyle: String
+        // For production, consider bundling the JS library (npm install 3dmol, copy to app bundle)
+        // and loading via local file URL instead of CDN.
         let initialScript: String
         switch representation {
         case .surface:
-            initialStyle = "surface"
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
@@ -118,7 +114,6 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.render();
             """
         case .ballAndStick:
-            initialStyle = "stick"
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
@@ -127,7 +122,6 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.render();
             """
         case .spaceFilling:
-            initialStyle = "sphere"
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
@@ -136,7 +130,6 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.render();
             """
         case .wireframe:
-            initialStyle = "line"
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
@@ -163,7 +156,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 var element = document.getElementById('container');
                 var viewer = $3Dmol.createViewer(element, {});
                 
-                var pdb = `\(escapedPDB)`;
+                var pdb = atob("\(pdbBase64)");
                 
                 \(initialScript)
                 
@@ -201,44 +194,62 @@ struct WebViewRepresentable: NSViewRepresentable {
         return pdb
     }
     
-    private func updateRepresentation(webView: WKWebView, representation: Molecule3DView.RepresentationType) {
+    private func updateRepresentation(
+        webView: WKWebView,
+        representation: Molecule3DView.RepresentationType,
+        completion: @escaping (Bool) -> Void
+    ) {
         let script: String
         switch representation {
         case .surface:
             // Surface representation requires addSurface API, not setStyle
             script = """
-            if (typeof viewer !== 'undefined') {
-                viewer.removeAllSurfaces();
-                viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
-                viewer.render();
-            }
+            (() => {
+              if (typeof viewer === 'undefined') return false;
+              viewer.removeAllSurfaces();
+              viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+              viewer.render();
+              return true;
+            })();
             """
         case .ballAndStick:
             script = """
-            if (typeof viewer !== 'undefined') {
-                viewer.removeAllSurfaces();
-                viewer.setStyle({}, {stick: {}});
-                viewer.render();
-            }
+            (() => {
+              if (typeof viewer === 'undefined') return false;
+              viewer.removeAllSurfaces();
+              viewer.setStyle({}, {stick: {}});
+              viewer.render();
+              return true;
+            })();
             """
         case .spaceFilling:
             script = """
-            if (typeof viewer !== 'undefined') {
-                viewer.removeAllSurfaces();
-                viewer.setStyle({}, {sphere: {}});
-                viewer.render();
-            }
+            (() => {
+              if (typeof viewer === 'undefined') return false;
+              viewer.removeAllSurfaces();
+              viewer.setStyle({}, {sphere: {}});
+              viewer.render();
+              return true;
+            })();
             """
         case .wireframe:
             script = """
-            if (typeof viewer !== 'undefined') {
-                viewer.removeAllSurfaces();
-                viewer.setStyle({}, {line: {}});
-                viewer.render();
-            }
+            (() => {
+              if (typeof viewer === 'undefined') return false;
+              viewer.removeAllSurfaces();
+              viewer.setStyle({}, {line: {}});
+              viewer.render();
+              return true;
+            })();
             """
         }
-        webView.evaluateJavaScript(script, completionHandler: nil)
+        webView.evaluateJavaScript(script) { result, error in
+            guard error == nil else {
+                completion(false)
+                return
+            }
+            completion((result as? Bool) == true)
+        }
     }
 }
 
@@ -260,4 +271,5 @@ struct WebViewRepresentable: NSViewRepresentable {
     )
     .frame(width: 600, height: 500)
 }
+
 

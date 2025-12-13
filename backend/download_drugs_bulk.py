@@ -38,10 +38,11 @@ def get_drug_cids_from_pubchem_search(query: str, max_results: int = 100) -> Lis
         return []
     
     try:
-        # Search PubChem for compounds
-        compounds = pcp.get_compounds(query, 'name', list_return='flat')
-        cids = [c.cid for c in compounds[:max_results]]
-        return cids
+        # Search PubChem for CIDs directly (list_return='flat' is not valid for get_compounds)
+        cids = pcp.get_cids(query, 'name')
+        # Convert to int and limit results
+        cids_int = [int(cid) for cid in cids[:max_results]]
+        return cids_int
     except Exception as e:
         print(f"  ⚠️  Error searching PubChem: {e}")
         return []

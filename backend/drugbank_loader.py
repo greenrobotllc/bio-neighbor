@@ -421,6 +421,10 @@ def load_drugbank_data(
     
     # Try PubChem if enabled
     if use_pubchem:
+        if not target_disease:
+            print("⚠️  target_disease is required when use_pubchem=True")
+            return []
+        
         print("📥 Attempting to load from PubChem...")
         try:
             from .top_100_diseases import get_disease_by_name, get_alzheimers_drugs
