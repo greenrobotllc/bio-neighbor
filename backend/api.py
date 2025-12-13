@@ -81,16 +81,15 @@ def search():
         if not isinstance(top_k, int) or top_k < 1:
             top_k = 10
         
-        # Validate SMILES before attempting search
-        from fingerprints import compute_morgan_fingerprint
-        query_fp = compute_morgan_fingerprint(query_smiles)
-        if query_fp is None:
+        # Validate SMILES length to prevent DoS (engine.search_similar will validate format)
+        if len(query_smiles) > 1000:
             return jsonify({
                 'success': False, 
-                'error': f'Invalid SMILES string: {query_smiles}'
+                'error': 'SMILES string too long (max 1000 characters)'
             }), 400
         
         engine = get_engine()
+        # search_similar() will validate SMILES format and raise ValueError if invalid
         results = engine.search_similar(query_smiles, top_k=top_k)
         
         return jsonify({
@@ -1632,8 +1631,18 @@ def handle_stdin_request():
             if not query_smiles:
                 raise ValueError('query_smiles is required')
             
+            # Use same validation as HTTP endpoint
+            if len(query_smiles) > 1000:
+                raise ValueError('SMILES string too long (max 1000 characters)')
+            
             top_k = input_data.get('top_k', 10)
-            engine = get_search_engine()
+            # Validate and clamp top_k
+            if not isinstance(top_k, int):
+                top_k = 10
+            top_k = min(max(top_k, 1), 100)  # Clamp to reasonable range
+            
+            # Use get_engine() for consistency with HTTP endpoints
+            engine = get_engine()
             results = engine.search_similar(query_smiles, top_k=top_k)
             
             response = {
@@ -1649,7 +1658,13 @@ def handle_stdin_request():
                 raise ValueError('chembl_id is required')
             
             top_k = input_data.get('top_k', 10)
-            engine = get_search_engine()
+            # Validate and clamp top_k
+            if not isinstance(top_k, int):
+                top_k = 10
+            top_k = min(max(top_k, 1), 100)  # Clamp to reasonable range
+            
+            # Use get_engine() for consistency with HTTP endpoints
+            engine = get_engine()
             results = engine.search_by_chembl_id(chembl_id, top_k=top_k)
             
             response = {
@@ -1664,7 +1679,15 @@ def handle_stdin_request():
             if index is None:
                 raise ValueError('index is required')
             
-            engine = get_search_engine()
+            # Validate index is an integer
+            if not isinstance(index, int):
+                try:
+                    index = int(index)
+                except (ValueError, TypeError):
+                    raise ValueError('index must be an integer')
+            
+            # Use get_engine() for consistency with HTTP endpoints
+            engine = get_engine()
             molecule = engine.get_molecule_by_index(index)
             
             response = {
@@ -1680,9 +1703,13 @@ def handle_stdin_request():
         sys.stdout.flush()
     
     except Exception as e:
+        # Sanitize error message
+        error_msg = str(e)
+        if len(error_msg) > 200:
+            error_msg = error_msg[:200] + "..."
         error_response = {
             'success': False,
-            'error': str(e)
+            'error': error_msg
         }
         print(json.dumps(error_response))
         sys.stdout.flush()
@@ -1691,21 +1718,32 @@ def handle_stdin_request():
 
 def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = False):
     """Run the Flask HTTP server."""
-    print(f"🚀 Starting BioNeighbor API server on http://{host}:{port}")
-    print(f"📖 API endpoints:")
-    print(f"   GET  /health - Health check")
-    print(f"   POST /search - Search by SMILES")
-    print(f"   POST /search/chembl - Search by ChEMBL ID")
-    print(f"   POST /search/by-disease - Search similar molecules to disease-related drugs")
-    print(f"   GET  /diseases - List all diseases")
-    print(f"   GET  /diseases/<name>/molecules - Get molecules for a disease")
-    print(f"   GET  /diseases/<name>/drugs - Get drugs for a disease")
-    print(f"   GET  /diseases/<name>/top-molecules - Get top molecules for a disease")
-    print(f"   GET  /drugs - List all drugs")
-    print(f"   GET  /drugs/<drug_id> - Get drug by ID")
-    print(f"   GET  /drugs/<drug_id>/molecules - Get active ingredient molecules for a drug")
-    print(f"   GET  /molecule/<index> - Get molecule by index")
-    app.run(host=host, port=port, debug=debug)
+    # Only enable debug mode if explicitly requested via environment variable
+    # This prevents accidental exposure of Werkzeug debugger
+    debug_enabled = debug and os.environ.get('BIO_NEIGHBOR_DEBUG') == '1'
+    if debug and not debug_enabled:
+        print("⚠️  Debug mode requested but BIO_NEIGHBOR_DEBUG=1 not set. Use env var to enable.")
+        debug_enabled = False
+    
+    # Force bind to localhost when debug is enabled for security
+    if debug_enabled:
+        host = '127.0.0.1'
+    
+    print("🚀 Starting BioNeighbor API server on http://{host}:{port}".format(host=host, port=port))
+    print("📖 API endpoints:")
+    print("   GET  /health - Health check")
+    print("   POST /search - Search by SMILES")
+    print("   POST /search/chembl - Search by ChEMBL ID")
+    print("   POST /search/by-disease - Search similar molecules to disease-related drugs")
+    print("   GET  /diseases - List all diseases")
+    print("   GET  /diseases/<name>/molecules - Get molecules for a disease")
+    print("   GET  /diseases/<name>/drugs - Get drugs for a disease")
+    print("   GET  /diseases/<name>/top-molecules - Get top molecules for a disease")
+    print("   GET  /drugs - List all drugs")
+    print("   GET  /drugs/<drug_id> - Get drug by ID")
+    print("   GET  /drugs/<drug_id>/molecules - Get active ingredient molecules for a drug")
+    print("   GET  /molecule/<index> - Get molecule by index")
+    app.run(host=host, port=port, debug=debug_enabled)
 
 
 if __name__ == "__main__":

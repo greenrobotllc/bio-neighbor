@@ -90,7 +90,7 @@ BioNeighbor supports multiple data sources with automatic fallback and comprehen
 1. **PubChem FTP** (Primary - Recommended for bulk downloads)
    - Full SDF files via FTP (300-500 MB per file, ~500,000 compounds)
    - No API rate limits
-   - URL: https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/CURRENT-Full/
+   - URL: [PubChem FTP CURRENT-Full](https://ftp.ncbi.nlm.nih.gov/pubchem/Compound/CURRENT-Full/)
    - Automatically downloads, decompresses, and converts to SMILES
 
 2. **PubChem API** (Fallback)
@@ -101,7 +101,7 @@ BioNeighbor supports multiple data sources with automatic fallback and comprehen
 3. **ZINC Database** (Alternative)
    - Curated drug-like and lead-like subsets
    - Bulk SMILES file downloads
-   - URL: https://zinc.docking.org/
+   - URL: [ZINC Database](https://zinc.docking.org/)
 
 4. **ChEMBL** (Legacy - Often Unavailable)
    - Note: ChEMBL API has been down for 2+ years
@@ -115,8 +115,8 @@ BioNeighbor supports multiple data sources with automatic fallback and comprehen
 
 **Diseases:**
 - **NLM Clinical Tables** - 2,400+ medical conditions with ICD codes and synonyms
-  - Bulk download via JSON file: https://clinicaltables.nlm.nih.gov/ctss-downloads/
-  - API access: https://clinicaltables.nlm.nih.gov/apidoc/conditions/v3/doc.html
+  - Bulk download via JSON file: [ctss-downloads](https://clinicaltables.nlm.nih.gov/ctss-downloads/)
+  - API access: [conditions v3 API docs](https://clinicaltables.nlm.nih.gov/apidoc/conditions/v3/doc.html)
 
 **Data Download Priority:**
 1. PubChem FTP (for bulk molecule downloads)

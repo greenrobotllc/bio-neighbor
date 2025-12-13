@@ -110,6 +110,11 @@ struct DrugDetailView: View {
                             ProgressView("Loading active ingredients...")
                                 .frame(maxWidth: .infinity)
                                 .padding()
+                        } else if !backendService.isBackendRunning {
+                            Text("Backend is not running. Please start the backend to load active ingredients.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .padding()
                         } else if let error = errorMessage {
                             Text("Error: \(error)")
                                 .font(.caption)

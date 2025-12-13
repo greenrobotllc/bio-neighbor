@@ -616,8 +616,12 @@ class SearchEngine:
                         all_similar.append(mol)
                         seen_indices.add(mol_idx)
             
-            except (ValueError, Exception) as e:
-                # Skip if similarity search fails
+            except ValueError as e:
+                # Expected: invalid SMILES string
+                continue
+            except Exception as e:
+                # Unexpected: log once to help debug
+                print(f"⚠️  Unexpected error in disease similarity search: {e}")
                 continue
         
         # Sort by similarity (higher is better)
@@ -681,6 +685,11 @@ class SearchEngine:
                 drug_ids = drug_ids[:limit]
             
             # Get drug information
+            # Ensure all drug_ids are integers to prevent SQL injection
+            drug_ids = [int(did) for did in drug_ids if isinstance(did, (int, str)) and str(did).isdigit()]
+            if not drug_ids:
+                return []
+            
             placeholders = ','.join(['?'] * len(drug_ids))
             cursor.execute(
                 f"SELECT * FROM drugs WHERE id IN ({placeholders})",

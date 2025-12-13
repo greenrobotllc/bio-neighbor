@@ -603,7 +603,7 @@ Examples:
         '--count',
         type=int,
         default=None,
-        help='Number of molecules to download (default: None = all from downloaded files)'
+        help='Number of molecules to download (required unless --full-file or --names is specified)'
     )
     
     parser.add_argument(

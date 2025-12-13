@@ -30,6 +30,11 @@ def compute_morgan_fingerprint(smiles: str, radius: int = RADIUS, n_bits: int = 
     Returns:
         NumPy array of fingerprint bits, or None if SMILES is invalid
     """
+    # Handle empty/whitespace SMILES explicitly
+    smiles = (smiles or "").strip()
+    if not smiles:
+        return None
+    
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
@@ -38,7 +43,8 @@ def compute_morgan_fingerprint(smiles: str, radius: int = RADIUS, n_bits: int = 
         # Compute Morgan fingerprint
         fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)
         return np.array(fp, dtype=np.float32)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
+        # Catch expected RDKit errors (invalid SMILES format, type issues)
         print(f"⚠️  Error computing fingerprint for {smiles[:50]}: {e}")
         return None
 

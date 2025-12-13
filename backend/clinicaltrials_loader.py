@@ -91,7 +91,8 @@ def search_drugs_by_condition(condition: str, max_results: int = 50) -> List[Dic
                     if len(drugs) >= max_results:
                         break
                 
-                except Exception as e:
+                except (KeyError, TypeError, ValueError) as e:
+                    # Catch expected data-shape errors (missing keys, wrong types, invalid values)
                     print(f"  ⚠️  Error parsing study: {e}")
                     continue
         
