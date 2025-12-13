@@ -414,7 +414,7 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
     scaffold_idx = 0
     generation_round = 0
     consecutive_failures = 0
-    max_consecutive_failures = len(drug_scaffolds) * 2  # Allow some retries before giving up
+    max_consecutive_failures = 10  # Stop after 10 consecutive failures
     
     while len(molecules_data) < max_molecules:
         # Break if too many consecutive failures (can't generate more unique molecules)
