@@ -161,6 +161,12 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
             # Special handling for migration 3: rebuild table to make molecule_index nullable
             if version == 3:
                 _rebuild_table_from_schema(conn, "drug_diseases")
+                # Recreate indexes dropped by the rebuild
+                for index_sql in get_create_index_sql("drug_diseases"):
+                    try:
+                        cursor.execute(index_sql)
+                    except sqlite3.OperationalError:
+                        pass  # Index may already exist
                 conn.commit()
                 set_schema_version(conn, version)
                 print(f"   ✅ Migration {version} applied successfully")

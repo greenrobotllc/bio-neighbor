@@ -402,8 +402,13 @@ def render_molecule():
         if not smiles:
             return jsonify({'success': False, 'error': 'smiles is required'}), 400
         
-        width = int(data.get('width', 400))
-        height = int(data.get('height', 400))
+        # Validate width/height - return 400 for invalid inputs
+        try:
+            width = int(data.get('width', 400))
+            height = int(data.get('height', 400))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'width and height must be integers'}), 400
+        
         # Clamp dimensions to prevent DoS (larger limit for render endpoint)
         width = min(max(width, 16), 2048)
         height = min(max(height, 16), 2048)

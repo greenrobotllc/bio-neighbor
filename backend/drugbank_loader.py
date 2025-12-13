@@ -83,10 +83,14 @@ def match_drug_to_molecule(
     if drug_smiles:
         canonical_smiles = normalize_smiles(drug_smiles)
         if canonical_smiles:
-            # Try exact match
-            matches = molecule_df[molecule_df['smiles'].apply(
-                lambda x: normalize_smiles(x) == canonical_smiles if x else False
-            )]
+            # Use precomputed canonical_smiles column if available, otherwise compute on-the-fly
+            if 'canonical_smiles' in molecule_df.columns:
+                matches = molecule_df[molecule_df['canonical_smiles'] == canonical_smiles]
+            else:
+                # Fallback: compute on-the-fly (slower)
+                matches = molecule_df[molecule_df['smiles'].apply(
+                    lambda x: normalize_smiles(x) == canonical_smiles if x else False
+                )]
             if len(matches) > 0:
                 return int(matches.index[0])
     
@@ -805,6 +809,16 @@ if __name__ == "__main__":
     if molecule_df is None or len(molecule_df) == 0:
         print("⚠️  No molecules in database. Please run data setup first.")
     else:
+        # Precompute canonical SMILES for all molecules to avoid redundant RDKit calls
+        # This is O(n) instead of O(n*m) where n=molecules, m=drugs
+        if 'canonical_smiles' not in molecule_df.columns and 'smiles' in molecule_df.columns:
+            print("   Precomputing canonical SMILES for molecule matching...")
+            from rdkit import Chem
+            molecule_df = molecule_df.copy()
+            molecule_df['canonical_smiles'] = molecule_df['smiles'].apply(
+                lambda x: normalize_smiles(x) if x else None
+            )
+            print(f"   ✅ Precomputed canonical SMILES for {len(molecule_df)} molecules")
         print(f"📊 Loaded {len(molecule_df)} molecules from database")
         
         # Load Alzheimer's disease drugs

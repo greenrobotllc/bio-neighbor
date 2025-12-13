@@ -412,9 +412,9 @@ class SearchEngine:
             - molecule: The requested molecule
             - similar: List of similar molecules
         """
-        # Validate index bounds
-        if index < 0 or (self.molecule_df is not None and index >= len(self.molecule_df)):
-            raise ValueError(f"Index {index} is out of range. Valid range: 0-{len(self.molecule_df) - 1 if self.molecule_df is not None else self.index.ntotal - 1}")
+        # Validate index bounds using FAISS index size (authoritative)
+        if index < 0 or index >= self.index.ntotal:
+            raise ValueError(f"Index {index} is out of range. Valid FAISS index range: 0-{self.index.ntotal - 1}")
         
         molecule = self._get_molecule_info(index)
         

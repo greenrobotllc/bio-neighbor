@@ -68,7 +68,6 @@ def fetch_drug_info_from_pubchem(
         
         # Look for brand names in synonyms (often shorter, trademarked names)
         for synonym in synonyms[:20]:  # Check first 20 synonyms
-            syn_lower = synonym.lower()
             # Skip very long names (likely IUPAC)
             if len(synonym) > 50:
                 continue
@@ -86,23 +85,17 @@ def fetch_drug_info_from_pubchem(
         if generic_name is None and synonyms:
             generic_name = synonyms[0]
         
-        # Get description/summary
+        # Get description/summary - use comp.title directly (Title is not a valid get_properties parameter)
         description = None
         try:
-            # Try to get summary
-            summary = pcp.get_properties(['Title', 'CanonicalSMILES'], cid, 'cid')
-            if summary:
-                description = summary[0].get('Title', '')
-        except Exception:
-            pass
+            if hasattr(comp, 'title') and comp.title:
+                description = comp.title
+        except Exception as e:
+            print(f"  ⚠️  Could not get description for {drug_name}: {e}")
         
         # Get indication/use from PubChem (if available)
         indication = None
-        try:
-            # PubChem may have indication in properties
-            props = pcp.get_properties(['MolecularWeight', 'CanonicalSMILES'], cid, 'cid')
-        except Exception:
-            pass
+        # Note: Indication is not available via get_properties - would need separate API call
         
         # Extract active ingredients
         # For now, the compound itself is the active ingredient

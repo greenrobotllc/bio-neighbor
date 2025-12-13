@@ -85,6 +85,9 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
     Returns:
         List of dictionaries with molecule data
     """
+    from rdkit import Chem
+    from rdkit.Chem import rdMolDescriptors
+    
     molecules = []
     
     print(f"📖 Parsing SMILES file: {file_path.name}")
@@ -105,9 +108,27 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     parts = line.split()
                 
                 if len(parts) >= 2:
-                    # Format: ID SMILES [MW] [NAME] [FORMULA] [INCHI] [INCHIKEY] [CID]
-                    mol_id = parts[0].strip()
-                    smiles = parts[1].strip()
+                    # Detect column order: try to parse both parts as SMILES
+                    # Some sources use "SMILES ID" instead of "ID SMILES"
+                    part0_mol = Chem.MolFromSmiles(parts[0].strip())
+                    part1_mol = Chem.MolFromSmiles(parts[1].strip())
+                    
+                    if part0_mol is not None and part1_mol is None:
+                        # parts[0] is SMILES, parts[1] is ID
+                        smiles = parts[0].strip()
+                        mol_id = parts[1].strip()
+                    elif part1_mol is not None and part0_mol is None:
+                        # parts[1] is SMILES, parts[0] is ID (standard format)
+                        mol_id = parts[0].strip()
+                        smiles = parts[1].strip()
+                    elif part0_mol is not None and part1_mol is not None:
+                        # Both parse as SMILES - ambiguous, use standard order
+                        mol_id = parts[0].strip()
+                        smiles = parts[1].strip()
+                    else:
+                        # Neither parses - assume standard order
+                        mol_id = parts[0].strip()
+                        smiles = parts[1].strip()
                     # Parse optional fields
                     try:
                         mw_from_file = float(parts[2]) if len(parts) > 2 and parts[2].strip() else None
@@ -140,7 +161,6 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                 
                 # Validate SMILES with RDKit
                 try:
-                    from rdkit import Chem
                     mol = Chem.MolFromSmiles(smiles)
                     if mol is None:
                         continue
@@ -149,7 +169,7 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     if mw_from_file is not None:
                         mw = mw_from_file
                     else:
-                        mw = Chem.rdMolDescriptors.CalcExactMolWt(mol)
+                        mw = rdMolDescriptors.CalcExactMolWt(mol)
                     
                     # Filter for drug-like molecules (MW 150-800)
                     if mw < 150 or mw > 800:
@@ -158,8 +178,8 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     # Calculate formula if not provided
                     if not formula:
                         try:
-                            formula = Chem.rdMolDescriptors.CalcMolFormula(mol)
-                        except:
+                            formula = rdMolDescriptors.CalcMolFormula(mol)
+                        except Exception as e:
                             formula = ""
                     
                     molecules.append({
@@ -180,7 +200,7 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     # Skip invalid SMILES (but don't print for every failure to avoid spam)
                     if len(molecules) == 0 and line_num <= 5:
                         # Only print first few errors for debugging
-                        pass
+                        print(f"  ⚠️  Error parsing line {line_num}: {e}")
                     continue  # Skip invalid SMILES
         
         print(f"✅ Parsed {len(molecules)} valid molecules from file")
@@ -261,19 +281,34 @@ def download_zinc_subset(max_molecules: int = 10000, subset: str = "drug-like") 
         
         # Try each URL format until one works
         download_success = False
-        response = None
         successful_url = None
         
         for download_url in url_list:
             try:
                 print(f"   Trying: {download_url}")
-                response = requests.get(download_url, stream=True, timeout=300, allow_redirects=True)
-                if response.status_code == 200:
-                    download_success = True
-                    successful_url = download_url
-                    break
-                else:
-                    print(f"   Status {response.status_code}, trying next URL...")
+                with requests.get(download_url, stream=True, timeout=300, allow_redirects=True) as response:
+                    response.raise_for_status()
+                    if response.status_code == 200:
+                        download_success = True
+                        successful_url = download_url
+                        
+                        # Download the file inside the context manager
+                        total_size = int(response.headers.get('content-length', 0))
+                        downloaded = 0
+                        
+                        with open(local_file, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:  # Every 10MB
+                                        progress = (downloaded / total_size) * 100
+                                        print(f"   Progress: {progress:.1f}% ({downloaded / 1024 / 1024:.1f} MB)")
+                        
+                        print(f"✅ Downloaded {local_file.name} ({downloaded / 1024 / 1024:.1f} MB)")
+                        break
+                    else:
+                        print(f"   Status {response.status_code}, trying next URL...")
             except Exception as e:
                 print(f"   Error: {e}, trying next URL...")
                 continue
@@ -297,30 +332,6 @@ def download_zinc_subset(max_molecules: int = 10000, subset: str = "drug-like") 
                     f"ZINC HTTP download not available. ZINC22 uses rsync.\n"
                     f"See DOWNLOAD_DATA.md for rsync instructions or use other data sources."
                 )
-        
-        # Download the file if we got a successful response
-        if download_success and response:
-            try:
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded = 0
-                
-                with open(local_file, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:  # Every 10MB
-                                progress = (downloaded / total_size) * 100
-                                print(f"   Progress: {progress:.1f}% ({downloaded / 1024 / 1024:.1f} MB)")
-                
-                print(f"✅ Downloaded {local_file.name} ({downloaded / 1024 / 1024:.1f} MB)")
-            
-            except Exception as e:
-                print(f"❌ Error downloading ZINC file: {e}")
-                if local_file.exists():
-                    print(f"   Using existing cached file if available...")
-                else:
-                    raise
     
     # Parse the SMILES file
     # For large files, we'll read more lines than needed, then sample
@@ -1138,6 +1149,11 @@ def load_from_cache() -> Optional[pd.DataFrame]:
     if CSV_PATH.exists():
         print(f"📂 Loading molecules from cache: {CSV_PATH}")
         df = pd.read_csv(CSV_PATH)
+        # Parse JSON columns that were saved as strings
+        if 'targets' in df.columns:
+            df['targets'] = df['targets'].apply(
+                lambda x: json.loads(x) if isinstance(x, str) and x.strip().startswith('[') else []
+            )
         print(f"✅ Loaded {len(df)} molecules from cache")
         return df
     return None
@@ -1245,6 +1261,7 @@ def get_molecules(force_download: bool = False, max_molecules: int = 10000, use_
         DataFrame with molecule data
     """
     # Try to load from cache first (unless forcing download)
+    existing_df = None
     if not force_download:
         df = load_from_database()
         if df is not None and len(df) >= max_molecules:
@@ -1253,17 +1270,18 @@ def get_molecules(force_download: bool = False, max_molecules: int = 10000, use_
         elif df is not None and len(df) > 0 and len(df) < max_molecules:
             print(f"⚠️  Cached data has only {len(df)} molecules (requested: {max_molecules})")
             print("   Attempting to download more molecules...")
-            # Continue to download to get more molecules
+            existing_df = df  # Keep existing data for merging
         
-        df = load_from_cache()
-        if df is not None and len(df) >= max_molecules:
-            print(f"✅ Using cached data with {len(df)} molecules (requested: {max_molecules})")
-            save_to_database(df)
-            return df
-        elif df is not None and len(df) > 0 and len(df) < max_molecules:
-            print(f"⚠️  Cached data has only {len(df)} molecules (requested: {max_molecules})")
-            print("   Attempting to download more molecules...")
-            # Continue to download to get more molecules
+        if existing_df is None:
+            df = load_from_cache()
+            if df is not None and len(df) >= max_molecules:
+                print(f"✅ Using cached data with {len(df)} molecules (requested: {max_molecules})")
+                save_to_database(df)
+                return df
+            elif df is not None and len(df) > 0 and len(df) < max_molecules:
+                print(f"⚠️  Cached data has only {len(df)} molecules (requested: {max_molecules})")
+                print("   Attempting to download more molecules...")
+                existing_df = df  # Keep existing data for merging
     
     # Try to download from data sources in priority order:
     # 1. ZINC (most reliable, bulk downloads)
@@ -1277,7 +1295,22 @@ def get_molecules(force_download: bool = False, max_molecules: int = 10000, use_
     # Priority 1: Try ZINC database (best option - bulk downloads, no API limits)
     try:
         print("📥 Attempting to download from ZINC database (recommended)...")
-        df = download_zinc_subset(max_molecules, subset="drug-like")
+        new_df = download_zinc_subset(max_molecules, subset="drug-like")
+        
+        # Merge with existing data if we have partial cache
+        if existing_df is not None and len(existing_df) > 0:
+            print(f"   Merging {len(existing_df)} existing molecules with {len(new_df)} new molecules...")
+            # Combine dataframes
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            # Drop duplicates by chembl_id, keeping the last (newest) entry
+            if 'chembl_id' in combined_df.columns:
+                combined_df = combined_df.drop_duplicates(subset=['chembl_id'], keep='last')
+            # Trim to max_molecules
+            df = combined_df.head(max_molecules)
+            print(f"   ✅ Merged to {len(df)} unique molecules")
+        else:
+            df = new_df
+        
         save_to_cache(df)
         save_to_database(df)
         print("✅ Successfully downloaded from ZINC!")
@@ -1289,7 +1322,19 @@ def get_molecules(force_download: bool = False, max_molecules: int = 10000, use_
     # Priority 2: Try PubChem FTP bulk download (RECOMMENDED - most reliable)
     try:
         print("📥 Attempting to download from PubChem FTP (recommended for bulk downloads)...")
-        df = download_pubchem_bulk(max_molecules)
+        new_df = download_pubchem_bulk(max_molecules)
+        
+        # Merge with existing data if we have partial cache
+        if existing_df is not None and len(existing_df) > 0:
+            print(f"   Merging {len(existing_df)} existing molecules with {len(new_df)} new molecules...")
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            if 'chembl_id' in combined_df.columns:
+                combined_df = combined_df.drop_duplicates(subset=['chembl_id'], keep='last')
+            df = combined_df.head(max_molecules)
+            print(f"   ✅ Merged to {len(df)} unique molecules")
+        else:
+            df = new_df
+        
         save_to_cache(df)
         save_to_database(df)
         print("✅ Successfully downloaded from PubChem FTP!")
@@ -1302,7 +1347,19 @@ def get_molecules(force_download: bool = False, max_molecules: int = 10000, use_
     if CHEMBL_AVAILABLE:
         try:
             print("📥 Attempting to download from ChEMBL...")
-            df = download_chembl_subset(max_molecules)
+            new_df = download_chembl_subset(max_molecules)
+            
+            # Merge with existing data if we have partial cache
+            if existing_df is not None and len(existing_df) > 0:
+                print(f"   Merging {len(existing_df)} existing molecules with {len(new_df)} new molecules...")
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                if 'chembl_id' in combined_df.columns:
+                    combined_df = combined_df.drop_duplicates(subset=['chembl_id'], keep='last')
+                df = combined_df.head(max_molecules)
+                print(f"   ✅ Merged to {len(df)} unique molecules")
+            else:
+                df = new_df
+            
             save_to_cache(df)
             save_to_database(df)
             print("✅ Successfully downloaded from ChEMBL!")
@@ -1315,7 +1372,19 @@ def get_molecules(force_download: bool = False, max_molecules: int = 10000, use_
     if PUBCHEM_AVAILABLE:
         try:
             print("📥 Attempting to download from PubChem (API - may be slow)...")
-            df = download_pubchem_subset(max_molecules)
+            new_df = download_pubchem_subset(max_molecules)
+            
+            # Merge with existing data if we have partial cache
+            if existing_df is not None and len(existing_df) > 0:
+                print(f"   Merging {len(existing_df)} existing molecules with {len(new_df)} new molecules...")
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                if 'chembl_id' in combined_df.columns:
+                    combined_df = combined_df.drop_duplicates(subset=['chembl_id'], keep='last')
+                df = combined_df.head(max_molecules)
+                print(f"   ✅ Merged to {len(df)} unique molecules")
+            else:
+                df = new_df
+            
             save_to_cache(df)
             save_to_database(df)
             print("✅ Successfully downloaded from PubChem API!")
