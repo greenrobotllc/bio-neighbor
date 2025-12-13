@@ -12,14 +12,18 @@ struct DiseaseBrowseView: View {
     @State private var diseases: [Disease] = []
     @State private var selectedDisease: Disease?
     @State private var diseaseMolecules: [MoleculeBasic] = []
+    @State private var diseaseDrugs: [Drug] = []
     @State private var similarMolecules: [Molecule] = []
     @State private var isLoadingDiseases = false
     @State private var isLoadingMolecules = false
+    @State private var isLoadingDrugs = false
     @State private var isLoadingSimilar = false
     @State private var errorMessage: String?
     @State private var diseaseSearchText = ""
     @State private var selectedMolecule: Molecule?
+    @State private var selectedDrug: Drug?
     @State private var showSimilarMolecules = false
+    @State private var showDrugs = true  // Default to showing drugs
     
     var filteredDiseases: [Disease] {
         if diseaseSearchText.isEmpty {
@@ -94,8 +98,11 @@ struct DiseaseBrowseView: View {
                                     disease: disease,
                                     isSelected: selectedDisease?.id == disease.id
                                 ) {
-                                    selectedDisease = disease
-                                    loadDiseaseMolecules()
+                                selectedDisease = disease
+                            if showDrugs {
+                                loadDiseaseDrugs()
+                            }
+                            loadDiseaseMolecules()
                                 }
                             }
                         }
@@ -170,12 +177,19 @@ struct DiseaseBrowseView: View {
                                 
                                 Spacer()
                                 
-                                if isLoadingMolecules {
+                                if isLoadingDrugs || isLoadingMolecules {
                                     ProgressView()
                                 } else {
-                                    Text("\(diseaseMolecules.count) molecules")
-                                        .font(.headline)
-                                        .foregroundColor(.blue)
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        if showDrugs {
+                                            Text("\(diseaseDrugs.count) drugs")
+                                                .font(.headline)
+                                                .foregroundColor(.blue)
+                                        }
+                                        Text("\(diseaseMolecules.count) molecules")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -183,8 +197,15 @@ struct DiseaseBrowseView: View {
                         .background(Color(NSColor.controlBackgroundColor))
                         .cornerRadius(8)
                         
-                        // Toggle for similar molecules
+                        // Toggle for drugs vs molecules
                         HStack {
+                            Toggle("Show Drugs", isOn: $showDrugs)
+                                .onChange(of: showDrugs) { newValue in
+                                    if newValue && diseaseDrugs.isEmpty {
+                                        loadDiseaseDrugs()
+                                    }
+                                }
+                            
                             Toggle("Show Similar Molecules", isOn: $showSimilarMolecules)
                                 .onChange(of: showSimilarMolecules) { newValue in
                                     if newValue && similarMolecules.isEmpty {
@@ -195,13 +216,58 @@ struct DiseaseBrowseView: View {
                             Spacer()
                             
                             Button("Refresh") {
+                                if showDrugs {
+                                    loadDiseaseDrugs()
+                                }
                                 loadDiseaseMolecules()
                                 if showSimilarMolecules {
                                     loadSimilarMolecules()
                                 }
                             }
                             .buttonStyle(.bordered)
-                            .disabled(isLoadingMolecules || isLoadingSimilar)
+                            .disabled(isLoadingMolecules || isLoadingDrugs || isLoadingSimilar)
+                        }
+                        
+                        // Drugs section (if enabled)
+                        if showDrugs {
+                            if isLoadingDrugs {
+                                ProgressView("Loading drugs...")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 40)
+                            } else if diseaseDrugs.isEmpty {
+                                VStack(spacing: 16) {
+                                    Image(systemName: "pills")
+                                        .font(.system(size: 60))
+                                        .foregroundColor(.secondary)
+                                    Text("No drugs found for this disease")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+                                    Text("Drug data may not be loaded yet. Try downloading drug information.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                            } else {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Drugs for \(disease.name)")
+                                        .font(.title2)
+                                        .fontWeight(.bold)
+                                    
+                                    LazyVGrid(columns: [
+                                        GridItem(.adaptive(minimum: 250), spacing: 16)
+                                    ], spacing: 16) {
+                                        ForEach(diseaseDrugs) { drug in
+                                            DrugCard(drug: drug) {
+                                                selectedDrug = drug
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Divider()
                         }
                         
                         // Molecules section
@@ -226,7 +292,7 @@ struct DiseaseBrowseView: View {
                             .padding(.vertical, 40)
                         } else {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("Molecules for \(disease.name)")
+                                Text("Active Ingredient Molecules")
                                     .font(.title2)
                                     .fontWeight(.bold)
                                 
@@ -308,6 +374,9 @@ struct DiseaseBrowseView: View {
         .sheet(item: $selectedMolecule) { molecule in
             MoleculeDetailView(molecule: molecule)
         }
+        .sheet(item: $selectedDrug) { drug in
+            DrugDetailView(drug: drug)
+        }
         .onAppear {
             backendService.checkBackendHealth()
             if diseases.isEmpty {
@@ -331,7 +400,10 @@ struct DiseaseBrowseView: View {
                     
                     // Auto-select Alzheimer's if available
                     if selectedDisease == nil, let alzheimers = diseases.first(where: { $0.name.localizedCaseInsensitiveContains("alzheimer") }) {
-                        selectedDisease = alzheimers
+                                selectedDisease = alzheimers
+                        if showDrugs {
+                            loadDiseaseDrugs()
+                        }
                         loadDiseaseMolecules()
                     }
                 }
@@ -339,6 +411,32 @@ struct DiseaseBrowseView: View {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     isLoadingDiseases = false
+                }
+            }
+        }
+    }
+    
+    private func loadDiseaseDrugs() {
+        guard let disease = selectedDisease, backendService.isBackendRunning else { return }
+        
+        isLoadingDrugs = true
+        errorMessage = nil
+        diseaseDrugs = []
+        
+        Task {
+            do {
+                let (drugs, _) = try await backendService.getDiseaseDrugs(
+                    diseaseName: disease.name,
+                    limit: 50
+                )
+                await MainActor.run {
+                    diseaseDrugs = drugs
+                    isLoadingDrugs = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoadingDrugs = false
                 }
             }
         }

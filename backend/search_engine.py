@@ -15,6 +15,7 @@ from index_builder import load_index
 from fingerprints import compute_morgan_fingerprint, FINGERPRINT_SIZE, RADIUS
 from data_loader import get_molecule_by_id, load_from_database
 import sqlite3
+import json
 
 # Configuration
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -522,6 +523,284 @@ class SearchEngine:
         
         # Return top results
         return all_similar[:top_k * len(disease_molecules)]
+    
+    def get_disease_drugs(self, disease_name: str, limit: Optional[int] = None) -> List[Dict]:
+        """
+        Get drugs (not just molecules) associated with a disease.
+        
+        Args:
+            disease_name: Name of the disease (case-insensitive partial match)
+            limit: Optional limit on number of drugs to return
+            
+        Returns:
+            List of drug dictionaries
+        """
+        if not DB_PATH.exists():
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Check if drugs table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='drugs'")
+            if not cursor.fetchone():
+                return []  # Drugs table doesn't exist yet
+            
+            # Find disease by name
+            cursor.execute(
+                "SELECT id FROM diseases WHERE LOWER(name) LIKE LOWER(?)",
+                (f'%{disease_name}%',)
+            )
+            disease_rows = cursor.fetchall()
+            
+            if not disease_rows:
+                return []
+            
+            # Get drugs for this disease via drug_diseases table
+            drug_ids = []
+            for disease_row in disease_rows:
+                disease_id = disease_row[0]
+                cursor.execute(
+                    "SELECT DISTINCT drug_id FROM drug_diseases WHERE disease_id = ? AND drug_id IS NOT NULL",
+                    (disease_id,)
+                )
+                ids = cursor.fetchall()
+                drug_ids.extend([id[0] for id in ids])
+            
+            # Remove duplicates
+            drug_ids = list(set(drug_ids))
+            
+            if not drug_ids:
+                return []
+            
+            # Apply limit if specified
+            if limit:
+                drug_ids = drug_ids[:limit]
+            
+            # Get drug information
+            placeholders = ','.join(['?'] * len(drug_ids))
+            cursor.execute(
+                f"SELECT * FROM drugs WHERE id IN ({placeholders})",
+                drug_ids
+            )
+            rows = cursor.fetchall()
+            
+            # Get column names
+            columns = [description[0] for description in cursor.description]
+            
+            drugs = []
+            for row in rows:
+                drug_dict = dict(zip(columns, row))
+                # Parse JSON fields
+                if drug_dict.get('brand_names'):
+                    try:
+                        drug_dict['brand_names'] = json.loads(drug_dict['brand_names'])
+                    except:
+                        drug_dict['brand_names'] = []
+                if drug_dict.get('active_ingredients'):
+                    try:
+                        active_ingredients = json.loads(drug_dict['active_ingredients'])
+                        # Convert to list of molecule indices
+                        if isinstance(active_ingredients, list):
+                            indices = []
+                            for item in active_ingredients:
+                                if isinstance(item, dict):
+                                    indices.append(item.get('molecule_index', item.get('index')))
+                                else:
+                                    indices.append(item)
+                            drug_dict['active_ingredient_molecule_indices'] = indices
+                        else:
+                            drug_dict['active_ingredient_molecule_indices'] = []
+                    except:
+                        drug_dict['active_ingredient_molecule_indices'] = []
+                else:
+                    drug_dict['active_ingredient_molecule_indices'] = []
+                if drug_dict.get('inactive_ingredients'):
+                    try:
+                        drug_dict['inactive_ingredients'] = json.loads(drug_dict['inactive_ingredients'])
+                    except:
+                        drug_dict['inactive_ingredients'] = []
+                else:
+                    drug_dict['inactive_ingredients'] = []
+                drugs.append(drug_dict)
+            
+            return drugs
+        
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+    
+    def get_drug_by_id(self, drug_id: int) -> Optional[Dict]:
+        """
+        Get drug information by ID.
+        
+        Args:
+            drug_id: Drug ID
+            
+        Returns:
+            Dictionary with drug information or None if not found
+        """
+        if not DB_PATH.exists():
+            return None
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT * FROM drugs WHERE id = ?", (drug_id,))
+            row = cursor.fetchone()
+            
+            if row is None:
+                return None
+            
+            columns = [description[0] for description in cursor.description]
+            drug_dict = dict(zip(columns, row))
+            
+            # Parse JSON fields
+            if drug_dict.get('brand_names'):
+                try:
+                    drug_dict['brand_names'] = json.loads(drug_dict['brand_names'])
+                except:
+                    drug_dict['brand_names'] = []
+            if drug_dict.get('active_ingredients'):
+                try:
+                    active_ingredients = json.loads(drug_dict['active_ingredients'])
+                    # Convert to list of molecule indices
+                    if isinstance(active_ingredients, list):
+                        indices = []
+                        for item in active_ingredients:
+                            if isinstance(item, dict):
+                                indices.append(item.get('molecule_index', item.get('index')))
+                            else:
+                                indices.append(item)
+                        drug_dict['active_ingredient_molecule_indices'] = indices
+                    else:
+                        drug_dict['active_ingredient_molecule_indices'] = []
+                except:
+                    drug_dict['active_ingredient_molecule_indices'] = []
+            else:
+                drug_dict['active_ingredient_molecule_indices'] = []
+            if drug_dict.get('inactive_ingredients'):
+                try:
+                    drug_dict['inactive_ingredients'] = json.loads(drug_dict['inactive_ingredients'])
+                except:
+                    drug_dict['inactive_ingredients'] = []
+            else:
+                drug_dict['inactive_ingredients'] = []
+            
+            return drug_dict
+        
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            conn.close()
+    
+    def get_drug_molecules(self, drug_id: int) -> List[Dict]:
+        """
+        Get active ingredient molecules for a drug.
+        
+        Args:
+            drug_id: Drug ID
+            
+        Returns:
+            List of molecule dictionaries
+        """
+        drug = self.get_drug_by_id(drug_id)
+        if not drug:
+            return []
+        
+        # Get active ingredient molecule indices
+        active_indices = drug.get('active_ingredient_molecule_indices', [])
+        if not active_indices:
+            # Try old field name for backward compatibility
+            active_indices = drug.get('active_ingredients', [])
+            if isinstance(active_indices, str):
+                try:
+                    active_indices = json.loads(active_indices)
+                except:
+                    return []
+        
+        if not active_indices:
+            return []
+        
+        # Get molecule information for each index
+        molecules = []
+        for idx in active_indices:
+            if isinstance(idx, dict):
+                idx = idx.get('molecule_index', idx.get('index'))
+            if idx is not None and 0 <= idx < len(self.molecule_df) if self.molecule_df is not None else False:
+                molecule_info = self._get_molecule_info(int(idx))
+                molecules.append(molecule_info)
+        
+        return molecules
+    
+    def get_all_drugs(self) -> List[Dict]:
+        """
+        Get all drugs in the database.
+        
+        Returns:
+            List of drug dictionaries
+        """
+        if not DB_PATH.exists():
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='drugs'")
+            if not cursor.fetchone():
+                return []
+            
+            cursor.execute("SELECT * FROM drugs ORDER BY name")
+            rows = cursor.fetchall()
+            
+            columns = [description[0] for description in cursor.description]
+            
+            drugs = []
+            for row in rows:
+                drug_dict = dict(zip(columns, row))
+                # Parse JSON fields
+                if drug_dict.get('brand_names'):
+                    try:
+                        drug_dict['brand_names'] = json.loads(drug_dict['brand_names'])
+                    except:
+                        drug_dict['brand_names'] = []
+                if drug_dict.get('active_ingredients'):
+                    try:
+                        active_ingredients = json.loads(drug_dict['active_ingredients'])
+                        # Convert to list of molecule indices
+                        if isinstance(active_ingredients, list):
+                            indices = []
+                            for item in active_ingredients:
+                                if isinstance(item, dict):
+                                    indices.append(item.get('molecule_index', item.get('index')))
+                                else:
+                                    indices.append(item)
+                            drug_dict['active_ingredient_molecule_indices'] = indices
+                        else:
+                            drug_dict['active_ingredient_molecule_indices'] = []
+                    except:
+                        drug_dict['active_ingredient_molecule_indices'] = []
+                else:
+                    drug_dict['active_ingredient_molecule_indices'] = []
+                if drug_dict.get('inactive_ingredients'):
+                    try:
+                        drug_dict['inactive_ingredients'] = json.loads(drug_dict['inactive_ingredients'])
+                    except:
+                        drug_dict['inactive_ingredients'] = []
+                else:
+                    drug_dict['inactive_ingredients'] = []
+                drugs.append(drug_dict)
+            
+            return drugs
+        
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
 
 
 # Global search engine instance (lazy loading)

@@ -265,7 +265,7 @@ struct BrowseView: View {
     }
     
     private func previousPage() {
-        guard let pagination = pagination, currentPage > 1 else { return }
+        guard pagination != nil, currentPage > 1 else { return }
         currentPage -= 1
         loadMolecules()
     }

@@ -588,6 +588,158 @@ def search_by_disease():
         }), 500
 
 
+@app.route('/drugs', methods=['GET'])
+def list_drugs():
+    """
+    List all drugs in the database.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "drugs": [...]
+    }
+    """
+    try:
+        engine = get_engine()
+        drugs = engine.get_all_drugs()
+        
+        return jsonify({
+            'success': True,
+            'drugs': drugs
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /drugs endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/drugs/<int:drug_id>', methods=['GET'])
+def get_drug(drug_id: int):
+    """
+    Get drug information by ID.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "drug": {...}
+    }
+    """
+    try:
+        engine = get_engine()
+        drug = engine.get_drug_by_id(drug_id)
+        
+        if drug is None:
+            return jsonify({
+                'success': False,
+                'error': f'Drug with ID {drug_id} not found'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'drug': drug
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /drugs/<drug_id> endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/drugs/<int:drug_id>/molecules', methods=['GET'])
+def get_drug_molecules(drug_id: int):
+    """
+    Get active ingredient molecules for a drug.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "drug": {...},
+        "molecules": [...]
+    }
+    """
+    try:
+        engine = get_engine()
+        drug = engine.get_drug_by_id(drug_id)
+        
+        if drug is None:
+            return jsonify({
+                'success': False,
+                'error': f'Drug with ID {drug_id} not found'
+            }), 404
+        
+        molecules = engine.get_drug_molecules(drug_id)
+        
+        return jsonify({
+            'success': True,
+            'drug': drug,
+            'molecules': molecules
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /drugs/<drug_id>/molecules endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/diseases/<disease_name>/drugs', methods=['GET'])
+def get_disease_drugs(disease_name: str):
+    """
+    Get drugs (not just molecules) for a disease.
+    
+    Query parameters:
+    - limit (int): Maximum number of drugs to return (default: no limit)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "disease": "Alzheimer's disease",
+        "drugs": [...],
+        "molecules": [...],  // Also include molecules for backward compatibility
+        "count": 10
+    }
+    """
+    try:
+        limit = request.args.get('limit', None, type=int)
+        
+        engine = get_engine()
+        drugs = engine.get_disease_drugs(disease_name, limit=limit)
+        molecules = engine.get_disease_molecules(disease_name, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'disease': disease_name,
+            'drugs': drugs,
+            'molecules': molecules,  # Include for backward compatibility
+            'count': len(drugs)
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /diseases/<disease_name>/drugs endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
 def handle_stdin_request():
     """
     Handle a single JSON request from stdin.
@@ -683,7 +835,11 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print(f"   POST /search/by-disease - Search similar molecules to disease-related drugs")
     print(f"   GET  /diseases - List all diseases")
     print(f"   GET  /diseases/<name>/molecules - Get molecules for a disease")
+    print(f"   GET  /diseases/<name>/drugs - Get drugs for a disease")
     print(f"   GET  /diseases/<name>/top-molecules - Get top molecules for a disease")
+    print(f"   GET  /drugs - List all drugs")
+    print(f"   GET  /drugs/<drug_id> - Get drug by ID")
+    print(f"   GET  /drugs/<drug_id>/molecules - Get active ingredient molecules for a drug")
     print(f"   GET  /molecule/<index> - Get molecule by index")
     app.run(host=host, port=port, debug=debug)
 

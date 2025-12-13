@@ -192,3 +192,61 @@ struct DiseaseSearchResponse: Codable {
     let error: String?
 }
 
+struct Drug: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let genericName: String?
+    let brandNames: [String]?
+    let pubchemCid: String?
+    let drugbankId: String?
+    let description: String?
+    let indication: String?
+    let activeIngredientMoleculeIndices: [Int]?
+    let inactiveIngredients: [String]?
+    let dosageForm: String?
+    let route: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case genericName = "generic_name"
+        case brandNames = "brand_names"
+        case pubchemCid = "pubchem_cid"
+        case drugbankId = "drugbank_id"
+        case description
+        case indication
+        case activeIngredientMoleculeIndices = "active_ingredient_molecule_indices"
+        case inactiveIngredients = "inactive_ingredients"
+        case dosageForm = "dosage_form"
+        case route
+    }
+}
+
+struct DrugsResponse: Codable {
+    let success: Bool
+    let drugs: [Drug]?
+    let error: String?
+}
+
+struct DrugResponse: Codable {
+    let success: Bool
+    let drug: Drug?
+    let error: String?
+}
+
+struct DiseaseDrugsResponse: Codable {
+    let success: Bool
+    let disease: String
+    let drugs: [Drug]?
+    let molecules: [MoleculeBasic]?
+    let count: Int?
+    let error: String?
+}
+
+struct DrugMoleculesResponse: Codable {
+    let success: Bool
+    let drug: Drug?
+    let molecules: [MoleculeBasic]?
+    let error: String?
+}
+

@@ -506,9 +506,110 @@ def load_top_100_diseases_drugs(
     return all_relationships
 
 
+def save_drugs_to_db(
+    drugs: List[Dict],
+    conn: Optional[sqlite3.Connection] = None
+) -> Dict[str, int]:
+    """
+    Save drugs to the drugs table.
+    
+    Args:
+        drugs: List of drug information dictionaries
+        conn: Optional database connection (creates new if None)
+        
+    Returns:
+        Dictionary with statistics: {'drugs_added': int}
+    """
+    if not DB_PATH.exists():
+        return {'drugs_added': 0}
+    
+    should_close = False
+    if conn is None:
+        conn = sqlite3.connect(DB_PATH)
+        should_close = True
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Initialize drugs table schema
+        from drug_schema import create_drugs_table
+        create_drugs_table(conn)
+        
+        drugs_added = 0
+        
+        for drug in drugs:
+            # Check if drug already exists (by pubchem_cid or name)
+            existing_id = None
+            if drug.get('pubchem_cid'):
+                cursor.execute("SELECT id FROM drugs WHERE pubchem_cid = ?", (drug['pubchem_cid'],))
+                result = cursor.fetchone()
+                if result:
+                    existing_id = result[0]
+            
+            if existing_id is None and drug.get('name'):
+                cursor.execute("SELECT id FROM drugs WHERE name = ? AND generic_name = ?", 
+                             (drug['name'], drug.get('generic_name')))
+                result = cursor.fetchone()
+                if result:
+                    existing_id = result[0]
+            
+            if existing_id:
+                # Update existing drug
+                cursor.execute("""
+                    UPDATE drugs SET
+                        brand_names = ?,
+                        description = ?,
+                        indication = ?,
+                        active_ingredients = ?,
+                        inactive_ingredients = ?,
+                        dosage_form = ?,
+                        route = ?
+                    WHERE id = ?
+                """, (
+                    json.dumps(drug.get('brand_names', [])),
+                    drug.get('description'),
+                    drug.get('indication'),
+                    json.dumps(drug.get('active_ingredient_molecule_indices', [])),
+                    json.dumps(drug.get('inactive_ingredients', [])),
+                    drug.get('dosage_form'),
+                    drug.get('route'),
+                    existing_id
+                ))
+            else:
+                # Insert new drug
+                cursor.execute("""
+                    INSERT INTO drugs (
+                        name, generic_name, brand_names, pubchem_cid, drugbank_id,
+                        description, indication, active_ingredients, inactive_ingredients,
+                        dosage_form, route
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    drug.get('name'),
+                    drug.get('generic_name'),
+                    json.dumps(drug.get('brand_names', [])),
+                    drug.get('pubchem_cid'),
+                    drug.get('drugbank_id'),
+                    drug.get('description'),
+                    drug.get('indication'),
+                    json.dumps(drug.get('active_ingredient_molecule_indices', [])),
+                    json.dumps(drug.get('inactive_ingredients', [])),
+                    drug.get('dosage_form'),
+                    drug.get('route')
+                ))
+                drugs_added += 1
+        
+        conn.commit()
+        return {'drugs_added': drugs_added}
+    
+    finally:
+        if should_close:
+            conn.close()
+
+
 def save_disease_data_to_db(
     relationships: List[Dict],
-    molecule_df: pd.DataFrame
+    molecule_df: pd.DataFrame,
+    drugs: Optional[List[Dict]] = None
 ) -> Dict[str, int]:
     """
     Save disease-drug relationships to database.
@@ -522,10 +623,33 @@ def save_disease_data_to_db(
     """
     if not DB_PATH.exists():
         print("⚠️  Molecules database not found. Please run data setup first.")
-        return {'diseases_added': 0, 'relationships_added': 0, 'matched_drugs': 0}
+        return {'diseases_added': 0, 'relationships_added': 0, 'matched_drugs': 0, 'drugs_added': 0}
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # Initialize drug schema
+    from drug_schema import create_drugs_table, update_drug_diseases_table
+    create_drugs_table(conn)
+    update_drug_diseases_table(conn)
+    
+    # Save drugs if provided
+    drugs_added = 0
+    drug_id_map = {}  # Map drug names/CIDs to drug IDs
+    
+    if drugs:
+        drugs_stats = save_drugs_to_db(drugs, conn)
+        drugs_added = drugs_stats['drugs_added']
+        
+        # Build map of drug names/CIDs to drug IDs
+        for drug in drugs:
+            cursor.execute("SELECT id FROM drugs WHERE pubchem_cid = ? OR name = ?", 
+                         (drug.get('pubchem_cid'), drug.get('name')))
+            result = cursor.fetchone()
+            if result:
+                key = drug.get('pubchem_cid') or drug.get('name')
+                if key:
+                    drug_id_map[key] = result[0]
     
     # Create diseases table if it doesn't exist
     cursor.execute("""
@@ -598,6 +722,12 @@ def save_disease_data_to_db(
             molecule_df
         )
         
+        # Try to find associated drug_id
+        drug_id = None
+        drug_key = rel.get('pubchem_cid') or rel.get('drug_name')
+        if drug_key and drug_key in drug_id_map:
+            drug_id = drug_id_map[drug_key]
+        
         if molecule_index is not None:
             # Check if relationship already exists
             cursor.execute(
@@ -605,12 +735,31 @@ def save_disease_data_to_db(
                 (molecule_index, disease_id)
             )
             if cursor.fetchone() is None:
-                cursor.execute(
-                    "INSERT INTO drug_diseases (molecule_index, disease_id, indication_type) VALUES (?, ?, ?)",
-                    (molecule_index, disease_id, rel.get('indication_type', 'approved'))
-                )
+                # Insert with drug_id if available
+                if drug_id:
+                    cursor.execute(
+                        "INSERT INTO drug_diseases (molecule_index, disease_id, drug_id, indication_type) VALUES (?, ?, ?, ?)",
+                        (molecule_index, disease_id, drug_id, rel.get('indication_type', 'approved'))
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO drug_diseases (molecule_index, disease_id, indication_type) VALUES (?, ?, ?)",
+                        (molecule_index, disease_id, rel.get('indication_type', 'approved'))
+                    )
                 relationships_added += 1
                 matched_drugs += 1
+        elif drug_id:
+            # If we have a drug_id but no molecule match, still create relationship
+            cursor.execute(
+                "SELECT id FROM drug_diseases WHERE drug_id = ? AND disease_id = ?",
+                (drug_id, disease_id)
+            )
+            if cursor.fetchone() is None:
+                cursor.execute(
+                    "INSERT INTO drug_diseases (drug_id, disease_id, indication_type) VALUES (?, ?, ?)",
+                    (drug_id, disease_id, rel.get('indication_type', 'approved'))
+                )
+                relationships_added += 1
         else:
             # Drug not matched - could log for future reference
             pass
@@ -621,10 +770,11 @@ def save_disease_data_to_db(
     stats = {
         'diseases_added': diseases_added,
         'relationships_added': relationships_added,
-        'matched_drugs': matched_drugs
+        'matched_drugs': matched_drugs,
+        'drugs_added': drugs_added
     }
     
-    print(f"✅ Saved to database: {diseases_added} diseases, {relationships_added} relationships, {matched_drugs} matched drugs")
+    print(f"✅ Saved to database: {diseases_added} diseases, {relationships_added} relationships, {matched_drugs} matched drugs, {drugs_added} drugs")
     return stats
 
 

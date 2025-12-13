@@ -545,6 +545,148 @@ class BackendService: ObservableObject {
         return results
     }
     
+    func getAllDrugs() async throws -> [Drug] {
+        guard let url = URL(string: "\(baseURL)/drugs") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DrugsResponse.self, from: data)
+        
+        guard response.success, let drugs = response.drugs else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return drugs
+    }
+    
+    func getDrug(id: Int) async throws -> Drug {
+        guard let url = URL(string: "\(baseURL)/drugs/\(id)") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DrugResponse.self, from: data)
+        
+        guard response.success, let drug = response.drug else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return drug
+    }
+    
+    func getDrugMolecules(drugId: Int) async throws -> (drug: Drug, molecules: [MoleculeBasic]) {
+        guard let url = URL(string: "\(baseURL)/drugs/\(drugId)/molecules") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DrugMoleculesResponse.self, from: data)
+        
+        guard response.success, let drug = response.drug, let molecules = response.molecules else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return (drug, molecules)
+    }
+    
+    func getDiseaseDrugs(diseaseName: String, limit: Int? = nil) async throws -> (drugs: [Drug], molecules: [MoleculeBasic]) {
+        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(diseaseName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? diseaseName)/drugs")
+        
+        if let limit = limit {
+            urlComponents?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
+        }
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DiseaseDrugsResponse.self, from: data)
+        
+        guard response.success else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return (response.drugs ?? [], response.molecules ?? [])
+    }
+    
     private func getProjectRoot() -> URL? {
         // Try to find the project root by looking for backend/api.py
         let fileManager = FileManager.default

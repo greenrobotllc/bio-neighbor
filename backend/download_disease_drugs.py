@@ -5,6 +5,7 @@ Downloads drugs for Alzheimer's disease and top 100 diseases.
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from drugbank_loader import (
@@ -12,7 +13,10 @@ from drugbank_loader import (
     save_disease_data_to_db,
     load_top_100_diseases_drugs
 )
-from data_loader import load_from_database
+from data_loader import load_from_database, DB_PATH
+from pubchem_drug_loader import load_drugs_for_disease
+from top_100_diseases import get_disease_by_name, get_alzheimers_drugs
+from drug_schema import initialize_drug_schema
 
 
 def main():
@@ -108,6 +112,11 @@ Notes:
     
     print(f"✅ Loaded {len(molecule_df)} molecules from database\n")
     
+    # Initialize drug schema
+    print("🔧 Initializing drug database schema...")
+    initialize_drug_schema()
+    print("✅ Drug schema initialized\n")
+    
     # Clear existing data if force flag is set
     if args.force:
         print("🗑️  Clearing existing disease data...")
@@ -121,6 +130,7 @@ Notes:
         print("✅ Cleared existing data\n")
     
     all_relationships = []
+    all_drugs = []
     
     # Download Alzheimer's drugs
     if args.alzheimers_only:
@@ -128,17 +138,40 @@ Notes:
         print("📥 Downloading Alzheimer's Disease Drugs")
         print("=" * 60)
         
+        # Load complete drug information
+        alzheimers_drug_names = get_alzheimers_drugs()
+        print(f"📥 Loading complete drug information for {len(alzheimers_drug_names)} drugs...")
+        
+        drugs = load_drugs_for_disease(
+            disease_name="Alzheimer's disease",
+            known_drug_names=alzheimers_drug_names,
+            molecule_df=molecule_df
+        )
+        
+        if drugs:
+            print(f"✅ Loaded {len(drugs)} complete drug records\n")
+            all_drugs.extend(drugs)
+            
+            # Also create relationships from drugs
+            for drug in drugs:
+                all_relationships.append({
+                    'drug_name': drug.get('name'),
+                    'smiles': drug.get('smiles'),
+                    'disease': "Alzheimer's disease",
+                    'indication_type': 'approved',
+                    'pubchem_cid': drug.get('pubchem_cid')
+                })
+        
+        # Also load relationships (for backward compatibility)
         relationships = load_drugbank_data(
             target_disease="Alzheimer's disease",
-            use_sample=False,  # Use PubChem instead
+            use_sample=False,
             use_pubchem=True
         )
         
         if relationships:
-            print(f"✅ Loaded {len(relationships)} Alzheimer's disease drugs\n")
+            print(f"✅ Loaded {len(relationships)} additional relationships\n")
             all_relationships.extend(relationships)
-        else:
-            print("⚠️  No Alzheimer's drugs found\n")
     
     # Download top 100 diseases
     if args.top_100:
@@ -148,6 +181,41 @@ Notes:
         print("   This will take a while due to PubChem rate limiting...")
         print("   Progress will be shown for each disease.\n")
         
+        try:
+            from top_100_diseases import get_top_100_diseases
+            diseases = get_top_100_diseases()[:args.max_diseases]
+            
+            for i, (disease_name, mesh_id, known_drugs) in enumerate(diseases, 1):
+                if i == 1 and args.alzheimers_only:
+                    # Skip Alzheimer's if already processed
+                    continue
+                
+                print(f"\n[{i}/{len(diseases)}] Processing: {disease_name}")
+                
+                # Load complete drug information
+                drugs = load_drugs_for_disease(
+                    disease_name=disease_name,
+                    known_drug_names=known_drugs[:args.max_drugs_per_disease],
+                    molecule_df=molecule_df
+                )
+                
+                if drugs:
+                    all_drugs.extend(drugs)
+                    for drug in drugs:
+                        all_relationships.append({
+                            'drug_name': drug.get('name'),
+                            'smiles': drug.get('smiles'),
+                            'disease': disease_name,
+                            'indication_type': 'approved',
+                            'pubchem_cid': drug.get('pubchem_cid')
+                        })
+                
+                time.sleep(1)  # Rate limiting
+        
+        except Exception as e:
+            print(f"⚠️  Error loading top diseases: {e}")
+        
+        # Also load relationships (for molecules)
         relationships = load_top_100_diseases_drugs(
             max_diseases=args.max_diseases,
             max_drugs_per_disease=args.max_drugs_per_disease,
@@ -155,10 +223,8 @@ Notes:
         )
         
         if relationships:
-            print(f"\n✅ Loaded {len(relationships)} total drug-disease relationships")
+            print(f"\n✅ Loaded {len(relationships)} additional relationships")
             all_relationships.extend(relationships)
-        else:
-            print("\n⚠️  No drugs found for top diseases")
     
     if not all_relationships:
         print("\n❌ No drug-disease relationships found.")
@@ -182,7 +248,7 @@ Notes:
     
     # Save to database
     print("💾 Saving to database...")
-    stats = save_disease_data_to_db(unique_relationships, molecule_df)
+    stats = save_disease_data_to_db(unique_relationships, molecule_df, drugs=all_drugs if all_drugs else None)
     
     print("\n" + "=" * 60)
     print("✅ Disease-Drug Download Complete")
@@ -190,6 +256,8 @@ Notes:
     print(f"Diseases added: {stats['diseases_added']}")
     print(f"Relationships added: {stats['relationships_added']}")
     print(f"Matched drugs: {stats['matched_drugs']}")
+    if 'drugs_added' in stats:
+        print(f"Drugs added: {stats['drugs_added']}")
     print("=" * 60)
     
     if stats['matched_drugs'] == 0:

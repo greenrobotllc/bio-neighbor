@@ -25,7 +25,7 @@ struct ContentTabView: View {
         TabView(selection: $selectedTab) {
             BrowseView()
                 .tabItem {
-                    Label("Browse", systemImage: "square.grid.2x2")
+                    Label("Molecules", systemImage: "square.grid.2x2")
                 }
                 .tag(0)
             
@@ -35,11 +35,23 @@ struct ContentTabView: View {
                 }
                 .tag(1)
             
+            DrugsView()
+                .tabItem {
+                    Label("Drugs", systemImage: "pills")
+                }
+                .tag(2)
+            
+            DrugDataDownloadView()
+                .tabItem {
+                    Label("Download Data", systemImage: "arrow.down.circle")
+                }
+                .tag(3)
+            
             SearchView()
                 .tabItem {
                     Label("Advanced Search", systemImage: "magnifyingglass")
                 }
-                .tag(2)
+                .tag(4)
         }
     }
 }
