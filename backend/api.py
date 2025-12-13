@@ -5,6 +5,7 @@ Provides JSON-based API via HTTP (Flask) or stdin/stdout.
 
 import json
 import sys
+import os
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS

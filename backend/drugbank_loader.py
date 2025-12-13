@@ -606,7 +606,7 @@ def save_drugs_to_db(
                     json.dumps(drug.get('brand_names', [])),
                     drug.get('description'),
                     drug.get('indication'),
-                    json.dumps(drug.get('active_ingredient_molecule_indices', [])),
+                    json.dumps(drug.get('active_ingredients', [])),
                     json.dumps(drug.get('inactive_ingredients', [])),
                     drug.get('dosage_form'),
                     drug.get('route'),
@@ -628,7 +628,7 @@ def save_drugs_to_db(
                     drug.get('drugbank_id'),
                     drug.get('description'),
                     drug.get('indication'),
-                    json.dumps(drug.get('active_ingredient_molecule_indices', [])),
+                    json.dumps(drug.get('active_ingredients', [])),
                     json.dumps(drug.get('inactive_ingredients', [])),
                     drug.get('dosage_form'),
                     drug.get('route')

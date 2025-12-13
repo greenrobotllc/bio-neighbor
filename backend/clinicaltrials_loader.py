@@ -24,26 +24,42 @@ def search_drugs_by_condition(condition: str, max_results: int = 50) -> List[Dic
     print(f"🔍 Searching ClinicalTrials.gov for interventions treating '{condition}'...")
     
     drugs = []
+    seen_interventions = set()
     base_url = "https://clinicaltrials.gov/api/v2/studies"
+    page_token = None
     
     try:
-        # ClinicalTrials.gov API v2 query format
-        # Search for studies with this condition
-        params = {
-            'query.cond': condition,  # Condition search
-            'filter.overallStatus': 'RECRUITING|ACTIVE_NOT_RECRUITING|COMPLETED',  # Active or completed studies
-            'pageSize': min(max_results, 100),  # Max 100 per page
-            'pageToken': '',  # For pagination
-        }
-        
-        response = requests.get(base_url, params=params, timeout=30)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if 'studies' in data:
-            seen_interventions = set()
+        # Pagination loop: continue until we have enough results or no more pages
+        while len(drugs) < max_results:
+            # ClinicalTrials.gov API v2 query format
+            # Search for studies with this condition
+            remaining_needed = max_results - len(drugs)
+            params = {
+                'query.cond': condition,  # Condition search
+                'filter.overallStatus': 'RECRUITING|ACTIVE_NOT_RECRUITING|COMPLETED',  # Active or completed studies
+                'pageSize': min(remaining_needed, 100),  # Max 100 per page, request only what we need
+            }
             
+            # Add page token for pagination (if we have one)
+            if page_token:
+                params['pageToken'] = page_token
+            
+            try:
+                response = requests.get(base_url, params=params, timeout=30)
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"  ⚠️  API request failed: {e}")
+                # If this is the first page, fail completely; otherwise return what we have
+                if page_token is None:
+                    return []
+                break  # Return partial results
+            
+            data = response.json()
+            
+            if 'studies' not in data:
+                break  # No more studies
+            
+            # Extract drugs from this page
             for study in data['studies']:
                 try:
                     # Extract interventions (drugs) from the study
@@ -95,9 +111,18 @@ def search_drugs_by_condition(condition: str, max_results: int = 50) -> List[Dic
                     # Catch expected data-shape errors (missing keys, wrong types, invalid values)
                     print(f"  ⚠️  Error parsing study: {e}")
                     continue
-        
-        # Rate limiting - be respectful
-        time.sleep(1)
+            
+            # Check for next page token
+            page_token = data.get('nextPageToken')
+            if not page_token:
+                break  # No more pages
+            
+            # Rate limiting between pages - be respectful
+            time.sleep(1)
+            
+            # If we have enough results, stop paginating
+            if len(drugs) >= max_results:
+                break
     
     except requests.exceptions.RequestException as e:
         print(f"  ⚠️  Error querying ClinicalTrials.gov: {e}")

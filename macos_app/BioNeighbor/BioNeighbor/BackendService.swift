@@ -39,6 +39,7 @@ class BackendService: ObservableObject {
     private var backendProcess: Process?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private let processQueue = DispatchQueue(label: "com.bioneighbor.backend.process", qos: .userInitiated)
     
     @Published var isBackendRunning = false
     
@@ -68,121 +69,240 @@ class BackendService: ObservableObject {
     }
     
     func startBackend() throws {
-        // Make idempotent: if backend is already running, return early
-        if backendProcess != nil && isBackendRunning {
-            return
-        }
-        
-        // If process exists but isn't marked as running, clean it up first
-        if backendProcess != nil {
-            stopBackend()
-        }
-        
-        // Get the path to the Python backend
-        guard let projectRoot = getProjectRoot() else {
-            throw BackendError.backendNotAvailable
-        }
-        
-        let venvPython = projectRoot.appendingPathComponent("venv/bin/python")
-        let apiScript = projectRoot.appendingPathComponent("backend/api.py")
-        
-        // Check if files exist
-        guard FileManager.default.fileExists(atPath: venvPython.path) else {
-            throw BackendError.backendNotAvailable
-        }
-        
-        guard FileManager.default.fileExists(atPath: apiScript.path) else {
-            throw BackendError.backendNotAvailable
-        }
-        
-        // Start backend process
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: venvPython.path)
-        process.arguments = [apiScript.path, "--mode", "http", "--host", "127.0.0.1", "--port", "5000"]
-        
-        // Set up environment
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        process.environment = environment
-        
-        // Redirect output and drain pipes to prevent deadlock
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        
-        // Retain pipes for the lifetime of the process
-        self.outputPipe = outputPipe
-        self.errorPipe = errorPipe
-        
-        // Set termination handler to keep UI state correct
-        process.terminationHandler = { [weak self] process in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                // Clear process and pipes when it exits
-                if self.backendProcess === process {
-                    self.backendProcess = nil
-                    self.isBackendRunning = false
-                    self.outputPipe?.fileHandleForReading.readabilityHandler = nil
-                    self.errorPipe?.fileHandleForReading.readabilityHandler = nil
-                    self.outputPipe = nil
-                    self.errorPipe = nil
+        // Serialize start/stop operations to prevent races
+        try processQueue.sync {
+            // Check if backend is already running (check process state and health endpoint)
+            if let existingProcess = backendProcess, existingProcess.isRunning {
+                // Verify health endpoint is responding
+                let semaphore = DispatchSemaphore(value: 0)
+                var isHealthy = false
+                
+                guard let url = URL(string: "\(baseURL)/health") else {
+                    throw BackendError.backendNotAvailable
+                }
+                
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 1.0
+                
+                URLSession.shared.dataTask(with: request) { _, response, _ in
+                    if let httpResponse = response as? HTTPURLResponse,
+                       httpResponse.statusCode == 200 {
+                        isHealthy = true
+                    }
+                    semaphore.signal()
+                }.resume()
+                
+                // Wait up to 1 second for health check
+                if semaphore.wait(timeout: .now() + 1.0) == .timedOut {
+                    // Health check timed out, assume not running
+                } else if isHealthy {
+                    // Backend is running and healthy, return early
+                    DispatchQueue.main.async {
+                        self.isBackendRunning = true
+                    }
+                    return
                 }
             }
+            
+            // If process exists but isn't running, clean it up first
+            if let existingProcess = backendProcess {
+                _stopBackendSync()
+            }
+            
+            // Get the path to the Python backend
+            guard let projectRoot = getProjectRoot() else {
+                throw BackendError.backendNotAvailable
+            }
+            
+            let venvPython = projectRoot.appendingPathComponent("venv/bin/python")
+            let apiScript = projectRoot.appendingPathComponent("backend/api.py")
+            
+            // Check if files exist
+            guard FileManager.default.fileExists(atPath: venvPython.path) else {
+                throw BackendError.backendNotAvailable
+            }
+            
+            guard FileManager.default.fileExists(atPath: apiScript.path) else {
+                throw BackendError.backendNotAvailable
+            }
+            
+            // Start backend process
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: venvPython.path)
+            process.arguments = [apiScript.path, "--mode", "http", "--host", "127.0.0.1", "--port", "5000"]
+            process.currentDirectoryURL = projectRoot
+            
+            // Set up environment
+            var environment = ProcessInfo.processInfo.environment
+            environment["PYTHONUNBUFFERED"] = "1"
+            process.environment = environment
+            
+            // Redirect output and drain pipes to prevent deadlock
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            // Retain pipes for the lifetime of the process
+            self.outputPipe = outputPipe
+            self.errorPipe = errorPipe
+            
+            // Set termination handler to keep UI state correct
+            process.terminationHandler = { [weak self] process in
+                self?.processQueue.async {
+                    guard let self = self else { return }
+                    // Clear process and pipes when it exits
+                    if self.backendProcess === process {
+                        self._stopBackendSync()
+                    }
+                }
+            }
+            
+            // Drain stdout to prevent deadlock
+            let outputHandle = outputPipe.fileHandleForReading
+            outputHandle.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                // Optionally log or discard the data
+                // For now, we'll just drain it to prevent blocking
+                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                    // Uncomment to log backend output:
+                    // print("Backend stdout: \(output)")
+                }
+            }
+            
+            // Drain stderr to prevent deadlock
+            let errorHandle = errorPipe.fileHandleForReading
+            errorHandle.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                // Optionally log or discard the data
+                // For now, we'll just drain it to prevent blocking
+                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                    // Uncomment to log backend errors:
+                    // print("Backend stderr: \(output)")
+                }
+            }
+            
+            try process.run()
+            backendProcess = process
+            
+            // Wait for server to start with exponential backoff
+            var healthCheckSucceeded = false
+            for attempt in 0..<5 {
+                let delay = pow(2.0, Double(attempt)) * 0.5  // 0.5s, 1s, 2s, 4s, 8s
+                Thread.sleep(forTimeInterval: delay)
+                
+                let semaphore = DispatchSemaphore(value: 0)
+                var isHealthy = false
+                
+                guard let url = URL(string: "\(baseURL)/health") else {
+                    break
+                }
+                
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 1.0
+                
+                URLSession.shared.dataTask(with: request) { _, response, _ in
+                    if let httpResponse = response as? HTTPURLResponse,
+                       httpResponse.statusCode == 200 {
+                        isHealthy = true
+                    }
+                    semaphore.signal()
+                }.resume()
+                
+                if semaphore.wait(timeout: .now() + 2.0) == .success && isHealthy {
+                    healthCheckSucceeded = true
+                    break
+                }
+            }
+            
+            if !healthCheckSucceeded {
+                // Health check failed, terminate and cleanup
+                process.terminate()
+                _stopBackendSync()
+                throw BackendError.backendNotAvailable
+            }
+            
+            // Only set isBackendRunning after health check succeeds
+            DispatchQueue.main.async {
+                self.isBackendRunning = true
+            }
         }
+    }
+    
+    // Internal synchronous stop method (must be called on processQueue)
+    private func _stopBackendSync() {
+        // Remove readability handlers
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
         
-        // Drain stdout to prevent deadlock
-        let outputHandle = outputPipe.fileHandleForReading
-        outputHandle.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                return
-            }
-            // Optionally log or discard the data
-            // For now, we'll just drain it to prevent blocking
-            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                // Uncomment to log backend output:
-                // print("Backend stdout: \(output)")
-            }
-        }
+        // Close file handles
+        outputPipe?.fileHandleForReading.closeFile()
+        errorPipe?.fileHandleForReading.closeFile()
         
-        // Drain stderr to prevent deadlock
-        let errorHandle = errorPipe.fileHandleForReading
-        errorHandle.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                return
-            }
-            // Optionally log or discard the data
-            // For now, we'll just drain it to prevent blocking
-            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                // Uncomment to log backend errors:
-                // print("Backend stderr: \(output)")
-            }
-        }
+        // Clear pipes
+        outputPipe = nil
+        errorPipe = nil
         
-        try process.run()
-        backendProcess = process
-        isBackendRunning = true
+        // Clear process
+        backendProcess = nil
         
-        // Wait a bit for server to start, then check health with backoff
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.checkBackendHealth()
+        // Update UI state
+        DispatchQueue.main.async {
+            self.isBackendRunning = false
         }
     }
     
     func stopBackend() {
-        // Clean up pipes
-        outputPipe?.fileHandleForReading.readabilityHandler = nil
-        errorPipe?.fileHandleForReading.readabilityHandler = nil
-        outputPipe = nil
-        errorPipe = nil
-        
-        backendProcess?.terminate()
-        backendProcess = nil
-        isBackendRunning = false
+        processQueue.sync {
+            guard let process = backendProcess else {
+                return
+            }
+            
+            // Remove readability handlers
+            outputPipe?.fileHandleForReading.readabilityHandler = nil
+            errorPipe?.fileHandleForReading.readabilityHandler = nil
+            
+            // Terminate the process
+            process.terminate()
+            
+            // Set a timeout: if process doesn't exit within 5 seconds, kill it
+            let timeout: TimeInterval = 5.0
+            let deadline = Date().addingTimeInterval(timeout)
+            
+            // Wait for process to exit (with timeout)
+            while process.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            
+            // If still running, force kill
+            if process.isRunning {
+                process.kill()
+                // Give it a moment to die
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            
+            // Close file handles
+            outputPipe?.fileHandleForReading.closeFile()
+            errorPipe?.fileHandleForReading.closeFile()
+            
+            // Clear pipes and process
+            outputPipe = nil
+            errorPipe = nil
+            backendProcess = nil
+            
+            // Update UI state
+            DispatchQueue.main.async {
+                self.isBackendRunning = false
+            }
+        }
     }
     
     func searchSimilar(querySmiles: String, topK: Int = 10) async throws -> [Molecule] {
@@ -240,9 +360,19 @@ class BackendService: ObservableObject {
             throw BackendError.invalidResponse
         }
         
-        let responseDict = try JSONDecoder().decode([String: MoleculeDetail].self, from: data)
+        // Backend returns {success: bool, molecule: {...}}
+        struct MoleculeDetailResponse: Codable {
+            let success: Bool
+            let molecule: MoleculeDetail?
+            let error: String?
+        }
         
-        guard let molecule = responseDict["molecule"] else {
+        let responseObj = try JSONDecoder().decode(MoleculeDetailResponse.self, from: data)
+        
+        guard responseObj.success, let molecule = responseObj.molecule else {
+            if let error = responseObj.error {
+                throw BackendError.unknownError(error)
+            }
             throw BackendError.invalidResponse
         }
         
@@ -501,7 +631,11 @@ class BackendService: ObservableObject {
     }
     
     func getDiseaseMolecules(diseaseName: String, limit: Int? = nil) async throws -> [MoleculeBasic] {
-        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(diseaseName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? diseaseName)/molecules")
+        // Custom character set that excludes "/" to prevent path segment breaks
+        var allowedChars = CharacterSet.urlPathAllowed
+        allowedChars.remove("/")
+        let encodedName = diseaseName.addingPercentEncoding(withAllowedCharacters: allowedChars) ?? diseaseName
+        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(encodedName)/molecules")
         
         if let limit = limit {
             urlComponents?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
@@ -541,7 +675,11 @@ class BackendService: ObservableObject {
     }
     
     func getDiseaseTopMolecules(diseaseName: String, topK: Int = 10) async throws -> [MoleculeBasic] {
-        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(diseaseName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? diseaseName)/top-molecules")
+        // Custom character set that excludes "/" to prevent path segment breaks
+        var allowedChars = CharacterSet.urlPathAllowed
+        allowedChars.remove("/")
+        let encodedName = diseaseName.addingPercentEncoding(withAllowedCharacters: allowedChars) ?? diseaseName
+        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(encodedName)/top-molecules")
         urlComponents?.queryItems = [URLQueryItem(name: "top_k", value: "\(topK)")]
         
         guard let url = urlComponents?.url else {
@@ -724,7 +862,11 @@ class BackendService: ObservableObject {
     }
     
     func getDiseaseDrugs(diseaseName: String, limit: Int? = nil) async throws -> (drugs: [Drug], molecules: [MoleculeBasic]) {
-        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(diseaseName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? diseaseName)/drugs")
+        // Custom character set that excludes "/" to prevent path segment breaks
+        var allowedChars = CharacterSet.urlPathAllowed
+        allowedChars.remove("/")
+        let encodedName = diseaseName.addingPercentEncoding(withAllowedCharacters: allowedChars) ?? diseaseName
+        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(encodedName)/drugs")
         
         if let limit = limit {
             urlComponents?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
@@ -1103,6 +1245,7 @@ class BackendService: ObservableObject {
         // 4. Try going up from bundle path to find project root
         if let bundlePath = Bundle.main.bundlePath as String? {
             var currentPath = URL(fileURLWithPath: bundlePath)
+            var candidateRoot: URL? = nil
             
             // Go up from .app bundle to find project root
             // Path structure: .../bio-neighbor/macos_app/BioNeighbor/DerivedData/.../BioNeighbor.app
@@ -1110,14 +1253,15 @@ class BackendService: ObservableObject {
             for _ in 0..<10 {
                 let backendPath = currentPath.appendingPathComponent("backend/api.py")
                 if fileManager.fileExists(atPath: backendPath.path) {
+                    // Found backend/api.py - this is definitely the root
                     return currentPath
                 }
                 
-                // Also check if we're in the project directory structure
+                // Record candidate if we see venv or data markers (but keep looking for backend/api.py)
                 let venvPath = currentPath.appendingPathComponent("venv/bin/python")
                 let dataPath = currentPath.appendingPathComponent("data/molecules.db")
-                if fileManager.fileExists(atPath: venvPath.path) || fileManager.fileExists(atPath: dataPath.path) {
-                    return currentPath
+                if candidateRoot == nil && (fileManager.fileExists(atPath: venvPath.path) || fileManager.fileExists(atPath: dataPath.path)) {
+                    candidateRoot = currentPath
                 }
                 
                 currentPath = currentPath.deletingLastPathComponent()
@@ -1126,6 +1270,11 @@ class BackendService: ObservableObject {
                 if currentPath.path == "/" {
                     break
                 }
+            }
+            
+            // If we found a candidate but never found backend/api.py, return the candidate
+            if let candidate = candidateRoot {
+                return candidate
             }
         }
         

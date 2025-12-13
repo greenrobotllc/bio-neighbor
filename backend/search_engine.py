@@ -11,9 +11,14 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolDescriptors
 import pandas as pd
 
-from index_builder import load_index
-from fingerprints import compute_morgan_fingerprint, FINGERPRINT_SIZE, RADIUS
-from data_loader import get_molecule_by_id, load_from_database
+try:
+    from .index_builder import load_index
+    from .fingerprints import compute_morgan_fingerprint, FINGERPRINT_SIZE, RADIUS
+    from .data_loader import load_from_database
+except ImportError:
+    from index_builder import load_index
+    from fingerprints import compute_morgan_fingerprint, FINGERPRINT_SIZE, RADIUS
+    from data_loader import load_from_database
 import sqlite3
 import json
 
