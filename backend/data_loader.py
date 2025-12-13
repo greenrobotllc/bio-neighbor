@@ -152,11 +152,8 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                 else:
                     continue
                 
-                # Skip empty SMILES
-                if not smiles or smiles == 'None':
-                    continue
-                
-                if not smiles:
+                # Skip empty/placeholder SMILES
+                if not smiles or smiles == "None":
                     continue
                 
                 # Validate SMILES with RDKit
@@ -179,7 +176,7 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     if not formula:
                         try:
                             formula = rdMolDescriptors.CalcMolFormula(mol)
-                        except Exception as e:
+                        except Exception:
                             formula = ""
                     
                     molecules.append({
@@ -281,34 +278,29 @@ def download_zinc_subset(max_molecules: int = 10000, subset: str = "drug-like") 
         
         # Try each URL format until one works
         download_success = False
-        successful_url = None
         
         for download_url in url_list:
             try:
                 print(f"   Trying: {download_url}")
                 with requests.get(download_url, stream=True, timeout=300, allow_redirects=True) as response:
                     response.raise_for_status()
-                    if response.status_code == 200:
-                        download_success = True
-                        successful_url = download_url
-                        
-                        # Download the file inside the context manager
-                        total_size = int(response.headers.get('content-length', 0))
-                        downloaded = 0
-                        
-                        with open(local_file, 'wb') as f:
-                            for chunk in response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                                    downloaded += len(chunk)
-                                    if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:  # Every 10MB
-                                        progress = (downloaded / total_size) * 100
-                                        print(f"   Progress: {progress:.1f}% ({downloaded / 1024 / 1024:.1f} MB)")
-                        
-                        print(f"✅ Downloaded {local_file.name} ({downloaded / 1024 / 1024:.1f} MB)")
-                        break
-                    else:
-                        print(f"   Status {response.status_code}, trying next URL...")
+                    download_success = True
+                    
+                    # Download the file inside the context manager
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    
+                    with open(local_file, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:  # Every 10MB
+                                    progress = (downloaded / total_size) * 100
+                                    print(f"   Progress: {progress:.1f}% ({downloaded / 1024 / 1024:.1f} MB)")
+                    
+                    print(f"✅ Downloaded {local_file.name} ({downloaded / 1024 / 1024:.1f} MB)")
+                    break
             except Exception as e:
                 print(f"   Error: {e}, trying next URL...")
                 continue
