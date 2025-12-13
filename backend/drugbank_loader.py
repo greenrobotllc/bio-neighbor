@@ -16,9 +16,10 @@ from rdkit.Chem import rdMolDescriptors
 from rdkit.Chem.inchi import InchiToInchiKey
 import pandas as pd
 
+# Import shared configuration from data_loader to ensure consistency
+from data_loader import DB_PATH, DATA_DIR
+
 # Configuration
-DATA_DIR = Path(__file__).parent.parent / "data"
-DB_PATH = DATA_DIR / "molecules.db"
 DRUGBANK_CACHE_DIR = DATA_DIR / "drugbank_cache"
 DRUGBANK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,17 +103,23 @@ def match_drug_to_molecule(
         # Try InChIKey match (first 14 chars are standard)
         if 'inchikey' in molecule_df.columns:
             # Convert InChI to InChIKey for proper matching
+            # InChI and InChIKey are different formats - cannot slice InChI to get InChIKey
             try:
                 drug_inchikey = InchiToInchiKey(drug_inchi)
-                inchikey_prefix = drug_inchikey[:14] if drug_inchikey and len(drug_inchikey) >= 14 else None
+                if drug_inchikey:
+                    # Normalize case (InChIKey is case-insensitive but stored may vary)
+                    drug_inchikey = drug_inchikey.upper()
+                    # Use first 14 chars (standard block) for matching
+                    inchikey_prefix = drug_inchikey[:14] if len(drug_inchikey) >= 14 else drug_inchikey
+                    # Match against normalized inchikey column
+                    matches = molecule_df[molecule_df['inchikey'].str.upper().str.startswith(
+                        inchikey_prefix, na=False
+                    )]
+                    if len(matches) > 0:
+                        return int(matches.index[0])
             except Exception:
-                inchikey_prefix = None
-            if inchikey_prefix:
-                matches = molecule_df[molecule_df['inchikey'].str.startswith(
-                    inchikey_prefix, na=False
-                )]
-                if len(matches) > 0:
-                    return int(matches.index[0])
+                # If RDKit conversion fails, skip InChIKey matching
+                pass
     
     # Strategy 3: Fuzzy name matching (case-insensitive partial match)
     if drug_name:

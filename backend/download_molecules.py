@@ -659,11 +659,26 @@ Examples:
     if existing_df is not None and len(existing_df) > 0:
         # Combine dataframes, avoiding duplicates
         combined_df = pd.concat([existing_df, df], ignore_index=True)
-        # Remove duplicates by pubchem_cid or chembl_id
+        # Remove duplicates: first by pubchem_cid (only for non-empty values), then by chembl_id for remaining rows
         if 'pubchem_cid' in combined_df.columns:
-            combined_df = combined_df.drop_duplicates(subset=['pubchem_cid'], keep='first')
-        else:
+            # Separate rows with non-empty pubchem_cid from those without
+            has_pubchem = combined_df['pubchem_cid'].notna() & (combined_df['pubchem_cid'] != '')
+            df_with_pubchem = combined_df[has_pubchem].copy()
+            df_without_pubchem = combined_df[~has_pubchem].copy()
+            
+            # Deduplicate rows with pubchem_cid by pubchem_cid
+            if len(df_with_pubchem) > 0:
+                df_with_pubchem = df_with_pubchem.drop_duplicates(subset=['pubchem_cid'], keep='first')
+            
+            # For rows without pubchem_cid, deduplicate by chembl_id if available
+            if len(df_without_pubchem) > 0 and 'chembl_id' in df_without_pubchem.columns:
+                df_without_pubchem = df_without_pubchem.drop_duplicates(subset=['chembl_id'], keep='first')
+            
+            # Recombine
+            combined_df = pd.concat([df_with_pubchem, df_without_pubchem], ignore_index=True)
+        elif 'chembl_id' in combined_df.columns:
             combined_df = combined_df.drop_duplicates(subset=['chembl_id'], keep='first')
+        
         new_count = len(combined_df) - len(existing_df)
         print(f"✅ Combined with existing data: {len(combined_df)} total molecules ({new_count} new)")
         df = combined_df

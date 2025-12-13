@@ -1041,40 +1041,64 @@ class BackendService: ObservableObject {
         // Try to find the project root by looking for backend/api.py
         let fileManager = FileManager.default
         
-        // Get the app's bundle path
-        guard let bundlePath = Bundle.main.bundlePath as String? else {
-            return nil
-        }
-        
-        // For development: app is in DerivedData, need to find project root
-        // Try going up from bundle path to find the bio-neighbor directory
-        var currentPath = URL(fileURLWithPath: bundlePath)
-        
-        // Go up from .app bundle to find project root
-        // Path structure: .../bio-neighbor/macos_app/BioNeighbor/DerivedData/.../BioNeighbor.app
-        // We need to get to: .../bio-neighbor/
-        for _ in 0..<10 {
-            let backendPath = currentPath.appendingPathComponent("backend/api.py")
+        // 1. Check user-configurable project root from UserDefaults
+        if let userPath = UserDefaults.standard.string(forKey: "BioNeighborProjectRoot"),
+           !userPath.isEmpty {
+            let url = URL(fileURLWithPath: userPath)
+            let backendPath = url.appendingPathComponent("backend/api.py")
             if fileManager.fileExists(atPath: backendPath.path) {
-                return currentPath
-            }
-            
-            // Also check if we're in the project directory structure
-            let venvPath = currentPath.appendingPathComponent("venv/bin/python")
-            let dataPath = currentPath.appendingPathComponent("data/molecules.db")
-            if fileManager.fileExists(atPath: venvPath.path) || fileManager.fileExists(atPath: dataPath.path) {
-                return currentPath
-            }
-            
-            currentPath = currentPath.deletingLastPathComponent()
-            
-            // Stop if we've gone too far up
-            if currentPath.path == "/" {
-                break
+                return url
             }
         }
         
-        // Fallback: Try common project locations (relative to home directory)
+        // 2. Check environment variable
+        if let envPath = ProcessInfo.processInfo.environment["BIO_NEIGHBOR_ROOT"],
+           !envPath.isEmpty {
+            let url = URL(fileURLWithPath: envPath)
+            let backendPath = url.appendingPathComponent("backend/api.py")
+            if fileManager.fileExists(atPath: backendPath.path) {
+                return url
+            }
+        }
+        
+        // 3. Check app bundle resources (for bundled backend)
+        if let bundleResourcePath = Bundle.main.resourcePath {
+            let bundleBackendPath = URL(fileURLWithPath: bundleResourcePath).appendingPathComponent("backend/api.py")
+            if fileManager.fileExists(atPath: bundleBackendPath.path) {
+                return URL(fileURLWithPath: bundleResourcePath)
+            }
+        }
+        
+        // 4. Try going up from bundle path to find project root
+        if let bundlePath = Bundle.main.bundlePath as String? {
+            var currentPath = URL(fileURLWithPath: bundlePath)
+            
+            // Go up from .app bundle to find project root
+            // Path structure: .../bio-neighbor/macos_app/BioNeighbor/DerivedData/.../BioNeighbor.app
+            // We need to get to: .../bio-neighbor/
+            for _ in 0..<10 {
+                let backendPath = currentPath.appendingPathComponent("backend/api.py")
+                if fileManager.fileExists(atPath: backendPath.path) {
+                    return currentPath
+                }
+                
+                // Also check if we're in the project directory structure
+                let venvPath = currentPath.appendingPathComponent("venv/bin/python")
+                let dataPath = currentPath.appendingPathComponent("data/molecules.db")
+                if fileManager.fileExists(atPath: venvPath.path) || fileManager.fileExists(atPath: dataPath.path) {
+                    return currentPath
+                }
+                
+                currentPath = currentPath.deletingLastPathComponent()
+                
+                // Stop if we've gone too far up
+                if currentPath.path == "/" {
+                    break
+                }
+            }
+        }
+        
+        // 5. Fallback: Try common project locations (relative to home directory)
         let homeDir = fileManager.homeDirectoryForCurrentUser
         let commonPaths = [
             homeDir.appendingPathComponent("Documents/GitHub/bio-neighbor"),
