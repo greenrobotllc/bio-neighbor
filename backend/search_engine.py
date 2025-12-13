@@ -448,14 +448,23 @@ class SearchEngine:
             for disease_row in disease_rows:
                 disease_id = disease_row[0]
                 cursor.execute(
-                    "SELECT molecule_index FROM drug_diseases WHERE disease_id = ?",
+                    "SELECT molecule_index FROM drug_diseases WHERE disease_id = ? AND molecule_index IS NOT NULL",
                     (disease_id,)
                 )
                 indices = cursor.fetchall()
-                molecule_indices.extend([idx[0] for idx in indices])
+                # Filter out None values and convert to int, only include valid indices
+                for idx_tuple in indices:
+                    idx = idx_tuple[0]
+                    if idx is not None:
+                        try:
+                            idx_int = int(idx)
+                            if idx_int >= 0:  # Only positive indices
+                                molecule_indices.append(idx_int)
+                        except (ValueError, TypeError):
+                            continue
             
             # Remove duplicates
-            molecule_indices = list(set(molecule_indices))
+            molecule_indices = sorted(list(set(molecule_indices)))
             
             # Apply limit if specified
             if limit:
@@ -464,6 +473,7 @@ class SearchEngine:
             # Get molecule information
             molecules = []
             for idx in molecule_indices:
+                # idx is already validated as non-None and >= 0 from above
                 if 0 <= idx < len(self.molecule_df):
                     molecule_info = self._get_molecule_info(int(idx))
                     molecules.append(molecule_info)

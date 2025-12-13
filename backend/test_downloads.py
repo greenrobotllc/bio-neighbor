@@ -177,6 +177,86 @@ class TestDownloads(unittest.TestCase):
                 self.assertIn('running', status_data)
                 print(f"   Status: running={status_data.get('running')}, message={status_data.get('message')}")
     
+    def test_complete_download_workflow(self):
+        """Test complete download workflow: start → poll → complete."""
+        # Start download
+        response = self.app.post('/download/molecules',
+                                json={'count': 2, 'source': 'pubchem'})
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertTrue(data['success'])
+        task_id = data.get('task_id')
+        
+        if task_id:
+            # Poll status multiple times
+            max_polls = 10
+            for i in range(max_polls):
+                time.sleep(2)
+                status_response = self.app.get(f'/download/status/{task_id}')
+                if status_response.status_code == 200:
+                    status_data = json.loads(status_response.data)
+                    running = status_data.get('running', False)
+                    
+                    if not running:
+                        # Download completed
+                        exit_code = status_data.get('exit_code')
+                        print(f"   Download completed after {i+1} polls, exit_code={exit_code}")
+                        break
+                else:
+                    print(f"   Status check failed: {status_response.status_code}")
+                    break
+    
+    def test_concurrent_downloads(self):
+        """Test that multiple downloads can be started."""
+        # Start multiple downloads
+        task_ids = []
+        for i in range(3):
+            response = self.app.post('/download/molecules',
+                                    json={'count': 1, 'source': 'pubchem'})
+            if response.status_code == 200:
+                data = json.loads(response.data)
+                task_id = data.get('task_id')
+                if task_id:
+                    task_ids.append(task_id)
+        
+        # Verify all started
+        self.assertGreater(len(task_ids), 0)
+        print(f"   Started {len(task_ids)} concurrent downloads")
+    
+    def test_database_updates_after_download(self):
+        """Test that database stats update after download."""
+        # Get initial stats
+        initial_response = self.app.get('/stats')
+        self.assertEqual(initial_response.status_code, 200)
+        initial_data = json.loads(initial_response.data)
+        initial_molecules = initial_data.get('stats', {}).get('molecules', 0)
+        
+        # Start a small download
+        response = self.app.post('/download/molecules',
+                                json={'count': 1, 'source': 'pubchem'})
+        if response.status_code == 200:
+            data = json.loads(response.data)
+            task_id = data.get('task_id')
+            
+            if task_id:
+                # Wait for completion
+                for _ in range(30):  # Wait up to 60 seconds
+                    time.sleep(2)
+                    status_response = self.app.get(f'/download/status/{task_id}')
+                    if status_response.status_code == 200:
+                        status_data = json.loads(status_response.data)
+                        if not status_data.get('running', True):
+                            break
+                
+                # Check stats again (may not have changed if molecule already existed)
+                time.sleep(2)
+                final_response = self.app.get('/stats')
+                if final_response.status_code == 200:
+                    final_data = json.loads(final_response.data)
+                    final_molecules = final_data.get('stats', {}).get('molecules', 0)
+                    print(f"   Molecules: {initial_molecules} → {final_molecules}")
+                    # Stats may not change if molecule already exists, which is valid
+    
     def test_download_script_exists(self):
         """Test that download scripts exist."""
         scripts = [

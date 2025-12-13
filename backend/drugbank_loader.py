@@ -628,10 +628,9 @@ def save_disease_data_to_db(
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Initialize drug schema
-    from drug_schema import create_drugs_table, update_drug_diseases_table
-    create_drugs_table(conn)
-    update_drug_diseases_table(conn)
+    # Ensure database schema is up to date
+    from db_migrations import migrate_database
+    migrate_database(conn)
     
     # Save drugs if provided
     drugs_added = 0
@@ -651,33 +650,7 @@ def save_disease_data_to_db(
                 if key:
                     drug_id_map[key] = result[0]
     
-    # Create diseases table if it doesn't exist
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS diseases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            mesh_id TEXT,
-            description TEXT
-        )
-    """)
-    
-    # Create drug_diseases table if it doesn't exist
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS drug_diseases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            molecule_index INTEGER NOT NULL,
-            disease_id INTEGER NOT NULL,
-            indication_type TEXT,
-            evidence_level TEXT,
-            FOREIGN KEY (disease_id) REFERENCES diseases(id),
-            FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)
-        )
-    """)
-    
-    # Create indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_disease_name ON diseases(name)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_drug_disease_molecule ON drug_diseases(molecule_index)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_drug_disease_disease ON drug_diseases(disease_id)")
+    # Tables are created by migration system - no need to create them here
     
     # Track statistics
     diseases_added = 0

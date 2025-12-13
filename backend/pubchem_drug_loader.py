@@ -53,7 +53,7 @@ def fetch_drug_info_from_pubchem(
         
         # Get basic information
         cid = comp.cid
-        smiles = comp.canonical_smiles or comp.isomeric_smiles or comp.connectivity_smiles
+        smiles = comp.connectivity_smiles or comp.isomeric_smiles or (comp.canonical_smiles if hasattr(comp, 'canonical_smiles') else None)
         
         # Get synonyms (brand names, generic names, etc.)
         synonyms = comp.synonyms or []

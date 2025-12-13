@@ -24,6 +24,8 @@ struct DiseaseBrowseView: View {
     @State private var selectedDrug: Drug?
     @State private var showSimilarMolecules = false
     @State private var showDrugs = true  // Default to showing drugs
+    @State private var isDownloadingDrugs = false
+    @State private var downloadProgress: String?
     
     var filteredDiseases: [Disease] {
         if diseaseSearchText.isEmpty {
@@ -242,10 +244,30 @@ struct DiseaseBrowseView: View {
                                     Text("No drugs found for this disease")
                                         .font(.headline)
                                         .foregroundColor(.secondary)
-                                    Text("Drug data may not be loaded yet. Try downloading drug information.")
+                                    Text("Drug data may not be loaded yet. Download drugs for this disease from PubChem.")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                         .multilineTextAlignment(.center)
+                                    
+                                    if isDownloadingDrugs {
+                                        VStack(spacing: 8) {
+                                            ProgressView()
+                                            if let progress = downloadProgress {
+                                                Text(progress)
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        .padding(.top, 8)
+                                    } else {
+                                        Button(action: {
+                                            downloadDrugsForDisease()
+                                        }) {
+                                            Label("Download Drugs for \(disease.name)", systemImage: "arrow.down.circle.fill")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .padding(.top, 8)
+                                    }
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 40)
@@ -270,49 +292,51 @@ struct DiseaseBrowseView: View {
                             Divider()
                         }
                         
-                        // Molecules section
-                        if isLoadingMolecules {
-                            ProgressView("Loading molecules...")
+                        // Molecules section - only show if drugs exist (molecules are active ingredients of drugs)
+                        if !diseaseDrugs.isEmpty {
+                            if isLoadingMolecules {
+                                ProgressView("Loading molecules...")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 40)
+                            } else if diseaseMolecules.isEmpty {
+                                VStack(spacing: 16) {
+                                    Image(systemName: "molecule")
+                                        .font(.system(size: 60))
+                                        .foregroundColor(.secondary)
+                                    Text("No molecules found for this disease")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+                                    Text("Try loading disease data or check if molecules are matched in the database")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .multilineTextAlignment(.center)
+                                }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 40)
-                        } else if diseaseMolecules.isEmpty {
-                            VStack(spacing: 16) {
-                                Image(systemName: "molecule")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(.secondary)
-                                Text("No molecules found for this disease")
-                                    .font(.headline)
-                                    .foregroundColor(.secondary)
-                                Text("Try loading disease data or check if molecules are matched in the database")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                        } else {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Active Ingredient Molecules")
-                                    .font(.title2)
-                                    .fontWeight(.bold)
-                                
-                                LazyVGrid(columns: [
-                                    GridItem(.adaptive(minimum: 200), spacing: 16)
-                                ], spacing: 16) {
-                                    ForEach(diseaseMolecules) { molecule in
-                                        MoleculeCard(molecule: molecule) {
-                                            // Convert MoleculeBasic to Molecule for detail view
-                                            selectedMolecule = Molecule(
-                                                id: molecule.id,
-                                                chemblId: molecule.chemblId,
-                                                name: molecule.name,
-                                                smiles: molecule.smiles,
-                                                similarity: 1.0,
-                                                similarityScore: 0.0,
-                                                molecularWeight: molecule.molecularWeight,
-                                                isApproved: molecule.isApproved,
-                                                formula: molecule.formula
-                                            )
+                            } else {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Active Ingredient Molecules")
+                                        .font(.title2)
+                                        .fontWeight(.bold)
+                                    
+                                    LazyVGrid(columns: [
+                                        GridItem(.adaptive(minimum: 200), spacing: 16)
+                                    ], spacing: 16) {
+                                        ForEach(diseaseMolecules) { molecule in
+                                            MoleculeCard(molecule: molecule) {
+                                                // Convert MoleculeBasic to Molecule for detail view
+                                                selectedMolecule = Molecule(
+                                                    id: molecule.id,
+                                                    chemblId: molecule.chemblId,
+                                                    name: molecule.name,
+                                                    smiles: molecule.smiles,
+                                                    similarity: 1.0,
+                                                    similarityScore: 0.0,
+                                                    molecularWeight: molecule.molecularWeight,
+                                                    isApproved: molecule.isApproved,
+                                                    formula: molecule.formula
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -489,6 +513,154 @@ struct DiseaseBrowseView: View {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     isLoadingSimilar = false
+                }
+            }
+        }
+    }
+    
+    private func downloadDrugsForDisease() {
+        guard let disease = selectedDisease, backendService.isBackendRunning else { return }
+        
+        isDownloadingDrugs = true
+        downloadProgress = "Starting download..."
+        errorMessage = nil
+        
+        Task {
+            do {
+                // Download drugs for this disease (default: 50 drugs)
+                let response = try await backendService.downloadDrugs(
+                    names: nil,
+                    disease: disease.name,
+                    count: 50,
+                    bulk: false
+                )
+                
+                await MainActor.run {
+                    if let taskId = response.taskId {
+                        downloadProgress = "Download started (task ID: \(taskId))"
+                        
+                        // Poll for completion
+                        pollDownloadStatus(taskId: taskId)
+                    } else {
+                        errorMessage = "No task ID returned from download"
+                        isDownloadingDrugs = false
+                        downloadProgress = nil
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isDownloadingDrugs = false
+                    downloadProgress = nil
+                }
+            }
+        }
+    }
+    
+    private func pollDownloadStatus(taskId: String) {
+        Task {
+            var attempts = 0
+            let maxAttempts = 300 // 5 minutes max (1 second intervals)
+            
+            while attempts < maxAttempts {
+                do {
+                    let status = try await backendService.getDownloadStatus(taskId: taskId)
+                    
+                    await MainActor.run {
+                        if let running = status.running {
+                            if !running {
+                                // Download completed
+                                isDownloadingDrugs = false
+                                
+                                if let exitCode = status.exitCode, exitCode == 0 {
+                                    // Success
+                                    downloadProgress = status.progress?.message ?? "Download complete! Refreshing..."
+                                    
+                                    // Reload drugs after a short delay
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                        loadDiseaseDrugs()
+                                    }
+                                } else {
+                                    // Failed
+                                    downloadProgress = nil
+                                    errorMessage = status.error ?? status.progress?.message ?? "Download failed"
+                                }
+                            } else {
+                                // Still running - show detailed progress
+                                if let progress = status.progress {
+                                    var progressText = progress.message ?? "Downloading..."
+                                    
+                                    // Add details if available
+                                    if let details = progress.details {
+                                        // Disease progress
+                                        if let diseaseIndex = details.diseaseIndex,
+                                           let totalDiseases = details.totalDiseases {
+                                            progressText += " (\(diseaseIndex)/\(totalDiseases) diseases)"
+                                        }
+                                        
+                                        // Drug loading progress
+                                        if let drugsLoaded = details.drugsLoaded,
+                                           let totalDrugs = details.totalDrugs {
+                                            progressText += " - \(drugsLoaded)/\(totalDrugs) drugs"
+                                        }
+                                        
+                                        // Overall progress percentage
+                                        if let progressPct = details.progressPercent {
+                                            progressText += String(format: " (%.0f%%)", progressPct)
+                                        }
+                                        
+                                        // Stage indicator
+                                        if let stage = details.stage {
+                                            let stageEmoji: String
+                                            switch stage {
+                                            case "api_search": stageEmoji = "🔍"
+                                            case "loading_drug_details": stageEmoji = "📦"
+                                            default: stageEmoji = "⏳"
+                                            }
+                                            progressText = "\(stageEmoji) \(progressText)"
+                                        }
+                                        
+                                        // Current disease name
+                                        if let currentDisease = details.currentDisease {
+                                            progressText = "\(progressText) - \(currentDisease)"
+                                        }
+                                    }
+                                    
+                                    downloadProgress = progressText
+                                } else {
+                                    downloadProgress = status.message ?? "Downloading drugs..."
+                                }
+                            }
+                        } else {
+                            // Status unknown, use message
+                            downloadProgress = status.message ?? "Checking download status..."
+                        }
+                    }
+                    
+                    // Break if download is complete (not running)
+                    if let running = status.running, !running {
+                        break
+                    }
+                    
+                    // Wait 1 second before next poll
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                    attempts += 1
+                } catch {
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                        isDownloadingDrugs = false
+                        downloadProgress = nil
+                    }
+                    break
+                }
+            }
+            
+            // Timeout
+            if attempts >= maxAttempts {
+                await MainActor.run {
+                    downloadProgress = nil
+                    isDownloadingDrugs = false
+                    errorMessage = "Download timed out. It may still be running in the background."
                 }
             }
         }

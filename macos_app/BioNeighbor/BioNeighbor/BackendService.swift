@@ -841,7 +841,7 @@ class BackendService: ObservableObject {
         return results
     }
     
-    func downloadMolecules(count: Int? = nil, source: String? = nil, names: [String]? = nil) async throws -> DownloadResponse {
+    func downloadMolecules(count: Int? = nil, source: String? = nil, names: [String]? = nil, fullFile: Bool = false) async throws -> DownloadResponse {
         guard let url = URL(string: "\(baseURL)/download/molecules") else {
             throw BackendError.backendNotAvailable
         }
@@ -851,7 +851,7 @@ class BackendService: ObservableObject {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.timeoutInterval = 60.0
         
-        let request = DownloadMoleculesRequest(count: count, source: source, names: names)
+        let request = DownloadMoleculesRequest(count: count, source: source, names: names, full_file: fullFile ? true : nil)
         urlRequest.httpBody = try JSONEncoder().encode(request)
         
         let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
@@ -880,7 +880,7 @@ class BackendService: ObservableObject {
         return response
     }
     
-    func downloadDrugs(names: [String]? = nil, disease: String? = nil, count: Int? = nil) async throws -> DownloadResponse {
+    func downloadDrugs(names: [String]? = nil, disease: String? = nil, count: Int? = nil, bulk: Bool = false) async throws -> DownloadResponse {
         guard let url = URL(string: "\(baseURL)/download/drugs") else {
             throw BackendError.backendNotAvailable
         }
@@ -890,7 +890,7 @@ class BackendService: ObservableObject {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.timeoutInterval = 60.0
         
-        let request = DownloadDrugsRequest(names: names, disease: disease, count: count)
+        let request = DownloadDrugsRequest(names: names, disease: disease, count: count, bulk: bulk ? true : nil)
         urlRequest.httpBody = try JSONEncoder().encode(request)
         
         let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)

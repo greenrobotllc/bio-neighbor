@@ -7,7 +7,6 @@
 
 import SwiftUI
 import RxSwift
-import RxCocoa
 import Combine
 
 class MoleculesDownloadViewModel: ObservableObject {
@@ -20,6 +19,7 @@ class MoleculesDownloadViewModel: ObservableObject {
     @Published var batchNames = ""
     @Published var currentDownloadState: DownloadState = .idle
     @Published var errorMessage: String?
+    @Published var useFullFileDownload = false
     
     private let downloadService = ReactiveDownloadService.shared
     private let backendService = BackendService.shared
@@ -105,18 +105,35 @@ class MoleculesDownloadViewModel: ObservableObject {
     func downloadByCount() {
         guard backendService.isBackendRunning else { return }
         
-        downloadService.downloadMolecules(count: downloadCount, source: selectedSource)
-            .observe(on: MainScheduler.instance)
-            .subscribe(
-                onNext: { taskId in
-                    // Task started, status polling will update UI
-                },
-                onError: { [weak self] error in
-                    self?.errorMessage = error.localizedDescription
-                    self?.currentDownloadState = .failed(error: error.localizedDescription)
-                }
-            )
-            .disposed(by: disposeBag)
+        if useFullFileDownload {
+            // Download full SDF file
+            downloadService.downloadMolecules(count: nil, source: selectedSource, fullFile: true)
+                .observe(on: MainScheduler.instance)
+                .subscribe(
+                    onNext: { taskId in
+                        // Task started, status polling will update UI
+                    },
+                    onError: { [weak self] error in
+                        self?.errorMessage = error.localizedDescription
+                        self?.currentDownloadState = .failed(error: error.localizedDescription)
+                    }
+                )
+                .disposed(by: disposeBag)
+        } else {
+            // Download by count
+            downloadService.downloadMolecules(count: downloadCount, source: selectedSource, fullFile: false)
+                .observe(on: MainScheduler.instance)
+                .subscribe(
+                    onNext: { taskId in
+                        // Task started, status polling will update UI
+                    },
+                    onError: { [weak self] error in
+                        self?.errorMessage = error.localizedDescription
+                        self?.currentDownloadState = .failed(error: error.localizedDescription)
+                    }
+                )
+                .disposed(by: disposeBag)
+        }
     }
     
     func downloadByName() {
@@ -166,6 +183,7 @@ struct MoleculesDownloadViewRx: View {
                 Text("Download Molecules")
                     .font(.largeTitle)
                     .fontWeight(.bold)
+                    .accessibilityIdentifier("downloadMoleculesTitle")
                 
                 // Current count
                 if let stats = viewModel.stats {
@@ -184,50 +202,111 @@ struct MoleculesDownloadViewRx: View {
                 
                 Divider()
                 
-                // Download by count
+                // Download by count or full file
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Download by Count")
+                    Text("Download Molecules")
                         .font(.title2)
                         .fontWeight(.bold)
                     
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Download \(viewModel.downloadCount) more molecules")
-                            .font(.headline)
-                        
-                        HStack {
-                            Slider(value: Binding(
-                                get: { Double(viewModel.downloadCount) },
-                                set: { viewModel.downloadCount = Int($0) }
-                            ), in: 100...10000, step: 100)
-                            
-                            TextField("Count", value: $viewModel.downloadCount, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 100)
-                        }
-                    }
-                    
-                    Picker("Source", selection: $viewModel.selectedSource) {
-                        Text("PubChem").tag("pubchem")
-                        Text("ChEMBL").tag("chembl")
-                        Text("ZINC").tag("zinc")
+                    // Download mode toggle
+                    Picker("Download Mode", selection: $viewModel.useFullFileDownload) {
+                        Text("By Count").tag(false)
+                        Text("Full SDF File").tag(true)
                     }
                     .pickerStyle(.segmented)
+                    .padding(.bottom, 8)
                     
-                    Button(action: { viewModel.downloadByCount() }) {
-                        HStack {
-                            if case .inProgress = viewModel.currentDownloadState {
-                                ProgressView()
-                                    .progressViewStyle(.circular)
-                                    .scaleEffect(0.8)
-                            } else {
-                                Image(systemName: "arrow.down.circle.fill")
+                    if viewModel.useFullFileDownload {
+                        // Full file download mode
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Download Complete SDF File")
+                                .font(.headline)
+                            
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("• Downloads 1 complete SDF file (~500,000 compounds)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("• File size: 300-500 MB (downloads in chunks)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("• Imports ALL valid molecules from the file")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("• No count limit - gets maximum molecules")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
-                            Text(viewModel.buttonText)
+                            .padding()
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
+                            
+                            Picker("Source", selection: $viewModel.selectedSource) {
+                                Text("PubChem").tag("pubchem")
+                                Text("ChEMBL").tag("chembl")
+                                Text("ZINC").tag("zinc")
+                            }
+                            .pickerStyle(.segmented)
+                            
+                            Button(action: { viewModel.downloadByCount() }) {
+                                HStack {
+                                    if case .inProgress = viewModel.currentDownloadState {
+                                        ProgressView()
+                                            .progressViewStyle(.circular)
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "arrow.down.circle.fill")
+                                    }
+                                    Text("Download Full SDF File")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
+                            .accessibilityIdentifier("downloadMoleculesFullFileButton")
                         }
-                        .frame(maxWidth: .infinity)
+                    } else {
+                        // Count-based download mode
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Download \(viewModel.downloadCount) more molecules")
+                                .font(.headline)
+                            
+                            HStack {
+                                Slider(value: Binding(
+                                    get: { Double(viewModel.downloadCount) },
+                                    set: { viewModel.downloadCount = Int($0) }
+                                ), in: 100...10000, step: 100)
+                                .accessibilityIdentifier("moleculeCountSlider")
+                                
+                                TextField("Count", value: $viewModel.downloadCount, format: .number)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 100)
+                            }
+                        }
+                        
+                        Picker("Source", selection: $viewModel.selectedSource) {
+                            Text("PubChem").tag("pubchem")
+                            Text("ChEMBL").tag("chembl")
+                            Text("ZINC").tag("zinc")
+                        }
+                        .pickerStyle(.segmented)
+                        
+                        Button(action: { viewModel.downloadByCount() }) {
+                            HStack {
+                                if case .inProgress = viewModel.currentDownloadState {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                }
+                                Text(viewModel.buttonText)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
+                        .accessibilityIdentifier("downloadMoleculesByCountButton")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
                 }
                 
                 Divider()
@@ -245,6 +324,7 @@ struct MoleculesDownloadViewRx: View {
                         
                         TextField("Enter molecule name...", text: $viewModel.searchText)
                             .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("moleculeSearchField")
                     }
                     
                     // Search results
@@ -324,16 +404,41 @@ struct MoleculesDownloadViewRx: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(viewModel.isDownloading || !backendService.isBackendRunning || (viewModel.selectedNames.isEmpty && viewModel.batchNames.isEmpty))
+                    .accessibilityIdentifier("downloadMoleculesByNameButton")
                 }
                 
                 // Progress/Error
                 if case .inProgress(let message) = viewModel.currentDownloadState {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding()
-                        .background(Color.green.opacity(0.1))
-                        .cornerRadius(8)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        // Show chunk download info if it's an FTP download
+                        if message.contains("FTP") || message.contains("SDF") || message.contains("MB") {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("📦 Downloading in chunks:")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                Text("• Each SDF file is 300-500 MB")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("• Files are downloaded one at a time")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                if message.contains("MB") {
+                                    // Extract MB info if present
+                                    Text("• Progress shown in MB remaining")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+                    .padding()
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(8)
                 }
                 
                 if case .completed(let message) = viewModel.currentDownloadState {
@@ -365,6 +470,7 @@ struct MoleculesDownloadViewRx: View {
             }
             .padding()
         }
+    }
 }
 
 #Preview {

@@ -28,30 +28,35 @@ struct ContentTabView: View {
                     Label("Molecules", systemImage: "square.grid.2x2")
                 }
                 .tag(0)
+                .accessibilityIdentifier("moleculesTab")
             
             DiseaseBrowseView()
                 .tabItem {
                     Label("Diseases", systemImage: "cross.case")
                 }
                 .tag(1)
+                .accessibilityIdentifier("diseasesTab")
             
             DrugsView()
                 .tabItem {
                     Label("Drugs", systemImage: "pills")
                 }
                 .tag(2)
+                .accessibilityIdentifier("drugsTab")
             
             DrugDataDownloadView()
                 .tabItem {
                     Label("Download Data", systemImage: "arrow.down.circle")
                 }
                 .tag(3)
+                .accessibilityIdentifier("downloadDataTab")
             
             SearchView()
                 .tabItem {
                     Label("Advanced Search", systemImage: "magnifyingglass")
                 }
                 .tag(4)
+                .accessibilityIdentifier("advancedSearchTab")
         }
     }
 }

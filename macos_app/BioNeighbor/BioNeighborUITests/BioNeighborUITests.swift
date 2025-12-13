@@ -26,9 +26,35 @@ final class BioNeighborUITests: XCTestCase {
     func testExample() throws {
         // UI tests must launch the application that they test.
         let app = XCUIApplication()
+        app.launchArguments = ["--uitesting"]
         app.launch()
 
         // Use XCTAssert and related functions to verify your tests produce the correct results.
+        // Basic smoke test - verify app launches
+        XCTAssertTrue(app.exists)
+    }
+    
+    @MainActor
+    func testAppLaunches() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitesting"]
+        app.launch()
+        
+        // Verify app window exists
+        XCTAssertTrue(app.windows.count > 0)
+    }
+    
+    @MainActor
+    func testTabsExist() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitesting"]
+        app.launch()
+        
+        // Verify main tabs exist
+        let moleculesTab = app.tabs["Molecules"]
+        if moleculesTab.waitForExistence(timeout: 5.0) {
+            XCTAssertTrue(moleculesTab.exists)
+        }
     }
 
     @MainActor

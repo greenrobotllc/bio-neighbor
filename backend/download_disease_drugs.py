@@ -16,7 +16,7 @@ from drugbank_loader import (
 from data_loader import load_from_database, DB_PATH
 from pubchem_drug_loader import load_drugs_for_disease
 from top_100_diseases import get_disease_by_name, get_alzheimers_drugs
-from drug_schema import initialize_drug_schema
+from db_migrations import migrate_database
 
 
 def main():
@@ -112,10 +112,12 @@ Notes:
     
     print(f"✅ Loaded {len(molecule_df)} molecules from database\n")
     
-    # Initialize drug schema
-    print("🔧 Initializing drug database schema...")
-    initialize_drug_schema()
-    print("✅ Drug schema initialized\n")
+    # Ensure database schema is up to date
+    print("🔧 Checking database schema...")
+    if not migrate_database():
+        print("❌ Database migration failed")
+        sys.exit(1)
+    print("✅ Database schema is up to date\n")
     
     # Clear existing data if force flag is set
     if args.force:

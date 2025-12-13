@@ -591,18 +591,23 @@ def search_by_disease():
 @app.route('/download/status/<task_id>', methods=['GET'])
 def get_download_status(task_id: str):
     """
-    Get status of a download task.
+    Get status of a download task with detailed progress.
     
     Response (JSON):
     {
         "success": true,
         "running": true/false,
         "exit_code": null or int,
-        "message": "..."
+        "message": "...",
+        "progress": {
+            "status": "searching|loading|saving|completed",
+            "details": {...}
+        }
     }
     """
     try:
         import os
+        from progress_tracker import read_progress
         
         try:
             pid = int(task_id)
@@ -612,6 +617,9 @@ def get_download_status(task_id: str):
                 'error': 'Invalid task ID'
             }), 400
         
+        # Read progress from file
+        progress_data = read_progress(task_id)
+        
         # Try psutil first (more reliable)
         try:
             import psutil
@@ -620,11 +628,14 @@ def get_download_status(task_id: str):
                 is_running = process.is_running()
                 
                 if is_running:
+                    # Process is running - return progress if available
+                    message = progress_data.get('message', 'Download in progress') if progress_data else 'Download in progress'
                     return jsonify({
                         'success': True,
                         'running': True,
                         'exit_code': None,
-                        'message': 'Download in progress'
+                        'message': message,
+                        'progress': progress_data
                     })
                 else:
                     # Process finished - try to get exit code
@@ -632,18 +643,27 @@ def get_download_status(task_id: str):
                         exit_code = process.returncode
                     except:
                         exit_code = None
+                    
+                    message = 'Download completed' if exit_code == 0 else 'Download failed'
+                    if progress_data:
+                        message = progress_data.get('message', message)
+                    
                     return jsonify({
                         'success': True,
                         'running': False,
                         'exit_code': exit_code,
-                        'message': 'Download completed' if exit_code == 0 else 'Download failed'
+                        'message': message,
+                        'progress': progress_data
                     })
             except psutil.NoSuchProcess:
+                # Process finished - check progress file for final status
+                message = 'Process completed' if progress_data and progress_data.get('status') == 'completed' else 'Process not found (may have completed)'
                 return jsonify({
                     'success': True,
                     'running': False,
-                    'exit_code': None,
-                    'message': 'Process not found (may have completed)'
+                    'exit_code': 0 if progress_data and progress_data.get('status') == 'completed' else None,
+                    'message': message,
+                    'progress': progress_data
                 })
         except ImportError:
             # psutil not available, use basic os.kill check
@@ -653,34 +673,42 @@ def get_download_status(task_id: str):
         try:
             # Signal 0 doesn't kill, just checks if process exists
             os.kill(pid, 0)
+            message = progress_data.get('message', 'Download in progress') if progress_data else 'Download in progress'
             return jsonify({
                 'success': True,
                 'running': True,
                 'exit_code': None,
-                'message': 'Download in progress'
+                'message': message,
+                'progress': progress_data
             })
         except ProcessLookupError:
-            # Process doesn't exist
+            # Process doesn't exist - check progress file
+            message = 'Process completed' if progress_data and progress_data.get('status') == 'completed' else 'Process not found (may have completed)'
             return jsonify({
                 'success': True,
                 'running': False,
-                'exit_code': None,
-                'message': 'Process not found (may have completed)'
+                'exit_code': 0 if progress_data and progress_data.get('status') == 'completed' else None,
+                'message': message,
+                'progress': progress_data
             })
         except PermissionError:
             # Process exists but we can't access it (likely finished)
+            message = progress_data.get('message', 'Process status unknown') if progress_data else 'Process status unknown'
             return jsonify({
                 'success': True,
                 'running': False,
                 'exit_code': None,
-                'message': 'Process status unknown'
+                'message': message,
+                'progress': progress_data
             })
         except OSError:
+            message = progress_data.get('message', 'Process not found') if progress_data else 'Process not found'
             return jsonify({
                 'success': True,
                 'running': False,
                 'exit_code': None,
-                'message': 'Process not found'
+                'message': message,
+                'progress': progress_data
             })
     
     except Exception as e:
@@ -1022,11 +1050,12 @@ def download_molecules():
         count = data.get('count')
         source = data.get('source', 'pubchem')
         names = data.get('names', [])
+        full_file = data.get('full_file', False)
         
-        if not count and not names:
+        if not count and not names and not full_file:
             return jsonify({
                 'success': False,
-                'error': 'Either count or names must be provided'
+                'error': 'Either count, names, or full_file must be provided'
             }), 400
         
         # Build command
@@ -1052,6 +1081,9 @@ def download_molecules():
             # Download by names
             names_str = ','.join(names)
             cmd = [python_exec, str(script_path), '--names', names_str]
+        elif full_file:
+            # Download full SDF file
+            cmd = [python_exec, str(script_path), '--full-file', '--source', source]
         else:
             # Download by count
             cmd = [python_exec, str(script_path), '--count', str(count), '--source', source]
@@ -1070,7 +1102,8 @@ def download_molecules():
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
-                cwd=str(Path(__file__).parent)
+                cwd=str(Path(__file__).parent),
+                bufsize=1  # Line buffered
             )
             
             # Check if process started successfully
@@ -1085,6 +1118,11 @@ def download_molecules():
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}")
+            print(f"📊 Streaming output in real-time...")
+            
+            # Stream output in background thread
+            from stream_process_output import stream_output
+            stream_output(process, str(process.pid), log_callback=lambda msg: print(msg))
             
             return jsonify({
                 'success': True,
@@ -1113,19 +1151,21 @@ def download_molecules():
 @app.route('/download/drugs', methods=['POST'])
 def download_drugs():
     """
-    Download drugs by name or disease.
+    Download drugs by name, disease, or bulk download.
     
     Request body (JSON):
     {
         "names": ["donepezil", "rivastigmine"],  // Optional: list of drug names
         "disease": "Alzheimer's disease",  // Optional: disease name
-        "count": 10  // Optional: number of drugs per disease
+        "count": 10,  // Optional: number of drugs per disease or max drugs for bulk
+        "bulk": true  // Optional: bulk download common drugs (ignores names/disease)
     }
     
     Response (JSON):
     {
         "success": true,
-        "message": "Download started"
+        "message": "Download started",
+        "task_id": "..."
     }
     """
     try:
@@ -1133,11 +1173,12 @@ def download_drugs():
         names = data.get('names', [])
         disease = data.get('disease')
         count = data.get('count', 10)
+        bulk = data.get('bulk', False)
         
-        if not names and not disease:
+        if not names and not disease and not bulk:
             return jsonify({
                 'success': False,
-                'error': 'Either names or disease must be provided'
+                'error': 'Either names, disease, or bulk must be provided'
             }), 400
         
         import subprocess
@@ -1149,7 +1190,30 @@ def download_drugs():
         venv_python = Path(__file__).parent.parent / "venv" / "bin" / "python"
         python_exec = str(venv_python) if venv_python.exists() else sys.executable
         
-        if names:
+        if bulk:
+            # Bulk download drugs - use RxNorm for 1000+ drugs (better for drug-specific data)
+            # RxNorm API: https://lhncbc.nlm.nih.gov/RxNav/APIs/index.html
+            if count and count >= 1000:
+                script_path = Path(__file__).parent / "download_drugs_rxnorm.py"
+                if script_path.exists():
+                    cmd = [python_exec, str(script_path), '--max-drugs', str(count)]
+                else:
+                    # Fallback to PubChem bulk download
+                    script_path = Path(__file__).parent / "download_drugs_bulk.py"
+                    cmd = [python_exec, str(script_path), '--max-drugs', str(count), '--use-cid-search']
+            else:
+                # For smaller downloads, use PubChem bulk (faster for < 1000)
+                script_path = Path(__file__).parent / "download_drugs_bulk.py"
+                cmd = [python_exec, str(script_path)]
+                if count:
+                    cmd.extend(['--max-drugs', str(count)])
+            
+            if not script_path.exists():
+                return jsonify({
+                    'success': False,
+                    'error': f'Bulk download script not found: {script_path}'
+                }), 500
+        elif names:
             # Download by names
             script_path = Path(__file__).parent / "download_by_name.py"
             if not script_path.exists():
@@ -1160,17 +1224,18 @@ def download_drugs():
             names_str = ','.join(names)
             cmd = [python_exec, str(script_path), 'drugs', '--names', names_str]
         else:
-            # Download by disease (use existing script)
-            script_path = Path(__file__).parent / "download_disease_drugs.py"
+            # Download by disease - use download_by_name.py for single disease downloads
+            # This uses PubChem to search for drugs by disease indication
+            script_path = Path(__file__).parent / "download_by_name.py"
             if not script_path.exists():
                 return jsonify({
                     'success': False,
                     'error': f'Download script not found: {script_path}'
                 }), 500
-            if 'alzheimer' in disease.lower():
-                cmd = [python_exec, str(script_path), '--alzheimers-only']
-            else:
-                cmd = [python_exec, str(script_path), '--top-100', '--max-diseases', '1', '--max-drugs-per-disease', str(count)]
+            
+            # Use download_by_name.py to download drugs for a specific disease
+            # This script uses PubChem API to search for drugs by disease indication
+            cmd = [python_exec, str(script_path), 'diseases', '--names', disease, '--max-drugs', str(count)]
         
         print(f"🔍 Running download command: {' '.join(cmd)}")
         
@@ -1184,7 +1249,8 @@ def download_drugs():
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
-                cwd=str(Path(__file__).parent)
+                cwd=str(Path(__file__).parent),
+                bufsize=1  # Line buffered
             )
             
             if process.poll() is not None:
@@ -1197,6 +1263,11 @@ def download_drugs():
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}")
+            print(f"📊 Streaming output in real-time...")
+            
+            # Stream output in background thread
+            from stream_process_output import stream_output
+            stream_output(process, str(process.pid), log_callback=lambda msg: print(msg))
             
             return jsonify({
                 'success': True,
@@ -1227,28 +1298,33 @@ def download_diseases():
     """
     Download diseases by name or bulk.
     
+    For bulk downloads, uses NLM Clinical Tables API which provides 2,400+ medical conditions
+    with ICD-10-CM and ICD-9-CM codes.
+    
     Request body (JSON):
     {
         "names": ["Alzheimer's disease", "diabetes"],  // Optional: list of disease names
-        "count": 100  // Optional: number of top diseases to download
+        "count": 100  // Optional: number of diseases to download (bulk uses NLM API)
     }
     
     Response (JSON):
     {
         "success": true,
-        "message": "Download started"
+        "message": "Download started",
+        "task_id": "..."
     }
+    
+    References:
+    - NLM Clinical Tables API: https://clinicaltables.nlm.nih.gov/apidoc/conditions/v3/doc.html
     """
     try:
         data = request.get_json() or {}
         names = data.get('names', [])
         count = data.get('count')
         
-        if not names and not count:
-            return jsonify({
-                'success': False,
-                'error': 'Either names or count must be provided'
-            }), 400
+        if not names and count is None:
+            # If no names and no count, download all diseases from NLM
+            count = None  # Will download all from NLM dataset
         
         import subprocess
         import sys
@@ -1270,14 +1346,23 @@ def download_diseases():
             names_str = ','.join(names)
             cmd = [python_exec, str(script_path), 'diseases', '--names', names_str]
         else:
-            # Bulk download
-            script_path = Path(__file__).parent / "download_disease_drugs.py"
-            if not script_path.exists():
-                return jsonify({
-                    'success': False,
-                    'error': f'Download script not found: {script_path}'
-                }), 500
-            cmd = [python_exec, str(script_path), '--top-100', '--max-diseases', str(count)]
+            # Bulk download - use NLM Clinical Tables for comprehensive disease data
+            # NLM provides 2,400+ medical conditions with ICD codes
+            # If count is None, download all diseases from the dataset
+            script_path = Path(__file__).parent / "download_diseases_nlm.py"
+            if script_path.exists():
+                cmd = [python_exec, str(script_path), '--use-download']
+                if count:
+                    cmd.extend(['--max-diseases', str(count)])
+            else:
+                # Fallback to top 100 diseases
+                script_path = Path(__file__).parent / "download_disease_drugs.py"
+                if not script_path.exists():
+                    return jsonify({
+                        'success': False,
+                        'error': f'Download script not found: {script_path}'
+                    }), 500
+                cmd = [python_exec, str(script_path), '--top-100', '--max-diseases', str(count)]
         
         print(f"🔍 Running download command: {' '.join(cmd)}")
         
@@ -1291,7 +1376,8 @@ def download_diseases():
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
-                cwd=str(Path(__file__).parent)
+                cwd=str(Path(__file__).parent),
+                bufsize=1  # Line buffered
             )
             
             if process.poll() is not None:
@@ -1304,6 +1390,11 @@ def download_diseases():
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}")
+            print(f"📊 Streaming output in real-time...")
+            
+            # Stream output in background thread
+            from stream_process_output import stream_output
+            stream_output(process, str(process.pid), log_callback=lambda msg: print(msg))
             
             return jsonify({
                 'success': True,

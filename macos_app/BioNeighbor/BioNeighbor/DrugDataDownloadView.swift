@@ -47,9 +47,11 @@ struct DrugDataDownloadView: View {
             List(DownloadSection.allCases, id: \.self, selection: $selectedSection) { section in
                 Label(section.rawValue, systemImage: section.icon)
                     .tag(section)
+                    .accessibilityIdentifier("downloadSection_\(section.rawValue)")
             }
             .navigationTitle("Download Data")
             .frame(minWidth: 200)
+            .accessibilityIdentifier("downloadDataSidebar")
         } detail: {
             // Main content
             Group {

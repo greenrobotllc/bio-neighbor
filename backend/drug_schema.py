@@ -79,18 +79,11 @@ def update_drug_diseases_table(conn: sqlite3.Connection):
 def initialize_drug_schema():
     """
     Initialize drugs table schema in the database.
+    DEPRECATED: Use db_migrations.migrate_database() instead.
+    This function is kept for backward compatibility.
     """
-    if not DB_PATH.exists():
-        print("⚠️  Database not found. Please run data setup first.")
-        return
-    
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        create_drugs_table(conn)
-        update_drug_diseases_table(conn)
-        print("✅ Drugs table schema initialized")
-    finally:
-        conn.close()
+    from db_migrations import migrate_database
+    migrate_database()
 
 
 if __name__ == "__main__":

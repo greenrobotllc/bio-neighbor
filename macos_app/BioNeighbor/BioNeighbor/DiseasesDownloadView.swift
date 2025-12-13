@@ -250,30 +250,29 @@ struct DiseasesDownloadView: View {
     private func startStatusPolling(taskId: String) {
         statusTimer?.invalidate()
         
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-            guard let self = self, self.isDownloading else {
+        let timerTaskId = taskId
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
+            guard self.isDownloading else {
                 timer.invalidate()
                 return
             }
             
-            Task {
+            Task { @MainActor in
                 do {
-                    let status = try await self.backendService.getDownloadStatus(taskId: taskId)
-                    await MainActor.run {
-                        if let running = status.running {
-                            if !running {
-                                self.isDownloading = false
-                                timer.invalidate()
-                                if let exitCode = status.exitCode, exitCode == 0 {
-                                    self.downloadProgress = status.message ?? "Download completed successfully"
-                                    self.loadStats()
-                                } else {
-                                    self.errorMessage = status.message ?? "Download failed"
-                                    self.downloadProgress = ""
-                                }
+                    let status = try await self.backendService.getDownloadStatus(taskId: timerTaskId)
+                    if let running = status.running {
+                        if !running {
+                            self.isDownloading = false
+                            timer.invalidate()
+                            if let exitCode = status.exitCode, exitCode == 0 {
+                                self.downloadProgress = status.message ?? "Download completed successfully"
+                                self.loadStats()
                             } else {
-                                self.downloadProgress = status.message ?? "Download in progress..."
+                                self.errorMessage = status.message ?? "Download failed"
+                                self.downloadProgress = ""
                             }
+                        } else {
+                            self.downloadProgress = status.message ?? "Download in progress..."
                         }
                     }
                 } catch {

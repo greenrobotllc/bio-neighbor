@@ -7,7 +7,6 @@
 
 import SwiftUI
 import RxSwift
-import RxCocoa
 import Combine
 
 
@@ -21,6 +20,8 @@ class DrugsDownloadViewModel: ObservableObject {
     @Published var diseaseSearchText = ""
     @Published var diseaseSearchResults: [SearchResult] = []
     @Published var maxDrugsPerDisease = 10
+    @Published var bulkDownloadCount: Int? = nil
+    @Published var useBulkDownload = false
     @Published var currentDownloadState: DownloadState = .idle
     @Published var errorMessage: String?
     
@@ -155,6 +156,21 @@ class DrugsDownloadViewModel: ObservableObject {
             )
             .disposed(by: disposeBag)
     }
+    
+    func downloadBulk() {
+        guard backendService.isBackendRunning else { return }
+        
+        downloadService.downloadDrugsBulk(maxDrugs: bulkDownloadCount)
+            .observe(on: MainScheduler.instance)
+            .subscribe(
+                onNext: { _ in },
+                onError: { [weak self] error in
+                    self?.errorMessage = error.localizedDescription
+                    self?.currentDownloadState = .failed(error: error.localizedDescription)
+                }
+            )
+            .disposed(by: disposeBag)
+    }
 }
 
 struct DrugsDownloadViewRx: View {
@@ -167,6 +183,7 @@ struct DrugsDownloadViewRx: View {
                 Text("Download Drugs")
                     .font(.largeTitle)
                     .fontWeight(.bold)
+                    .accessibilityIdentifier("downloadDrugsTitle")
                 
                 if let stats = viewModel.stats {
                     HStack {
@@ -184,6 +201,59 @@ struct DrugsDownloadViewRx: View {
                 
                 Divider()
                 
+                // Bulk download section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Bulk Download")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Download common drugs from PubChem")
+                            .font(.headline)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("• Downloads ~50+ common prescription drugs")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("• Includes pain relievers, antibiotics, cardiovascular, diabetes, mental health drugs")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("• Automatically matches to existing molecules")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(8)
+                        
+                        HStack {
+                            Text("Max drugs (optional):")
+                            TextField("No limit", value: $viewModel.bulkDownloadCount, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 100)
+                        }
+                        
+                        Button(action: { viewModel.downloadBulk() }) {
+                            HStack {
+                                if case .inProgress = viewModel.currentDownloadState {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                }
+                                Text("Download Common Drugs")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
+                        .accessibilityIdentifier("downloadDrugsBulkButton")
+                    }
+                }
+                
+                Divider()
+                
                 // Download by name section
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Download by Name")
@@ -196,6 +266,7 @@ struct DrugsDownloadViewRx: View {
                         
                         TextField("Enter drug name...", text: $viewModel.searchText)
                             .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("drugSearchField")
                         
                         if !viewModel.searchResults.isEmpty {
                             List(viewModel.searchResults) { result in
@@ -272,6 +343,7 @@ struct DrugsDownloadViewRx: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(viewModel.isDownloading || !backendService.isBackendRunning || (viewModel.selectedNames.isEmpty && viewModel.batchNames.isEmpty))
+                    .accessibilityIdentifier("downloadDrugsByNameButton")
                 }
                 
                 Divider()
@@ -288,6 +360,7 @@ struct DrugsDownloadViewRx: View {
                         
                         TextField("Enter disease name...", text: $viewModel.diseaseSearchText)
                             .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("diseaseSearchField")
                         
                         if !viewModel.diseaseSearchResults.isEmpty {
                             List(viewModel.diseaseSearchResults) { result in
@@ -332,6 +405,7 @@ struct DrugsDownloadViewRx: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
+                        .accessibilityIdentifier("downloadDrugsByDiseaseButton")
                     }
                 }
                 

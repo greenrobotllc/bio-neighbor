@@ -7,7 +7,6 @@
 
 import Foundation
 import RxSwift
-import RxCocoa
 import Combine
 
 enum DownloadState {
@@ -90,7 +89,7 @@ class ReactiveDownloadService {
     
     // MARK: - Molecule Downloads
     
-    func downloadMolecules(count: Int, source: String) -> Observable<String> {
+    func downloadMolecules(count: Int? = nil, source: String = "pubchem", fullFile: Bool = false) -> Observable<String> {
         return Observable.create { [weak self] observer in
             guard let self = self else {
                 observer.onError(BackendError.backendNotAvailable)
@@ -108,7 +107,8 @@ class ReactiveDownloadService {
                 do {
                     let response = try await self.backendService.downloadMolecules(
                         count: count,
-                        source: source
+                        source: source,
+                        fullFile: fullFile
                     )
                     
                     if let taskId = response.taskId {
@@ -238,6 +238,53 @@ class ReactiveDownloadService {
         }
     }
     
+    func downloadDrugsBulk(maxDrugs: Int? = nil) -> Observable<String> {
+        return Observable.create { [weak self] observer in
+            guard let self = self else {
+                observer.onError(BackendError.backendNotAvailable)
+                return Disposables.create()
+            }
+            
+            let progress = DownloadProgress(
+                taskId: UUID().uuidString,
+                state: .starting,
+                timestamp: Date()
+            )
+            self.downloadProgressSubject.onNext(progress)
+            
+            Task {
+                do {
+                    let response = try await self.backendService.downloadDrugs(count: maxDrugs, bulk: true)
+                    
+                    if let taskId = response.taskId {
+                        observer.onNext(taskId)
+                        observer.onCompleted()
+                        self.pollDownloadStatus(taskId: taskId, type: "drugs")
+                    } else {
+                        let completed = DownloadProgress(
+                            taskId: progress.taskId,
+                            state: .completed(message: response.message ?? "Download started"),
+                            timestamp: Date()
+                        )
+                        self.downloadProgressSubject.onNext(completed)
+                        observer.onNext(progress.taskId)
+                        observer.onCompleted()
+                    }
+                } catch {
+                    let failed = DownloadProgress(
+                        taskId: progress.taskId,
+                        state: .failed(error: error.localizedDescription),
+                        timestamp: Date()
+                    )
+                    self.downloadProgressSubject.onNext(failed)
+                    observer.onError(error)
+                }
+            }
+            
+            return Disposables.create()
+        }
+    }
+    
     func downloadDrugs(disease: String, count: Int) -> Observable<String> {
         return Observable.create { [weak self] observer in
             guard let self = self else {
@@ -337,7 +384,7 @@ class ReactiveDownloadService {
         }
     }
     
-    func downloadDiseases(count: Int) -> Observable<String> {
+    func downloadAllDiseases() -> Observable<String> {
         return Observable.create { [weak self] observer in
             guard let self = self else {
                 observer.onError(BackendError.backendNotAvailable)
@@ -353,7 +400,8 @@ class ReactiveDownloadService {
             
             Task {
                 do {
-                    let response = try await self.backendService.downloadDiseases(count: count)
+                    // Download all diseases (no count = all from NLM dataset)
+                    let response = try await self.backendService.downloadDiseases(count: nil)
                     
                     if let taskId = response.taskId {
                         observer.onNext(taskId)
@@ -411,7 +459,7 @@ class ReactiveDownloadService {
             return Disposables.create()
         }
         .debounce(.milliseconds(300), scheduler: MainScheduler.instance)
-        .distinctUntilChanged()
+        .distinctUntilChanged { $0 == $1 }
     }
     
     func searchDrugs(query: String, limit: Int = 20) -> Observable<[SearchResult]> {
@@ -439,7 +487,7 @@ class ReactiveDownloadService {
             return Disposables.create()
         }
         .debounce(.milliseconds(300), scheduler: MainScheduler.instance)
-        .distinctUntilChanged()
+        .distinctUntilChanged { $0 == $1 }
     }
     
     func searchDiseases(query: String, limit: Int = 20) -> Observable<[SearchResult]> {
@@ -467,7 +515,7 @@ class ReactiveDownloadService {
             return Disposables.create()
         }
         .debounce(.milliseconds(300), scheduler: MainScheduler.instance)
-        .distinctUntilChanged()
+        .distinctUntilChanged { $0 == $1 }
     }
     
     // MARK: - Status Polling

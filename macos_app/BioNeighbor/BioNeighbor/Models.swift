@@ -267,12 +267,14 @@ struct DownloadMoleculesRequest: Codable {
     let count: Int?
     let source: String?
     let names: [String]?
+    let full_file: Bool?
 }
 
 struct DownloadDrugsRequest: Codable {
     let names: [String]?
     let disease: String?
     let count: Int?
+    let bulk: Bool?
 }
 
 struct DownloadDiseasesRequest: Codable {
@@ -294,7 +296,7 @@ struct DownloadResponse: Codable {
     }
 }
 
-struct SearchResult: Codable, Identifiable {
+struct SearchResult: Codable, Identifiable, Equatable {
     let id: Int
     let name: String
     let chemblId: String?
@@ -320,12 +322,59 @@ struct AutocompleteResponse: Codable {
     let error: String?
 }
 
+struct APIProgressInfo: Codable {
+    let taskId: String?
+    let status: String?
+    let message: String?
+    let timestamp: Double?
+    let details: ProgressDetails?
+    
+    enum CodingKeys: String, CodingKey {
+        case taskId = "task_id"
+        case status
+        case message
+        case timestamp
+        case details
+    }
+}
+
+struct ProgressDetails: Codable {
+    let currentDisease: String?
+    let diseaseIndex: Int?
+    let totalDiseases: Int?
+    let progressPercent: Double?
+    let drugsFound: Int?
+    let drugsLoaded: Int?
+    let totalDrugs: Int?
+    let loadProgressPercent: Double?
+    let drugsSaved: Int?
+    let relationshipsCreated: Int?
+    let stage: String?
+    let totalTime: Double?
+    
+    enum CodingKeys: String, CodingKey {
+        case currentDisease = "current_disease"
+        case diseaseIndex = "disease_index"
+        case totalDiseases = "total_diseases"
+        case progressPercent = "progress_percent"
+        case drugsFound = "drugs_found"
+        case drugsLoaded = "drugs_loaded"
+        case totalDrugs = "total_drugs"
+        case loadProgressPercent = "load_progress_percent"
+        case drugsSaved = "drugs_saved"
+        case relationshipsCreated = "relationships_created"
+        case stage
+        case totalTime = "total_time"
+    }
+}
+
 struct DownloadStatusResponse: Codable {
     let success: Bool
     let running: Bool?
     let exitCode: Int?
     let message: String?
     let error: String?
+    let progress: APIProgressInfo?
     
     enum CodingKeys: String, CodingKey {
         case success
@@ -333,6 +382,7 @@ struct DownloadStatusResponse: Codable {
         case exitCode = "exit_code"
         case message
         case error
+        case progress
     }
 }
 

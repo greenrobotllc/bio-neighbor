@@ -53,12 +53,20 @@ def setup_index(fingerprints, valid_df, force_rebuild: bool = False):
 
 
 def setup_all(max_molecules: int = 10000, force: bool = False):
-    """Run complete setup: data → fingerprints → index."""
+    """Run complete setup: schema → data → fingerprints → index."""
     print("\n🚀 BioNeighbor Setup")
     print("=" * 60)
     print(f"Max molecules: {max_molecules}")
     print(f"Force rebuild: {force}")
     print("=" * 60 + "\n")
+    
+    # Step 0: Initialize/migrate database schema
+    from db_migrations import migrate_database
+    print("🔧 Initializing database schema...")
+    if not migrate_database():
+        print("❌ Database schema initialization failed")
+        return
+    print("✅ Database schema ready\n")
     
     # Step 1: Load data
     df = setup_data(max_molecules=max_molecules, force_download=force)

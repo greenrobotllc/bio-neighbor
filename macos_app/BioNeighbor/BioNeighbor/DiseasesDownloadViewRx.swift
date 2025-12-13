@@ -7,7 +7,6 @@
 
 import SwiftUI
 import RxSwift
-import RxCocoa
 import Combine
 
 
@@ -17,7 +16,6 @@ class DiseasesDownloadViewModel: ObservableObject {
     @Published var searchResults: [SearchResult] = []
     @Published var selectedNames: Set<String> = []
     @Published var batchNames = ""
-    @Published var bulkCount = 100
     @Published var currentDownloadState: DownloadState = .idle
     @Published var errorMessage: String?
     
@@ -116,10 +114,10 @@ class DiseasesDownloadViewModel: ObservableObject {
         batchNames = ""
     }
     
-    func downloadBulk() {
+    func downloadAllDiseases() {
         guard backendService.isBackendRunning else { return }
         
-        downloadService.downloadDiseases(count: bulkCount)
+        downloadService.downloadAllDiseases()
             .observe(on: MainScheduler.instance)
             .subscribe(
                 onNext: { _ in },
@@ -142,6 +140,7 @@ struct DiseasesDownloadViewRx: View {
                 Text("Download Diseases")
                     .font(.largeTitle)
                     .fontWeight(.bold)
+                    .accessibilityIdentifier("downloadDiseasesTitle")
                 
                 if let stats = viewModel.stats {
                     HStack {
@@ -171,6 +170,7 @@ struct DiseasesDownloadViewRx: View {
                         
                         TextField("Enter disease name...", text: $viewModel.searchText)
                             .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("diseaseNameSearchField")
                         
                         if !viewModel.searchResults.isEmpty {
                             List(viewModel.searchResults) { result in
@@ -247,47 +247,56 @@ struct DiseasesDownloadViewRx: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(viewModel.isDownloading || !backendService.isBackendRunning || (viewModel.selectedNames.isEmpty && viewModel.batchNames.isEmpty))
+                    .accessibilityIdentifier("downloadDiseasesByNameButton")
                 }
                 
                 Divider()
                 
-                // Bulk download
+                // Download all diseases from NLM
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Bulk Download")
+                    Text("Download All Diseases")
                         .font(.title2)
                         .fontWeight(.bold)
                     
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Download top \(viewModel.bulkCount) diseases")
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Download complete NLM medical conditions dataset")
                             .font(.headline)
                         
-                        HStack {
-                            Slider(value: Binding(
-                                get: { Double(viewModel.bulkCount) },
-                                set: { viewModel.bulkCount = Int($0) }
-                            ), in: 10...100, step: 10)
-                            
-                            TextField("Count", value: $viewModel.bulkCount, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 100)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("• Downloads 2,400+ medical conditions from NLM")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("• Includes ICD-10-CM and ICD-9-CM codes")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("• Includes synonyms and consumer-friendly names")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("• Downloads from gzipped JSON file")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                    }
-                    
-                    Button(action: { viewModel.downloadBulk() }) {
-                        HStack {
-                            if viewModel.isDownloading {
-                                ProgressView()
-                                    .progressViewStyle(.circular)
-                                    .scaleEffect(0.8)
-                            } else {
-                                Image(systemName: "arrow.down.circle.fill")
+                        .padding()
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(8)
+                        
+                        Button(action: { viewModel.downloadAllDiseases() }) {
+                            HStack {
+                                if viewModel.isDownloading {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                }
+                                Text("Download All Diseases (2,400+)")
                             }
-                            Text("Download Top \(viewModel.bulkCount) Diseases")
+                            .frame(maxWidth: .infinity)
                         }
-                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
+                        .accessibilityIdentifier("downloadAllDiseasesButton")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isDownloading || !backendService.isBackendRunning)
                 }
                 
                 // Status messages

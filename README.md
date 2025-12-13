@@ -154,7 +154,18 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
    source venv/bin/activate
    ```
 
-4. **Set up the data and build the search index:**
+4. **Initialize database schema (first time only):**
+   ```bash
+   python backend/db_migrations.py
+   ```
+   This will:
+   - Create all database tables (molecules, diseases, drugs, etc.)
+   - Set up indexes and foreign keys
+   - Track schema version for future migrations
+   
+   **Note:** The schema is automatically initialized when running `setup` or download scripts, but you can run this manually to ensure the database is ready.
+
+5. **Set up the data and build the search index:**
    ```bash
    python backend/main.py setup --max-molecules 10000
    ```
@@ -163,10 +174,11 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
    - Falls back to PubChem, ChEMBL, or sample data if needed
    - Compute molecular fingerprints using RDKit
    - Build the FAISS similarity search index
+   - Automatically run database migrations if needed
    
    **Note:** For 10,000+ molecules, ZINC database is recommended. If automatic download fails, see [DOWNLOAD_DATA.md](DOWNLOAD_DATA.md) for manual download instructions.
 
-5. **Test the backend (optional):**
+6. **Test the backend (optional):**
    ```bash
    # Search for molecules similar to aspirin
    python backend/main.py search "CC(=O)Oc1ccccc1C(=O)O" --top-k 5
@@ -175,7 +187,7 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
    python backend/api.py --mode http
    ```
 
-6. **Build and run the macOS app:**
+7. **Build and run the macOS app:**
    - Open Xcode
    - Create a new macOS App project in `macos_app/` directory
    - Add all Swift files from `macos_app/BioNeighbor/`
@@ -206,6 +218,33 @@ python backend/main.py search "CC(=O)Oc1ccccc1C(=O)O" --top-k 10
 # Search by ChEMBL ID
 python backend/main.py search-chembl CHEMBL25 --top-k 5
 ```
+
+### Database Schema Management
+
+The database schema is managed through a migration system:
+
+- **`backend/db_schema.py`**: Defines all table structures
+- **`backend/db_migrations.py`**: Handles schema migrations and versioning
+- **`backend/SCHEMA.md`**: Complete schema documentation
+
+**Running migrations:**
+```bash
+# Check current schema version
+python backend/db_migrations.py --check
+
+# Run migrations (automatic - run this if you get schema errors)
+python backend/db_migrations.py
+
+# Force recreate all tables (DANGEROUS - deletes all data!)
+python backend/db_migrations.py --force-recreate
+```
+
+Migrations run automatically when:
+- Running `python backend/main.py setup`
+- Running any download script (molecules, drugs, diseases)
+- Starting the API server
+
+See [backend/SCHEMA.md](backend/SCHEMA.md) for complete schema documentation.
 
 ### Project Structure
 
