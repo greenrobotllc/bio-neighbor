@@ -133,7 +133,7 @@ class BackendService: ObservableObject {
         
         // Drain stdout to prevent deadlock
         let outputHandle = outputPipe.fileHandleForReading
-        outputHandle.readabilityHandler = { [weak self] handle in
+        outputHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -149,7 +149,7 @@ class BackendService: ObservableObject {
         
         // Drain stderr to prevent deadlock
         let errorHandle = errorPipe.fileHandleForReading
-        errorHandle.readabilityHandler = { [weak self] handle in
+        errorHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
@@ -336,7 +336,11 @@ class BackendService: ObservableObject {
             throw BackendError.invalidResponse
         }
         
-        return (moleculeResponse.molecule, moleculeResponse.similar ?? [])
+        guard let molecule = moleculeResponse.molecule else {
+            throw BackendError.invalidResponse
+        }
+        
+        return (molecule, moleculeResponse.similar ?? [])
     }
     
     func renderMolecule(smiles: String, width: Int = 400, height: Int = 400) async throws -> NSImage? {
@@ -493,7 +497,7 @@ class BackendService: ObservableObject {
             throw BackendError.invalidResponse
         }
         
-        return response.diseases
+        return response.diseases ?? []
     }
     
     func getDiseaseMolecules(diseaseName: String, limit: Int? = nil) async throws -> [MoleculeBasic] {
