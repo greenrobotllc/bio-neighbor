@@ -1194,6 +1194,22 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
     try:
         conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
         
+        # Ensure molecules table exists before upsert (guard for fresh/partial DB state)
+        try:
+            from db_schema import get_create_table_sql, get_create_index_sql
+        except ImportError:
+            try:
+                from .db_schema import get_create_table_sql, get_create_index_sql
+            except ImportError:
+                from backend.db_schema import get_create_table_sql, get_create_index_sql
+        
+        # Create molecules table if it doesn't exist
+        cursor.execute(get_create_table_sql('molecules'))
+        
+        # Create indexes if they don't exist
+        for index_sql in get_create_index_sql('molecules'):
+            cursor.execute(index_sql)
+        
         # Use replace mode but with retry logic
         # WARNING: if_exists='replace' will drop and recreate the entire molecules table,
         # which can invalidate foreign key references in other tables (e.g., drug_diseases.molecule_index).
@@ -1248,8 +1264,6 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
                 else:
                     raise
         
-        # Create index on chembl_id for faster lookups
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chembl_id ON molecules(chembl_id)")
         conn.commit()
     finally:
         cursor.close()
@@ -1263,28 +1277,42 @@ def load_from_database() -> Optional[pd.DataFrame]:
     if DB_PATH.exists():
         print(f"📂 Loading molecules from database: {DB_PATH}")
         conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql_query("SELECT * FROM molecules", conn)
-        conn.close()
-        
-        # Convert JSON strings back to lists
-        if 'targets' in df.columns:
-            df['targets'] = df['targets'].apply(
-                lambda x: json.loads(x) if isinstance(x, str) else []
-            )
-        
-        # Add new columns with default values if missing (backward compatibility)
-        new_columns = {
-            'formula': '',
-            'inchi': '',
-            'inchikey': '',
-            'pubchem_cid': ''
-        }
-        for col, default_val in new_columns.items():
-            if col not in df.columns:
-                df[col] = default_val
-        
-        print(f"✅ Loaded {len(df)} molecules from database")
-        return df
+        try:
+            df = pd.read_sql_query("SELECT * FROM molecules", conn)
+            
+            # Convert JSON strings back to lists
+            if 'targets' in df.columns:
+                df['targets'] = df['targets'].apply(
+                    lambda x: json.loads(x) if isinstance(x, str) else []
+                )
+            
+            # Add new columns with default values if missing (backward compatibility)
+            new_columns = {
+                'formula': '',
+                'inchi': '',
+                'inchikey': '',
+                'pubchem_cid': ''
+            }
+            for col, default_val in new_columns.items():
+                if col not in df.columns:
+                    df[col] = default_val
+            
+            print(f"✅ Loaded {len(df)} molecules from database")
+            return df
+        except sqlite3.OperationalError as e:
+            error_msg = str(e).lower()
+            if "no such table" in error_msg or "molecules" in error_msg:
+                print(f"⚠️  Warning: molecules table does not exist in database. This may indicate a fresh or corrupted database.")
+                print(f"   Error: {e}")
+                return None
+            else:
+                # Re-raise unexpected operational errors
+                raise
+        except Exception as e:
+            # Re-raise unexpected exceptions
+            raise
+        finally:
+            conn.close()
     return None
 
 
