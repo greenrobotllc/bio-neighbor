@@ -578,22 +578,25 @@ def create_sample_data(max_molecules: int = 100) -> pd.DataFrame:
     ]
     
     molecules_data = []
-    # Use all available drugs first
+    # Use all available drugs first, but filter to drug-like MW range (150-800)
+    # This matches the constraint used in parse_smiles_file() for consistency
     for i, (chembl_id, name, smiles, mw, approved) in enumerate(sample_drugs):
         if len(molecules_data) >= max_molecules:
             break
-        molecules_data.append({
-            'chembl_id': f"SAMPLE_{i+1}",
-            'smiles': smiles,
-            'name': name,
-            'molecular_weight': mw,
-            'is_approved': approved,
-            'targets': [],
-            'formula': '',
-            'inchi': '',
-            'inchikey': '',
-            'pubchem_cid': ''
-        })
+        # Filter to drug-like molecular weight range (150-800) for consistency
+        if 150 <= mw <= 800:
+            molecules_data.append({
+                'chembl_id': f"SAMPLE_{i+1}",
+                'smiles': smiles,
+                'name': name,
+                'molecular_weight': mw,
+                'is_approved': approved,
+                'targets': [],
+                'formula': '',
+                'inchi': '',
+                'inchikey': '',
+                'pubchem_cid': ''
+            })
     
     # If we need more, create variations by duplicating with different IDs
     # This allows testing with larger datasets even with limited unique molecules
@@ -607,22 +610,24 @@ def create_sample_data(max_molecules: int = 100) -> pd.DataFrame:
         
         while len(molecules_data) < max_molecules:
             base_idx = variation_count % len(base_drugs)
-            base_id, base_name, base_smiles, base_mw, base_approved = base_drugs[base_idx]
+            _base_id, base_name, base_smiles, base_mw, _base_approved = base_drugs[base_idx]
             
-            # Create a variation by using the same SMILES but different ID
-            # In a real implementation, you'd modify the SMILES to create actual variations
-            molecules_data.append({
-                'chembl_id': f"SAMPLE_VAR_{len(molecules_data)+1}",
-                'smiles': base_smiles,  # Same SMILES, different ID for testing
-                'name': f"{base_name} (test variant {variation_count // len(base_drugs) + 1})",
-                'molecular_weight': base_mw,
-                'is_approved': False,  # Variants are not approved
-                'targets': [],
-                'formula': '',
-                'inchi': '',
-                'inchikey': '',
-                'pubchem_cid': ''
-            })
+            # Filter to drug-like MW range (150-800) for consistency
+            if 150 <= base_mw <= 800:
+                # Create a variation by using the same SMILES but different ID
+                # In a real implementation, you'd modify the SMILES to create actual variations
+                molecules_data.append({
+                    'chembl_id': f"SAMPLE_VAR_{len(molecules_data)+1}",
+                    'smiles': base_smiles,  # Same SMILES, different ID for testing
+                    'name': f"{base_name} (test variant {variation_count // len(base_drugs) + 1})",
+                    'molecular_weight': base_mw,
+                    'is_approved': False,  # Variants are not approved
+                    'targets': [],
+                    'formula': '',
+                    'inchi': '',
+                    'inchikey': '',
+                    'pubchem_cid': ''
+                })
             variation_count += 1
             
             if len(molecules_data) % 1000 == 0:
@@ -642,18 +647,34 @@ def download_pubchem_bulk(max_molecules: int = 10000) -> pd.DataFrame:
     Download molecules from PubChem using bulk download methods.
     Uses PubChem's FTP server to download SDF files and convert to SMILES.
     
+    NOTE: This function uses subprocess.run() which can block server threads.
+    It should only be called from CLI scripts, not from the Flask backend.
+    For server use, prefer download_pubchem_subset() which uses the API.
+    
     Args:
         max_molecules: Maximum number of molecules to download
         
     Returns:
         DataFrame with columns: chembl_id, smiles, name, molecular_weight, is_approved, targets
         
+    Raises:
+        RuntimeError: If called from a server context (detected via environment)
+        
     References:
         https://pubchem.ncbi.nlm.nih.gov/docs/downloads
         ftp://ftp.ncbi.nlm.nih.gov/pubchem/Compound/CURRENT-Full/SDF/
     """
-    print(f"📥 Downloading from PubChem FTP (bulk download)...")
-    print(f"   Using PubChem FTP: ftp.ncbi.nlm.nih.gov")
+    # Check if we're running in a server context (Flask backend)
+    import os
+    if os.environ.get('FLASK_APP') or os.environ.get('BIO_NEIGHBOR_SERVER'):
+        raise RuntimeError(
+            "download_pubchem_bulk() cannot be called from the server context. "
+            "It uses subprocess.run() which blocks request threads. "
+            "Use download_pubchem_subset() for server-side downloads, or call this function from CLI scripts only."
+        )
+    
+    print("📥 Downloading from PubChem FTP (bulk download)...")
+    print("   Using PubChem FTP: ftp.ncbi.nlm.nih.gov")
     
     # Use the dedicated FTP download script
     import subprocess
@@ -1016,8 +1037,8 @@ def download_chembl_subset(max_molecules: int = 10000) -> pd.DataFrame:
     # Lazy import to avoid connection on module import
     try:
         from chembl_webresource_client.new_client import new_client
-    except ImportError:
-        raise ImportError("chembl_webresource_client is not installed")
+    except ImportError as e:
+        raise ImportError("chembl_webresource_client is not installed") from e
     
     print("📥 Connecting to ChEMBL database...")
     print("   Using official ChEMBL webresource client")
@@ -1080,8 +1101,7 @@ def download_chembl_subset(max_molecules: int = 10000) -> pd.DataFrame:
         
         # Fill remaining slots with small molecules (if needed)
         if len(molecules_data) < max_molecules:
-            print(f"🔍 Fetching additional small molecules...")
-            remaining = max_molecules - len(molecules_data)
+            print("🔍 Fetching additional small molecules...")
             
             # Get molecules with activity data
             # Use filters to limit results and improve performance
@@ -1133,9 +1153,9 @@ def download_chembl_subset(max_molecules: int = 10000) -> pd.DataFrame:
     except Exception as e:
         error_msg = str(e)
         if "500" in error_msg or "Error 500" in error_msg:
-            print(f"❌ ChEMBL API returned server error (500)")
+            print("❌ ChEMBL API returned server error (500)")
             print("   The ChEMBL service may be temporarily unavailable.")
-            raise ConnectionError("ChEMBL API server error - service may be temporarily unavailable")
+            raise ConnectionError("ChEMBL API server error - service may be temporarily unavailable") from e
         else:
             print(f"❌ Error connecting to ChEMBL: {type(e).__name__}: {error_msg}")
             raise
@@ -1300,12 +1320,15 @@ def load_from_database() -> Optional[pd.DataFrame]:
             return df
         except sqlite3.OperationalError as e:
             error_msg = str(e).lower()
-            if "no such table" in error_msg or "molecules" in error_msg:
-                print(f"⚠️  Warning: molecules table does not exist in database. This may indicate a fresh or corrupted database.")
+            # Narrow filter to only catch the specific "no such table: molecules" case
+            # This prevents masking real schema errors like "no such column"
+            if "no such table: molecules" in error_msg:
+                print("⚠️  Warning: molecules table does not exist in database. This may indicate a fresh or corrupted database.")
                 print(f"   Error: {e}")
                 return None
             else:
-                # Re-raise unexpected operational errors
+                # Re-raise unexpected operational errors (e.g., missing columns, constraint violations)
+                print(f"⚠️  Database operational error: {e}")
                 raise
         except Exception as e:
             # Re-raise unexpected exceptions
