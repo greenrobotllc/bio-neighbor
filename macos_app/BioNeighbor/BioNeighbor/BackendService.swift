@@ -37,6 +37,8 @@ class BackendService: ObservableObject {
     
     private let baseURL = "http://127.0.0.1:5000"
     private var backendProcess: Process?
+    private var outputPipe: Pipe?
+    private var errorPipe: Pipe?
     
     @Published var isBackendRunning = false
     
@@ -93,10 +95,47 @@ class BackendService: ObservableObject {
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
         
-        // Redirect output (optional, for debugging)
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        // Redirect output and drain pipes to prevent deadlock
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        
+        // Retain pipes for the lifetime of the process
+        self.outputPipe = outputPipe
+        self.errorPipe = errorPipe
+        
+        // Drain stdout to prevent deadlock
+        let outputHandle = outputPipe.fileHandleForReading
+        outputHandle.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            // Optionally log or discard the data
+            // For now, we'll just drain it to prevent blocking
+            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                // Uncomment to log backend output:
+                // print("Backend stdout: \(output)")
+            }
+        }
+        
+        // Drain stderr to prevent deadlock
+        let errorHandle = errorPipe.fileHandleForReading
+        errorHandle.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            // Optionally log or discard the data
+            // For now, we'll just drain it to prevent blocking
+            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                // Uncomment to log backend errors:
+                // print("Backend stderr: \(output)")
+            }
+        }
         
         try process.run()
         backendProcess = process
@@ -108,6 +147,12 @@ class BackendService: ObservableObject {
     }
     
     func stopBackend() {
+        // Clean up pipes
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        outputPipe = nil
+        errorPipe = nil
+        
         backendProcess?.terminate()
         backendProcess = nil
         isBackendRunning = false

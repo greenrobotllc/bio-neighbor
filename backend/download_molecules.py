@@ -66,22 +66,41 @@ import pandas as pd
 import sqlite3
 
 
-def download_molecules_by_count(count: int, source: str = "pubchem", use_ftp: bool = True) -> pd.DataFrame:
+def download_molecules_by_count(count: Optional[int] = None, source: str = "pubchem", use_ftp: bool = True, full_file: Optional[bool] = None) -> pd.DataFrame:
     """
     Download molecules by count from specified source.
     
     Args:
-        count: Number of molecules to download
+        count: Number of molecules to download (None = all from downloaded files, required if full_file is False/None)
         source: Source to use ("pubchem", "chembl", "zinc")
         use_ftp: If True and source is pubchem, use FTP instead of API (avoids rate limits)
+        full_file: If True, download complete SDF files and import all molecules (ignores count)
         
     Returns:
         DataFrame with downloaded molecules
     """
+    # Validate inputs
+    if full_file is True:
+        # If full_file is provided, ignore count
+        if source == "pubchem" and use_ftp:
+            print(f"📥 Downloading full file from PubChem FTP (no rate limits)...")
+            return download_from_pubchem_ftp(count=None, full_file=True)
+        else:
+            print("❌ Full file download is only supported for PubChem FTP")
+            return pd.DataFrame()
+    elif full_file is False or full_file is None:
+        # If full_file is not True, require count to be a positive int
+        if count is None:
+            print("❌ Error: count must be provided when full_file is not True")
+            return pd.DataFrame()
+        if not isinstance(count, int) or count <= 0:
+            print(f"❌ Error: count must be a positive integer, got: {count}")
+            return pd.DataFrame()
+    
     if source == "pubchem":
         if use_ftp:
             print(f"📥 Downloading {count} molecules from PubChem FTP (no rate limits)...")
-            return download_from_pubchem_ftp(count)
+            return download_from_pubchem_ftp(count=count, full_file=False)
         else:
             if not PUBCHEM_AVAILABLE:
                 print("❌ PubChem not available. Install with: pip install pubchempy")

@@ -52,10 +52,10 @@ if [ "$PYTHON_MAJOR" = "3" ] && [ "$PYTHON_MINOR" -ge "9" ] && [ "$PYTHON_MINOR"
     
     if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
         # Apple Silicon
-        WHEEL_URL="https://github.com/rdkit/rdkit/releases/download/Release_2023_09_1/rdkit-2023.9.1-cp${PYTHON_MINOR}${PYTHON_MINOR}-cp${PYTHON_MINOR}${PYTHON_MINOR}-macosx_11_0_arm64.whl"
+        WHEEL_URL="https://github.com/rdkit/rdkit/releases/download/Release_2023_09_1/rdkit-2023.9.1-cp${PYTHON_MINOR}-cp${PYTHON_MINOR}-macosx_11_0_arm64.whl"
     else
         # Intel
-        WHEEL_URL="https://github.com/rdkit/rdkit/releases/download/Release_2023_09_1/rdkit-2023.9.1-cp${PYTHON_MINOR}${PYTHON_MINOR}-cp${PYTHON_MINOR}${PYTHON_MINOR}-macosx_10_9_x86_64.whl"
+        WHEEL_URL="https://github.com/rdkit/rdkit/releases/download/Release_2023_09_1/rdkit-2023.9.1-cp${PYTHON_MINOR}-cp${PYTHON_MINOR}-macosx_10_9_x86_64.whl"
     fi
     
     echo "Trying to install from: $WHEEL_URL"

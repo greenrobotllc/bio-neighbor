@@ -15,6 +15,7 @@ try:
 except ImportError:
     PUBCHEM_AVAILABLE = False
 
+import pandas as pd
 from rdkit import Chem
 from pubchem_drug_loader import load_drug_info, match_active_ingredients_to_molecules
 from drugbank_loader import save_drugs_to_db

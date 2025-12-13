@@ -158,25 +158,42 @@ struct WebViewRepresentable: NSViewRepresentable {
     }
     
     private func updateRepresentation(webView: WKWebView, representation: Molecule3DView.RepresentationType) {
-        // Map representation types to 3Dmol.js style names
-        let styleName: String
+        let script: String
         switch representation {
-        case .ballAndStick:
-            styleName = "stick"
-        case .spaceFilling:
-            styleName = "sphere"
-        case .wireframe:
-            styleName = "line"
         case .surface:
-            styleName = "surface"
+            // Surface representation requires addSurface API, not setStyle
+            script = """
+            if (typeof viewer !== 'undefined') {
+                viewer.removeAllSurfaces();
+                viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+                viewer.render();
+            }
+            """
+        case .ballAndStick:
+            script = """
+            if (typeof viewer !== 'undefined') {
+                viewer.removeAllSurfaces();
+                viewer.setStyle({}, {stick: {}});
+                viewer.render();
+            }
+            """
+        case .spaceFilling:
+            script = """
+            if (typeof viewer !== 'undefined') {
+                viewer.removeAllSurfaces();
+                viewer.setStyle({}, {sphere: {}});
+                viewer.render();
+            }
+            """
+        case .wireframe:
+            script = """
+            if (typeof viewer !== 'undefined') {
+                viewer.removeAllSurfaces();
+                viewer.setStyle({}, {line: {}});
+                viewer.render();
+            }
+            """
         }
-        
-        let script = """
-        if (typeof viewer !== 'undefined') {
-            viewer.setStyle({}, {\(styleName): {}});
-            viewer.render();
-        }
-        """
         webView.evaluateJavaScript(script, completionHandler: nil)
     }
 }
