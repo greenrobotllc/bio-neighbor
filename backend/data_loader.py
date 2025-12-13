@@ -1190,6 +1190,7 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
     cursor = conn.cursor()
     try:
         conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
+        conn.execute("PRAGMA foreign_keys=ON")  # Enable foreign key enforcement
         
         # Ensure molecules table exists before upsert (guard for fresh/partial DB state)
         try:
@@ -1220,35 +1221,36 @@ def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
                     # Create temp table with new data
                     df_copy.to_sql('molecules_temp', conn, if_exists='replace', index=False)
                     
-                    # Upsert: insert new rows, update existing ones
-                    cursor.execute("""
-                        INSERT INTO molecules (chembl_id, smiles, name, molecular_weight, is_approved, targets, formula, inchi, inchikey, pubchem_cid)
-                        SELECT chembl_id, smiles, name, molecular_weight, is_approved, targets, formula, inchi, inchikey, pubchem_cid
-                        FROM molecules_temp
-                        WHERE NOT EXISTS (
-                            SELECT 1 FROM molecules WHERE molecules.chembl_id = molecules_temp.chembl_id
-                        )
-                    """)
-                    
-                    # Update existing rows
-                    cursor.execute("""
-                        UPDATE molecules
-                        SET smiles = (SELECT smiles FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            name = (SELECT name FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            molecular_weight = (SELECT molecular_weight FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            is_approved = (SELECT is_approved FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            targets = (SELECT targets FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            formula = (SELECT formula FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            inchi = (SELECT inchi FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            inchikey = (SELECT inchikey FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
-                            pubchem_cid = (SELECT pubchem_cid FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id)
-                        WHERE EXISTS (
-                            SELECT 1 FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id
-                        )
-                    """)
-                    
-                    # Drop temp table
-                    cursor.execute("DROP TABLE IF EXISTS molecules_temp")
+                    try:
+                        # Upsert: insert new rows, update existing ones
+                        cursor.execute("""
+                            INSERT INTO molecules (chembl_id, smiles, name, molecular_weight, is_approved, targets, formula, inchi, inchikey, pubchem_cid)
+                            SELECT chembl_id, smiles, name, molecular_weight, is_approved, targets, formula, inchi, inchikey, pubchem_cid
+                            FROM molecules_temp
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM molecules WHERE molecules.chembl_id = molecules_temp.chembl_id
+                            )
+                        """)
+                        
+                        # Update existing rows
+                        cursor.execute("""
+                            UPDATE molecules
+                            SET smiles = (SELECT smiles FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                name = (SELECT name FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                molecular_weight = (SELECT molecular_weight FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                is_approved = (SELECT is_approved FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                targets = (SELECT targets FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                formula = (SELECT formula FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                inchi = (SELECT inchi FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                inchikey = (SELECT inchikey FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id),
+                                pubchem_cid = (SELECT pubchem_cid FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id)
+                            WHERE EXISTS (
+                                SELECT 1 FROM molecules_temp WHERE molecules_temp.chembl_id = molecules.chembl_id
+                            )
+                        """)
+                    finally:
+                        # Always drop temp table, even on failure
+                        cursor.execute("DROP TABLE IF EXISTS molecules_temp")
                 else:
                     # Fallback to replace if chembl_id is missing (shouldn't happen, but be safe)
                     print("  ⚠️  Warning: chembl_id column missing, using replace strategy (may corrupt relationships)")
@@ -1516,7 +1518,11 @@ def get_molecule_by_id(chembl_id: str) -> Optional[Dict]:
             return None
         
         # Use captured column names to ensure we return all columns even as schema evolves
-        result = dict(zip(columns, row, strict=False))
+        # Python 3.9-compatible: zip() without strict parameter (silently trims to shorter sequence)
+        if len(columns) != len(row):
+            # Log mismatch but continue (schema may have evolved)
+            print(f"  ⚠️  Warning: Column count ({len(columns)}) != row count ({len(row)}) for chembl_id {chembl_id}")
+        result = dict(zip(columns, row))
         
         # Parse targets from JSON string to list (matches load_from_database behavior)
         if isinstance(result.get("targets"), str):
