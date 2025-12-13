@@ -4,11 +4,6 @@ Handles creation and management of drugs table.
 """
 
 import sqlite3
-import json
-from pathlib import Path
-from typing import Dict, Optional
-
-from data_loader import DB_PATH
 
 
 def create_drugs_table(conn: sqlite3.Connection):

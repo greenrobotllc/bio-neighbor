@@ -161,10 +161,12 @@ def download_from_pubchem_ftp(count: Optional[int] = None, full_file: bool = Fal
             cmd.extend(["--max-molecules", str(count)])
         
         # Run with real-time output streaming
+        # Using check=False to handle errors manually and provide better feedback
         result = subprocess.run(
             cmd,
             # Don't capture output - let it stream in real-time
-            timeout=3600  # 60 minute timeout for full file downloads
+            timeout=3600,  # 60 minute timeout for full file downloads
+            check=False  # Don't raise on non-zero exit, handle manually
         )
         
         print("=" * 60)

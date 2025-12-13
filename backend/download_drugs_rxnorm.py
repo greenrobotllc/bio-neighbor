@@ -107,6 +107,8 @@ def get_drugs_by_rxcui(rxcui_list: List[str], max_drugs: Optional[int] = None) -
             time.sleep(0.1)  # Rate limiting
             
         except Exception as e:
+            # Log occasionally to avoid spam
+            # print(f"  ⚠️  Error fetching RXCUI {rxcui}: {e}")
             continue
     
     return drug_names
@@ -124,8 +126,8 @@ def search_rxnorm_drugs(query: str, max_results: int = 100) -> List[str]:
         List of drug names
     """
     try:
-        url = f"{RXNORM_API_BASE}/drugs.json?name={query}"
-        response = requests.get(url, timeout=10)
+        url = f"{RXNORM_API_BASE}/drugs.json"
+        response = requests.get(url, params={'name': query}, timeout=10)
         
         if response.status_code == 200:
             data = response.json()

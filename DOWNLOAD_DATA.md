@@ -66,7 +66,7 @@ gunzip *.smi.gz
 
 **Note:** You may need to download multiple tranches to get 10,000+ molecules. Each tranche contains thousands of molecules.
 
-### Method 2: Using HTTP (if available)
+### Method 3: Using HTTP (if available)
 
 Some ZINC subsets may be available via HTTP:
 

@@ -267,7 +267,14 @@ struct DownloadMoleculesRequest: Codable {
     let count: Int?
     let source: String?
     let names: [String]?
-    let full_file: Bool?
+    let fullFile: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case count
+        case source
+        case names
+        case fullFile = "full_file"
+    }
 }
 
 struct DownloadDrugsRequest: Codable {

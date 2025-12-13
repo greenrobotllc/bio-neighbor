@@ -110,6 +110,11 @@ struct DrugDetailView: View {
                             ProgressView("Loading active ingredients...")
                                 .frame(maxWidth: .infinity)
                                 .padding()
+                        } else if let error = errorMessage {
+                            Text("Error: \(error)")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .padding()
                         } else if activeIngredientMolecules.isEmpty {
                             Text("No active ingredient molecules found")
                                 .font(.caption)

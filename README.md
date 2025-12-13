@@ -176,15 +176,6 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
    ```
    Or see [INSTALL_RDKIT.md](INSTALL_RDKIT.md) for alternative installation methods.
 
-3. **Run the setup script:**
-   ```bash
-   ./setup.sh
-   ```
-   This will:
-   - Create a Python virtual environment (if not using conda)
-   - Install remaining Python dependencies (FAISS, etc.)
-   - Create necessary directories
-
 3. **Activate the virtual environment:**
    ```bash
    source venv/bin/activate
@@ -314,7 +305,7 @@ See [backend/SCHEMA.md](backend/SCHEMA.md) for complete schema documentation.
 
 ### Project Structure
 
-```
+```text
 bio-neighbor/
 ├── backend/                      # Python backend
 │   ├── api.py                    # Flask HTTP API server

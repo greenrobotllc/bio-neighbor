@@ -50,6 +50,10 @@ struct DrugsView: View {
                         Button("Start Backend") {
                             do {
                                 try backendService.startBackend()
+                                // Give backend time to start, then load
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                                    loadDrugs()
+                                }
                             } catch {
                                 errorMessage = error.localizedDescription
                             }

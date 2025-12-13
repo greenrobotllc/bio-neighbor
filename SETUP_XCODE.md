@@ -128,7 +128,7 @@ python backend/api.py --mode http --host 127.0.0.1 --port 5000
 
 ## Project Structure
 
-```
+```text
 bio-neighbor/
 ├── backend/              # Python backend (✅ Ready)
 │   ├── api.py           # HTTP API server

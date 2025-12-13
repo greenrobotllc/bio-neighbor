@@ -48,8 +48,9 @@ def download_molecules(names: List[str]) -> int:
         combined_df = pd.concat([existing_df, df], ignore_index=True)
         if 'pubchem_cid' in combined_df.columns:
             combined_df = combined_df.drop_duplicates(subset=['pubchem_cid'], keep='first')
-        else:
+        elif 'chembl_id' in combined_df.columns:
             combined_df = combined_df.drop_duplicates(subset=['chembl_id'], keep='first')
+        # else: no deduplication key available, keep all rows
         save_to_database(combined_df)
     else:
         save_to_database(df)
@@ -259,7 +260,9 @@ def download_diseases(names: List[str], max_drugs_per_disease: int = 10) -> int:
                                             'pubchem_cid': pubchem_cid,
                                             'molecule_index': None  # No molecule match yet
                                         })
-                                except Exception:
+                                except Exception as fetch_err:
+                                    # Fallback fetch failed; continue with other drugs
+                                    # Optionally: print(f"      ⚠️  Fallback fetch failed for '{drug_name}': {fetch_err}")
                                     pass
                     except Exception as e:
                         print(f"    ⚠️  Error loading drug '{drug_name}': {e}")

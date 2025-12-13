@@ -161,6 +161,14 @@ def match_active_ingredients_to_molecules(
     
     matched_indices = []
     
+    # Pre-compute canonical SMILES for the DataFrame (do this once outside the loop)
+    if 'canonical_smiles' not in molecule_df.columns:
+        molecule_df = molecule_df.copy()
+        molecule_df['canonical_smiles'] = molecule_df['smiles'].apply(
+            lambda x: Chem.MolToSmiles(Chem.MolFromSmiles(x), canonical=True) 
+            if x and Chem.MolFromSmiles(x) else None
+        )
+    
     for ingredient in active_ingredients:
         smiles = ingredient.get('smiles')
         if not smiles:
@@ -175,11 +183,8 @@ def match_active_ingredients_to_molecules(
         except:
             continue
         
-        # Match by canonical SMILES
-        matches = molecule_df[molecule_df['smiles'].apply(
-            lambda x: Chem.MolToSmiles(Chem.MolFromSmiles(x), canonical=True) == canonical_smiles 
-            if x and Chem.MolFromSmiles(x) else False
-        )]
+        # Match by pre-computed canonical SMILES
+        matches = molecule_df[molecule_df['canonical_smiles'] == canonical_smiles]
         
         if len(matches) > 0:
             matched_indices.append(int(matches.index[0]))

@@ -199,7 +199,8 @@ def enrich_drug_with_pubchem(drug: Dict) -> Dict:
             time.sleep(0.2)  # Rate limiting
         
     except Exception as e:
-        # If PubChem enrichment fails, return original drug
+        # If PubChem enrichment fails, return original drug unchanged
+        # Optionally: print(f"  ⚠️  PubChem enrichment failed for {drug.get('name')}: {e}")
         pass
     
     return drug

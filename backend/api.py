@@ -1151,7 +1151,7 @@ def download_molecules():
             
             # Stream output in background thread
             from stream_process_output import stream_output
-            stream_output(process, str(process.pid), log_callback=lambda msg: print(msg))
+            stream_output(process, log_callback=lambda msg: print(msg))
             
             return jsonify({
                 'success': True,
@@ -1315,7 +1315,7 @@ def download_drugs():
             
             # Stream output in background thread
             from stream_process_output import stream_output
-            stream_output(process, str(process.pid), log_callback=lambda msg: print(msg))
+            stream_output(process, log_callback=lambda msg: print(msg))
             
             return jsonify({
                 'success': True,
@@ -1455,7 +1455,7 @@ def download_diseases():
             
             # Stream output in background thread
             from stream_process_output import stream_output
-            stream_output(process, str(process.pid), log_callback=lambda msg: print(msg))
+            stream_output(process, log_callback=lambda msg: print(msg))
             
             return jsonify({
                 'success': True,

@@ -21,6 +21,7 @@ if command -v conda &> /dev/null; then
         conda create -n bioneighbor python=3.11 -y
         echo ""
         echo "Installing RDKit..."
+        # Note: conda activate won't affect parent shell, but needed for this script context
         conda activate bioneighbor
         conda install -c conda-forge rdkit -y
         echo ""

@@ -112,11 +112,15 @@ Notes:
         import sqlite3
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM drug_diseases")
-        cursor.execute("DELETE FROM diseases")
-        conn.commit()
-        conn.close()
-        print("✅ Cleared existing data\n")
+        try:
+            cursor.execute("DELETE FROM drug_diseases")
+            cursor.execute("DELETE FROM diseases")
+            conn.commit()
+            print("✅ Cleared existing data\n")
+        except sqlite3.OperationalError as e:
+            print(f"⚠️  Could not clear existing data (tables may not exist yet): {e}\n")
+        finally:
+            conn.close()
     
     # Load DrugBank data
     print(f"📥 Loading DrugBank data for '{args.disease}'...")

@@ -162,10 +162,13 @@ struct DiseasesDownloadView: View {
                         HStack {
                             Slider(value: Binding(
                                 get: { Double(bulkCount) },
-                                set: { bulkCount = Int($0) }
+                                set: { bulkCount = Int($0.rounded() / 10) * 10 } // Round to nearest 10
                             ), in: 10...100, step: 10)
                             
-                            TextField("Count", value: $bulkCount, format: .number)
+                            TextField("Count", value: Binding(
+                                get: { bulkCount },
+                                set: { bulkCount = max(10, min(100, ($0 / 10) * 10)) } // Constrain to 10-100, step 10
+                            ), format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 100)
                         }

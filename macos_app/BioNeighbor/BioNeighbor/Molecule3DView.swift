@@ -93,11 +93,14 @@ struct WebViewRepresentable: NSViewRepresentable {
         // Convert coordinates to PDB format string
         let pdbString = generatePDBString(coordinates: coordinates)
         
-        // Escape the PDB string for JavaScript
+        // Escape the PDB string for JavaScript template literal
+        // Escape backticks and ${ to prevent breaking the template literal
         let escapedPDB = pdbString
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "${", with: "\\${")
         
         // Determine initial style based on representation
         // Note: Loading 3Dmol-min.js from CDN requires network access and may fail offline.

@@ -145,8 +145,6 @@ def enrich_molecules(df: pd.DataFrame, max_molecules: Optional[int] = None,
     
     print(f"   Found {len(needs_enrichment)} PubChem molecules needing enrichment")
     
-    print(f"   Found {len(needs_enrichment)} PubChem molecules needing enrichment")
-    
     if max_molecules:
         needs_enrichment = needs_enrichment[:max_molecules]
         print(f"   Limiting to {max_molecules} molecules")

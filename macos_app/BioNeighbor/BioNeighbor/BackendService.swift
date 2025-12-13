@@ -55,7 +55,7 @@ class BackendService: ObservableObject {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.0
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
             DispatchQueue.main.async {
                 if let httpResponse = response as? HTTPURLResponse,
                    httpResponse.statusCode == 200 {
@@ -896,7 +896,7 @@ class BackendService: ObservableObject {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.timeoutInterval = 60.0
         
-        let request = DownloadMoleculesRequest(count: count, source: source, names: names, full_file: fullFile ? true : nil)
+        let request = DownloadMoleculesRequest(count: count, source: source, names: names, fullFile: fullFile ? true : nil)
         urlRequest.httpBody = try JSONEncoder().encode(request)
         
         let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)

@@ -102,7 +102,6 @@ TOP_100_DISEASES = [
     # Women's Health
     ("Menopause", "D008593", ["estrogen", "progesterone", "raloxifene", "paroxetine"]),
     ("Endometriosis", "D004715", ["oral contraceptives", "leuprolide", "danazol", "medroxyprogesterone"]),
-    ("Polycystic ovary syndrome", "D011085", ["metformin", "spironolactone", "oral contraceptives"]),
     
     # Pain Management
     ("Chronic pain", "D059350", ["gabapentin", "pregabalin", "duloxetine", "tramadol", "oxycodone"]),
@@ -118,7 +117,6 @@ TOP_100_DISEASES = [
     
     # Additional Common Conditions
     ("Allergic rhinitis", "D012220", ["loratadine", "cetirizine", "fexofenadine", "fluticasone"]),
-    ("Conjunctivitis", "D003231", ["erythromycin", "tobramycin", "ciprofloxacin"]),
     ("Otitis media", "D010033", ["amoxicillin", "amoxicillin clavulanate", "azithromycin"]),
     ("Bronchitis", "D001991", ["amoxicillin", "azithromycin", "doxycycline", "albuterol"]),
     ("Gastritis", "D005756", ["omeprazole", "pantoprazole", "ranitidine"]),
@@ -146,7 +144,6 @@ TOP_100_DISEASES = [
     ("Menorrhagia", "D008595", ["oral contraceptives", "tranexamic acid", "mefenamic acid"]),
     ("Dysmenorrhea", "D004412", ["ibuprofen", "naproxen", "oral contraceptives"]),
     ("Premenstrual syndrome", "D011293", ["oral contraceptives", "fluoxetine", "spironolactone"]),
-    ("Erectile dysfunction", "D007172", ["sildenafil", "tadalafil", "vardenafil"]),
     ("Premature ejaculation", "D061686", ["sertraline", "paroxetine", "dapoxetine"]),
     ("Infertility", "D007246", ["clomiphene", "letrozole", "gonadotropins"]),
     ("Hypogonadism", "D007006", ["testosterone", "human chorionic gonadotropin"]),
@@ -162,8 +159,6 @@ TOP_100_DISEASES = [
     ("Acromegaly", "D000172", ["octreotide", "lanreotide", "pegvisomant"]),
     ("Prolactinoma", "D011398", ["bromocriptine", "cabergoline"]),
     ("Growth hormone deficiency", "D006994", ["growth hormone", "somatropin"]),
-    ("Cushing's disease", "D003480", ["ketoconazole", "metyrapone", "mitotane"]),
-    ("Addison's disease", "D000224", ["hydrocortisone", "fludrocortisone"]),
 ]
 
 

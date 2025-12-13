@@ -8,13 +8,12 @@ from typing import Optional, Callable
 from pathlib import Path
 
 
-def stream_output(process: subprocess.Popen, task_id: str, log_callback: Optional[Callable[[str], None]] = None):
+def stream_output(process: subprocess.Popen, log_callback: Optional[Callable[[str], None]] = None):
     """
     Stream subprocess output in real-time.
     
     Args:
         process: Subprocess to stream
-        task_id: Task ID for progress tracking
         log_callback: Optional callback for each line (for server logging)
     """
     def read_output(pipe, is_stderr=False):

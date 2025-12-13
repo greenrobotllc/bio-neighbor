@@ -130,16 +130,16 @@ class DrugsDownloadViewModel: ObservableObject {
         downloadService.downloadDrugs(names: names)
             .observe(on: MainScheduler.instance)
             .subscribe(
-                onNext: { _ in },
+                onNext: { [weak self] _ in
+                    self?.selectedNames.removeAll()
+                    self?.batchNames = ""
+                },
                 onError: { [weak self] error in
                     self?.errorMessage = error.localizedDescription
                     self?.currentDownloadState = .failed(error: error.localizedDescription)
                 }
             )
             .disposed(by: disposeBag)
-        
-        selectedNames.removeAll()
-        batchNames = ""
     }
     
     func downloadByDisease() {
