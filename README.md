@@ -332,14 +332,29 @@ bio-neighbor/
 │   └── test_*.py                 # Test suites
 ├── macos_app/                    # SwiftUI macOS app
 │   └── BioNeighbor/
-│       ├── BioNeighborApp.swift  # Main app entry point
-│       ├── BrowseView.swift      # Molecules tab
-│       ├── DiseaseBrowseView.swift # Diseases tab
-│       ├── DrugsView.swift        # Drugs tab
-│       ├── DrugDataDownloadView.swift # Download Data tab
-│       ├── SearchView.swift       # Advanced Search tab
-│       ├── ReactiveDownloadService.swift # RxSwift download service
-│       └── Models.swift           # Data models
+│       └── BioNeighbor/
+│           ├── BioNeighborApp.swift  # Main app entry point
+│           ├── BackendService.swift  # Python backend service integration
+│           ├── BrowseView.swift      # Molecules tab
+│           ├── DiseaseBrowseView.swift # Diseases tab
+│           ├── DiseasesDownloadView.swift # Disease download view
+│           ├── DiseasesDownloadViewRx.swift # Disease download (RxSwift)
+│           ├── DownloadStatisticsView.swift # Download statistics
+│           ├── DrugCard.swift        # Drug card component
+│           ├── DrugDataDownloadView.swift # Download Data tab
+│           ├── DrugDetailView.swift  # Drug detail view
+│           ├── DrugsView.swift       # Drugs tab
+│           ├── DrugsDownloadView.swift # Drug download view
+│           ├── DrugsDownloadViewRx.swift # Drug download (RxSwift)
+│           ├── Models.swift          # Data models
+│           ├── Molecule3DView.swift  # 3D molecule visualization
+│           ├── MoleculeCard.swift    # Molecule card component
+│           ├── MoleculeDetailView.swift # Molecule detail view
+│           ├── MoleculesDownloadView.swift # Molecule download view
+│           ├── MoleculesDownloadViewRx.swift # Molecule download (RxSwift)
+│           ├── ReactiveDownloadService.swift # RxSwift download service
+│           ├── ResultsView.swift     # Search results view
+│           └── SearchView.swift      # Advanced Search tab
 ├── data/                         # Data files
 │   ├── molecules.db              # SQLite database
 │   ├── faiss_index.bin           # FAISS search index

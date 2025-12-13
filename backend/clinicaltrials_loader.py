@@ -7,6 +7,7 @@ API Documentation: https://clinicaltrials.gov/api
 
 import requests
 import time
+import json
 from typing import List, Dict
 
 
@@ -44,17 +45,62 @@ def search_drugs_by_condition(condition: str, max_results: int = 50) -> List[Dic
             if page_token:
                 params['pageToken'] = page_token
             
-            try:
-                response = requests.get(base_url, params=params, timeout=30)
-                response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                print(f"  ⚠️  API request failed: {e}")
-                # If this is the first page, fail completely; otherwise return what we have
+            # Make request with User-Agent header and handle rate limiting
+            headers = {
+                'User-Agent': 'BioNeighbor/1.0 (Molecular Similarity Engine)'
+            }
+            
+            max_retries = 3
+            retry_count = 0
+            response = None
+            
+            while retry_count < max_retries:
+                try:
+                    response = requests.get(base_url, params=params, headers=headers, timeout=30)
+                    
+                    # Handle 429 rate limiting with Retry-After header
+                    if response.status_code == 429:
+                        retry_after = response.headers.get('Retry-After', '60')  # Default to 60 seconds
+                        try:
+                            wait_time = int(retry_after)
+                        except (ValueError, TypeError):
+                            wait_time = 60  # Fallback to 60 seconds if header is invalid
+                        
+                        if retry_count < max_retries - 1:
+                            print(f"  ⚠️  Rate limited (429). Waiting {wait_time} seconds before retry {retry_count + 1}/{max_retries}...")
+                            time.sleep(wait_time)
+                            retry_count += 1
+                            continue
+                        else:
+                            print(f"  ⚠️  Rate limited (429) after {max_retries} attempts. Returning partial results.")
+                            break
+                    
+                    # Raise for other non-2xx status codes
+                    response.raise_for_status()
+                    break  # Success, exit retry loop
+                    
+                except requests.exceptions.RequestException as e:
+                    print(f"  ⚠️  API request failed: {e}")
+                    # If this is the first page, fail completely; otherwise return what we have
+                    if page_token is None:
+                        return []
+                    break  # Return partial results
+            
+            # If we don't have a valid response, return what we have
+            if response is None or response.status_code != 200:
                 if page_token is None:
                     return []
                 break  # Return partial results
             
-            data = response.json()
+            # Parse JSON response with error handling
+            try:
+                data = response.json()
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"  ⚠️  Failed to parse JSON response: {e}")
+                # If this is the first page, fail completely; otherwise return what we have
+                if page_token is None:
+                    return []
+                break  # Return partial results
             
             if 'studies' not in data:
                 break  # No more studies
