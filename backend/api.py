@@ -23,7 +23,13 @@ def get_engine() -> SearchEngine:
     """Get or initialize the search engine."""
     global _engine
     if _engine is None:
-        _engine = get_search_engine()
+        try:
+            _engine = get_search_engine()
+        except Exception as e:
+            print(f"❌ Error initializing search engine: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     return _engine
 
 
@@ -75,6 +81,15 @@ def search():
         if not isinstance(top_k, int) or top_k < 1:
             top_k = 10
         
+        # Validate SMILES before attempting search
+        from fingerprints import compute_morgan_fingerprint
+        query_fp = compute_morgan_fingerprint(query_smiles)
+        if query_fp is None:
+            return jsonify({
+                'success': False, 
+                'error': f'Invalid SMILES string: {query_smiles}'
+            }), 400
+        
         engine = get_engine()
         results = engine.search_similar(query_smiles, top_k=top_k)
         
@@ -87,8 +102,21 @@ def search():
     
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
+    except OSError as e:
+        # Handle broken pipe and other OS errors
+        return jsonify({
+            'success': False, 
+            'error': f'Backend error: {str(e)}. Please ensure the search engine is properly initialized.'
+        }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': f'Internal error: {str(e)}'}), 500
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /search endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False, 
+            'error': f'Internal error: {error_msg}'
+        }), 500
 
 
 @app.route('/search/chembl', methods=['POST'])
@@ -131,10 +159,84 @@ def search_by_chembl_id():
         return jsonify({'success': False, 'error': f'Internal error: {str(e)}'}), 500
 
 
+@app.route('/molecules', methods=['GET'])
+def list_molecules():
+    """
+    List molecules with pagination, search, and random options.
+    
+    Query parameters:
+    - page (int): Page number (default: 1)
+    - per_page (int): Items per page (default: 20, max: 100)
+    - search (string): Search by name (case-insensitive partial match)
+    - random (bool): Return random sample instead of paginated results
+    - random_count (int): Number of random molecules (default: 20)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "molecules": [...],
+        "pagination": {
+            "page": 1,
+            "per_page": 20,
+            "total": 9993,
+            "total_pages": 500
+        }
+    }
+    """
+    try:
+        # Get query parameters
+        random_mode = request.args.get('random', 'false').lower() == 'true'
+        
+        if random_mode:
+            # Random mode
+            random_count = request.args.get('random_count', 20, type=int)
+            random_count = min(max(random_count, 1), 100)  # Clamp between 1 and 100
+            
+            engine = get_engine()
+            molecules = engine.get_random_molecules(count=random_count)
+            
+            return jsonify({
+                'success': True,
+                'molecules': molecules,
+                'pagination': None
+            })
+        else:
+            # Pagination mode
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 20, type=int)
+            search = request.args.get('search', None, type=str)
+            
+            # Clamp per_page between 1 and 100
+            per_page = min(max(per_page, 1), 100)
+            
+            engine = get_engine()
+            molecules, pagination = engine.list_molecules(page=page, per_page=per_page, search=search)
+            
+            return jsonify({
+                'success': True,
+                'molecules': molecules,
+                'pagination': pagination
+            })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecules endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
 @app.route('/molecule/<int:index>', methods=['GET'])
 def get_molecule(index: int):
     """
     Get molecule information by index.
+    
+    Query parameters:
+    - include_similar (bool): If true, include similar molecules in response
+    - top_k (int): Number of similar molecules to return (default: 10)
     
     Response (JSON):
     {
@@ -146,20 +248,39 @@ def get_molecule(index: int):
             "smiles": "...",
             "molecular_weight": 180.16,
             "is_approved": true
-        }
+        },
+        "similar": [...]  // Only if include_similar=true
     }
     """
     try:
-        engine = get_engine()
-        molecule = engine.get_molecule_by_index(index)
+        include_similar = request.args.get('include_similar', 'false').lower() == 'true'
+        top_k = request.args.get('top_k', 10, type=int)
+        top_k = min(max(top_k, 1), 50)  # Clamp between 1 and 50
         
-        return jsonify({
-            'success': True,
-            'molecule': molecule
-        })
+        engine = get_engine()
+        
+        if include_similar:
+            result = engine.get_molecule_with_similar(index, top_k=top_k)
+            return jsonify({
+                'success': True,
+                'molecule': result['molecule'],
+                'similar': result['similar']
+            })
+        else:
+            molecule = engine.get_molecule_by_index(index)
+            return jsonify({
+                'success': True,
+                'molecule': molecule
+            })
     
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecule endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
 
 
 @app.route('/render', methods=['POST'])

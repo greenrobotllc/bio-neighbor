@@ -73,3 +73,54 @@ struct MoleculeDetail: Codable {
     }
 }
 
+struct Pagination: Codable {
+    let page: Int
+    let perPage: Int
+    let total: Int
+    let totalPages: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case page
+        case perPage = "per_page"
+        case total
+        case totalPages = "total_pages"
+    }
+}
+
+struct MoleculeListResponse: Codable {
+    let success: Bool
+    let molecules: [MoleculeBasic]?
+    let pagination: Pagination?
+    let error: String?
+}
+
+struct MoleculeBasic: Codable, Identifiable {
+    let id: Int
+    let chemblId: String
+    let name: String
+    let smiles: String
+    let molecularWeight: Double
+    let isApproved: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case id = "index"
+        case chemblId = "chembl_id"
+        case name
+        case smiles
+        case molecularWeight = "molecular_weight"
+        case isApproved = "is_approved"
+    }
+}
+
+struct MoleculeWithSimilar: Codable {
+    let molecule: MoleculeBasic
+    let similar: [Molecule]
+}
+
+struct MoleculeWithSimilarResponse: Codable {
+    let success: Bool
+    let molecule: MoleculeBasic
+    let similar: [Molecule]?
+    let error: String?
+}
+

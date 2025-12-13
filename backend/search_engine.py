@@ -70,19 +70,29 @@ class SearchEngine:
         Returns:
             Dictionary with molecule information
         """
-        if self.molecule_df is not None and index < len(self.molecule_df):
-            row = self.molecule_df.iloc[index]
-            return {
-                'index': int(index),
-                'chembl_id': row.get('chembl_id', ''),
-                'name': row.get('name', ''),
-                'smiles': row.get('smiles', ''),
-                'molecular_weight': float(row.get('molecular_weight', 0)),
-                'is_approved': bool(row.get('is_approved', False))
-            }
+        if self.molecule_df is not None:
+            # Check if index is within bounds
+            if 0 <= index < len(self.molecule_df):
+                row = self.molecule_df.iloc[index]
+                # Convert all values to Python native types for JSON serialization
+                mw = row.get('molecular_weight', 0)
+                mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+                return {
+                    'index': int(index),
+                    'chembl_id': str(row.get('chembl_id', '')),
+                    'name': str(row.get('name', '')),
+                    'smiles': str(row.get('smiles', '')),
+                    'molecular_weight': mw_float,
+                    'is_approved': bool(row.get('is_approved', False))
+                }
         else:
             # Fallback to metadata
-            chembl_id = self.metadata.get('chembl_ids', [])[index] if 'chembl_ids' in self.metadata else None
+            chembl_id = None
+            if 'chembl_ids' in self.metadata:
+                chembl_ids = self.metadata['chembl_ids']
+                if isinstance(chembl_ids, list) and 0 <= index < len(chembl_ids):
+                    chembl_id = chembl_ids[index]
+            
             return {
                 'index': int(index),
                 'chembl_id': chembl_id or f'molecule_{index}',
@@ -132,10 +142,12 @@ class SearchEngine:
                 continue
             
             molecule_info = self._get_molecule_info(int(idx))
-            molecule_info['similarity_score'] = float(dist)
+            # Convert NumPy float32 to Python float for JSON serialization
+            dist_float = float(dist.item() if hasattr(dist, 'item') else dist)
+            molecule_info['similarity_score'] = dist_float
             # Convert distance to similarity (for L2, lower distance = higher similarity)
             # For cosine, distance is already similarity-like
-            molecule_info['similarity'] = 1.0 / (1.0 + dist) if dist > 0 else 1.0
+            molecule_info['similarity'] = float(1.0 / (1.0 + dist_float) if dist_float > 0 else 1.0)
             results.append(molecule_info)
         
         return results
@@ -173,6 +185,154 @@ class SearchEngine:
             Dictionary with molecule information
         """
         return self._get_molecule_info(index)
+    
+    def list_molecules(self, page: int = 1, per_page: int = 20, search: Optional[str] = None) -> Tuple[List[Dict], Dict]:
+        """
+        List molecules with pagination and optional name search.
+        
+        Args:
+            page: Page number (1-indexed)
+            per_page: Number of molecules per page
+            search: Optional search term to filter by name (case-insensitive partial match)
+            
+        Returns:
+            Tuple of (list of molecules, pagination info dict)
+        """
+        if self.molecule_df is None:
+            raise RuntimeError("Molecule database not loaded")
+        
+        # Filter by search term if provided
+        df = self.molecule_df.copy()
+        if search:
+            search_lower = search.lower()
+            # Search in name, chembl_id, and SMILES
+            name_match = df['name'].str.lower().str.contains(search_lower, na=False)
+            chembl_match = df['chembl_id'].str.lower().str.contains(search_lower, na=False)
+            smiles_match = df['smiles'].str.lower().str.contains(search_lower, na=False)
+            df = df[name_match | chembl_match | smiles_match]
+        
+        total = len(df)
+        total_pages = (total + per_page - 1) // per_page if total > 0 else 1
+        
+        # Validate page number
+        if page < 1:
+            page = 1
+        elif page > total_pages:
+            page = total_pages
+        
+        # Calculate pagination
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        
+        # Get molecules for this page
+        page_df = df.iloc[start_idx:end_idx]
+        
+        molecules = []
+        for idx, row in page_df.iterrows():
+            # Use the original dataframe index, but validate it's within bounds
+            original_idx = int(idx)
+            if original_idx < 0 or original_idx >= len(self.molecule_df):
+                # Skip invalid indices
+                continue
+            # Convert all values to Python native types for JSON serialization
+            mw = row.get('molecular_weight', 0)
+            mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+            molecule_info = {
+                'index': original_idx,
+                'chembl_id': str(row.get('chembl_id', '')),
+                'name': str(row.get('name', '')),
+                'smiles': str(row.get('smiles', '')),
+                'molecular_weight': mw_float,
+                'is_approved': bool(row.get('is_approved', False))
+            }
+            molecules.append(molecule_info)
+        
+        pagination = {
+            'page': page,
+            'per_page': per_page,
+            'total': total,
+            'total_pages': total_pages
+        }
+        
+        return molecules, pagination
+    
+    def get_random_molecules(self, count: int = 20) -> List[Dict]:
+        """
+        Get a random sample of molecules.
+        
+        Args:
+            count: Number of random molecules to return
+            
+        Returns:
+            List of molecule dictionaries
+        """
+        if self.molecule_df is None:
+            raise RuntimeError("Molecule database not loaded")
+        
+        # Sample random molecules
+        sample_count = min(count, len(self.molecule_df))
+        sampled_df = self.molecule_df.sample(n=sample_count, random_state=None)
+        
+        molecules = []
+        for i, (idx, row) in enumerate(sampled_df.iterrows()):
+            # Use the actual position in the dataframe as the index
+            # Convert all values to Python native types for JSON serialization
+            mw = row.get('molecular_weight', 0)
+            mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+            molecule_info = {
+                'index': int(idx),  # Keep original index for random samples
+                'chembl_id': str(row.get('chembl_id', '')),
+                'name': str(row.get('name', '')),
+                'smiles': str(row.get('smiles', '')),
+                'molecular_weight': mw_float,
+                'is_approved': bool(row.get('is_approved', False))
+            }
+            molecules.append(molecule_info)
+        
+        return molecules
+    
+    def get_molecule_with_similar(self, index: int, top_k: int = 10) -> Dict:
+        """
+        Get molecule information by index along with similar molecules.
+        
+        Args:
+            index: Index in the FAISS index
+            top_k: Number of similar molecules to return
+            
+        Returns:
+            Dictionary containing:
+            - molecule: The requested molecule
+            - similar: List of similar molecules
+        """
+        # Validate index bounds
+        if index < 0 or (self.molecule_df is not None and index >= len(self.molecule_df)):
+            raise ValueError(f"Index {index} is out of range. Valid range: 0-{len(self.molecule_df) - 1 if self.molecule_df is not None else self.index.ntotal - 1}")
+        
+        molecule = self._get_molecule_info(index)
+        
+        # Get SMILES for similarity search
+        if not molecule.get('smiles'):
+            # If no SMILES, return molecule without similar
+            return {
+                'molecule': molecule,
+                'similar': []
+            }
+        
+        # Find similar molecules
+        try:
+            similar = self.search_similar(molecule['smiles'], top_k=top_k + 1)  # +1 to exclude self
+            
+            # Remove the molecule itself from similar list (it will be first result)
+            similar = [m for m in similar if m['index'] != index][:top_k]
+        except (ValueError, Exception) as e:
+            # If similarity search fails (e.g., invalid SMILES), return empty similar list
+            print(f"⚠️  Warning: Could not find similar molecules for index {index}: {e}")
+            similar = []
+        
+        return {
+            'molecule': molecule,
+            'similar': similar
+        }
 
 
 # Global search engine instance (lazy loading)

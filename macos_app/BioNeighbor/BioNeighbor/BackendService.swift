@@ -177,6 +177,96 @@ class BackendService: ObservableObject {
         return molecule
     }
     
+    func listMolecules(page: Int = 1, perPage: Int = 20, search: String? = nil, random: Bool = false, randomCount: Int = 20) async throws -> (molecules: [MoleculeBasic], pagination: Pagination?) {
+        var urlComponents = URLComponents(string: "\(baseURL)/molecules")
+        var queryItems: [URLQueryItem] = []
+        
+        if random {
+            queryItems.append(URLQueryItem(name: "random", value: "true"))
+            queryItems.append(URLQueryItem(name: "random_count", value: "\(randomCount)"))
+        } else {
+            queryItems.append(URLQueryItem(name: "page", value: "\(page)"))
+            queryItems.append(URLQueryItem(name: "per_page", value: "\(perPage)"))
+            if let search = search, !search.isEmpty {
+                queryItems.append(URLQueryItem(name: "search", value: search))
+            }
+        }
+        
+        urlComponents?.queryItems = queryItems
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let listResponse = try JSONDecoder().decode(MoleculeListResponse.self, from: data)
+        
+        guard listResponse.success, let molecules = listResponse.molecules else {
+            if let error = listResponse.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return (molecules, listResponse.pagination)
+    }
+    
+    func getMoleculeWithSimilar(index: Int, topK: Int = 10) async throws -> (molecule: MoleculeBasic, similar: [Molecule]) {
+        var urlComponents = URLComponents(string: "\(baseURL)/molecule/\(index)")
+        urlComponents?.queryItems = [
+            URLQueryItem(name: "include_similar", value: "true"),
+            URLQueryItem(name: "top_k", value: "\(topK)")
+        ]
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let moleculeResponse = try JSONDecoder().decode(MoleculeWithSimilarResponse.self, from: data)
+        
+        guard moleculeResponse.success else {
+            if let error = moleculeResponse.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return (moleculeResponse.molecule, moleculeResponse.similar ?? [])
+    }
+    
     func renderMolecule(smiles: String, width: Int = 400, height: Int = 400) async throws -> NSImage? {
         guard let url = URL(string: "\(baseURL)/render") else {
             throw BackendError.backendNotAvailable
