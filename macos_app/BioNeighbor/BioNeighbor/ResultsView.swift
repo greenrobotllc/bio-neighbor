@@ -79,7 +79,8 @@ struct MoleculeRow: View {
                 similarity: 0.95,
                 similarityScore: 0.05,
                 molecularWeight: 180.16,
-                isApproved: true
+                isApproved: true,
+                formula: "C9H8O4"
             )
         ],
         selectedMolecule: .constant(nil)

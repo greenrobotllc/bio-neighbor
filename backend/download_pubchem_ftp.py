@@ -77,8 +77,13 @@ def sdf_to_smiles(sdf_path: Path, max_molecules: Optional[int] = None) -> List[d
                 continue
             
             try:
-                # Get SMILES
-                smiles = Chem.MolToSmiles(mol)
+                # Get SMILES (prefer canonical from properties, fallback to RDKit)
+                smiles = None
+                if mol.HasProp("PUBCHEM_CANONICAL_SMILES"):
+                    smiles = mol.GetProp("PUBCHEM_CANONICAL_SMILES")
+                else:
+                    smiles = Chem.MolToSmiles(mol)
+                
                 if not smiles:
                     continue
                 
@@ -98,10 +103,43 @@ def sdf_to_smiles(sdf_path: Path, max_molecules: Optional[int] = None) -> List[d
                     if name.startswith("CID"):
                         cid = name.replace("CID", "").strip()
                 
+                # Extract molecule name (prioritize: IUPAC > traditional IUPAC > common name > CID-based)
+                name = ""
+                if mol.HasProp("PUBCHEM_IUPAC_NAME"):
+                    name = mol.GetProp("PUBCHEM_IUPAC_NAME")
+                elif mol.HasProp("PUBCHEM_IUPAC_TRADITIONAL_NAME"):
+                    name = mol.GetProp("PUBCHEM_IUPAC_TRADITIONAL_NAME")
+                elif mol.HasProp("PUBCHEM_PREFERRED_NAME"):
+                    name = mol.GetProp("PUBCHEM_PREFERRED_NAME")
+                elif mol.HasProp("_Name"):
+                    name_prop = mol.GetProp("_Name")
+                    if not name_prop.startswith("CID"):
+                        name = name_prop
+                
+                # Extract molecular formula
+                formula = ""
+                if mol.HasProp("PUBCHEM_MOLECULAR_FORMULA"):
+                    formula = mol.GetProp("PUBCHEM_MOLECULAR_FORMULA")
+                
+                # Extract InChI
+                inchi = ""
+                if mol.HasProp("PUBCHEM_INCHI"):
+                    inchi = mol.GetProp("PUBCHEM_INCHI")
+                
+                # Extract InChIKey
+                inchikey = ""
+                if mol.HasProp("PUBCHEM_INCHI_KEY"):
+                    inchikey = mol.GetProp("PUBCHEM_INCHI_KEY")
+                
                 molecules.append({
                     'id': cid or f"PUBCHEM_{i}",
                     'smiles': smiles,
-                    'molecular_weight': mw
+                    'molecular_weight': mw,
+                    'name': name,
+                    'formula': formula,
+                    'inchi': inchi,
+                    'inchikey': inchikey,
+                    'pubchem_cid': cid
                 })
                 
                 if len(molecules) % 100 == 0:
@@ -201,7 +239,13 @@ def download_pubchem_compounds(max_molecules: int = 10000, output_file: Path = N
                 print(f"\n💾 Writing {len(molecules)} molecules to {output_file}...")
                 with open(output_file, 'w') as f:
                     for mol in molecules[:max_molecules]:
-                        f.write(f"{mol['id']}\t{mol['smiles']}\t{mol['molecular_weight']:.2f}\n")
+                        # Format: ID\tSMILES\tMW\tNAME\tFORMULA\tINCHI\tINCHIKEY\tCID
+                        name = mol.get('name', '')
+                        formula = mol.get('formula', '')
+                        inchi = mol.get('inchi', '')
+                        inchikey = mol.get('inchikey', '')
+                        cid = mol.get('pubchem_cid', '')
+                        f.write(f"{mol['id']}\t{mol['smiles']}\t{mol['molecular_weight']:.2f}\t{name}\t{formula}\t{inchi}\t{inchikey}\t{cid}\n")
                 
                 print(f"✅ Success! Created {output_file} with {len(molecules)} molecules")
                 print(f"\nYou can now run:")

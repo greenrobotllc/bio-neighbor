@@ -37,6 +37,14 @@ struct MoleculeDetailView: View {
                             .font(.title3)
                             .foregroundColor(.secondary)
                             .fontDesign(.monospaced)
+                        
+                        if let formula = molecule.formula, !formula.isEmpty {
+                            Text(formula)
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                                .fontDesign(.monospaced)
+                                .padding(.top, 4)
+                        }
                     }
                     
                     Divider()
@@ -72,9 +80,13 @@ struct MoleculeDetailView: View {
                         Text("Properties")
                             .font(.headline)
                         
+                        if let formula = molecule.formula, !formula.isEmpty {
+                            PropertyRow(label: "Formula", value: formula)
+                        }
                         PropertyRow(label: "Similarity", value: String(format: "%.4f", molecule.similarity))
                         PropertyRow(label: "Distance", value: String(format: "%.4f", molecule.similarityScore))
                         PropertyRow(label: "Molecular Weight", value: "\(String(format: "%.2f", molecule.molecularWeight)) Da")
+                            .help("Daltons (Da) are atomic mass units. 1 Da ≈ 1.66 × 10⁻²⁷ kg")
                         PropertyRow(label: "Status", value: molecule.isApproved ? "Approved Drug" : "Research Compound")
                     }
                     
@@ -152,7 +164,8 @@ struct PropertyRow: View {
             similarity: 0.95,
             similarityScore: 0.05,
             molecularWeight: 180.16,
-            isApproved: true
+            isApproved: true,
+            formula: "C9H8O4"
         )
     )
 }

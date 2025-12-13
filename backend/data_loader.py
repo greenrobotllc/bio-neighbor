@@ -105,13 +105,29 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     parts = line.split()
                 
                 if len(parts) >= 2:
-                    # Format: ID SMILES [properties...]
+                    # Format: ID SMILES [MW] [NAME] [FORMULA] [INCHI] [INCHIKEY] [CID]
                     mol_id = parts[0].strip()
                     smiles = parts[1].strip()
+                    # Parse optional fields
+                    try:
+                        mw_from_file = float(parts[2]) if len(parts) > 2 and parts[2].strip() else None
+                    except (ValueError, IndexError):
+                        mw_from_file = None
+                    name = parts[3].strip() if len(parts) > 3 and parts[3].strip() else ""
+                    formula = parts[4].strip() if len(parts) > 4 and parts[4].strip() else ""
+                    inchi = parts[5].strip() if len(parts) > 5 and parts[5].strip() else ""
+                    inchikey = parts[6].strip() if len(parts) > 6 and parts[6].strip() else ""
+                    pubchem_cid = parts[7].strip() if len(parts) > 7 and parts[7].strip() else ""
                 elif len(parts) == 1:
                     # Format: SMILES only (use line number as ID)
                     mol_id = f"MOL_{line_num}"
                     smiles = parts[0].strip()
+                    mw_from_file = None
+                    name = ""
+                    formula = ""
+                    inchi = ""
+                    inchikey = ""
+                    pubchem_cid = ""
                 else:
                     continue
                 
@@ -129,17 +145,32 @@ def parse_smiles_file(file_path: Path, max_lines: Optional[int] = None) -> List[
                     if mol is None:
                         continue
                     
-                    # Get molecular weight
-                    mw = Chem.rdMolDescriptors.CalcExactMolWt(mol)
+                    # Get molecular weight (use from file if available, otherwise calculate)
+                    if mw_from_file is not None:
+                        mw = mw_from_file
+                    else:
+                        mw = Chem.rdMolDescriptors.CalcExactMolWt(mol)
                     
                     # Filter for drug-like molecules (MW 150-800)
                     if mw < 150 or mw > 800:
                         continue
                     
+                    # Calculate formula if not provided
+                    if not formula:
+                        try:
+                            formula = Chem.rdMolDescriptors.CalcMolFormula(mol)
+                        except:
+                            formula = ""
+                    
                     molecules.append({
                         'id': mol_id,
                         'smiles': smiles,
-                        'molecular_weight': mw
+                        'molecular_weight': mw,
+                        'name': name,
+                        'formula': formula,
+                        'inchi': inchi,
+                        'inchikey': inchikey,
+                        'pubchem_cid': pubchem_cid
                     })
                     
                     if len(molecules) % 1000 == 0:
@@ -309,10 +340,14 @@ def download_zinc_subset(max_molecules: int = 10000, subset: str = "drug-like") 
         molecules_data.append({
             'chembl_id': mol['id'],
             'smiles': mol['smiles'],
-            'name': '',  # ZINC doesn't provide names
+            'name': mol.get('name', ''),  # ZINC doesn't provide names, but check if parsed
             'molecular_weight': mol['molecular_weight'],
             'is_approved': False,  # ZINC compounds are not necessarily approved
-            'targets': []
+            'targets': [],
+            'formula': mol.get('formula', ''),
+            'inchi': mol.get('inchi', ''),
+            'inchikey': mol.get('inchikey', ''),
+            'pubchem_cid': mol.get('pubchem_cid', '')
         })
     
     df = pd.DataFrame(molecules_data)
@@ -398,7 +433,11 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
                         'name': f"Generated molecule {len(molecules_data)+1}",
                         'molecular_weight': mw,
                         'is_approved': False,
-                        'targets': []
+                        'targets': [],
+                        'formula': '',
+                        'inchi': '',
+                        'inchikey': '',
+                        'pubchem_cid': ''
                     })
                     seen_smiles.add(scaffold_smiles)
             
@@ -427,7 +466,11 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
                                 'name': f"Generated variant {variant_num}",
                                 'molecular_weight': mw,
                                 'is_approved': False,
-                                'targets': []
+                                'targets': [],
+                                'formula': '',
+                                'inchi': '',
+                                'inchikey': '',
+                                'pubchem_cid': ''
                             })
                             seen_smiles.add(variant_smiles)
             
@@ -452,7 +495,11 @@ def generate_diverse_molecules(max_molecules: int = 10000) -> pd.DataFrame:
                     'name': row['name'],
                     'molecular_weight': row['molecular_weight'],
                     'is_approved': row['is_approved'],
-                    'targets': row['targets']
+                    'targets': row['targets'],
+                    'formula': row.get('formula', ''),
+                    'inchi': row.get('inchi', ''),
+                    'inchikey': row.get('inchikey', ''),
+                    'pubchem_cid': row.get('pubchem_cid', '')
                 })
                 seen_smiles.add(row['smiles'])
     
@@ -534,7 +581,11 @@ def create_sample_data(max_molecules: int = 100) -> pd.DataFrame:
             'name': name,
             'molecular_weight': mw,
             'is_approved': approved,
-            'targets': []
+            'targets': [],
+            'formula': '',
+            'inchi': '',
+            'inchikey': '',
+            'pubchem_cid': ''
         })
     
     # If we need more, create variations by duplicating with different IDs
@@ -559,7 +610,11 @@ def create_sample_data(max_molecules: int = 100) -> pd.DataFrame:
                 'name': f"{base_name} (test variant {variation_count // len(base_drugs) + 1})",
                 'molecular_weight': base_mw,
                 'is_approved': False,  # Variants are not approved
-                'targets': []
+                'targets': [],
+                'formula': '',
+                'inchi': '',
+                'inchikey': '',
+                'pubchem_cid': ''
             })
             variation_count += 1
             
@@ -660,10 +715,14 @@ def download_pubchem_bulk(max_molecules: int = 10000) -> pd.DataFrame:
                     molecules_data.append({
                         'chembl_id': mol['id'],
                         'smiles': mol['smiles'],
-                        'name': '',  # PubChem doesn't provide names in bulk
+                        'name': mol.get('name', ''),  # PubChem may provide names from SDF
                         'molecular_weight': mol['molecular_weight'],
                         'is_approved': False,
-                        'targets': []
+                        'targets': [],
+                        'formula': mol.get('formula', ''),
+                        'inchi': mol.get('inchi', ''),
+                        'inchikey': mol.get('inchikey', ''),
+                        'pubchem_cid': mol.get('pubchem_cid', '')
                     })
                 
                 df = pd.DataFrame(molecules_data)
@@ -776,7 +835,11 @@ def download_pubchem_subset(max_molecules: int = 10000) -> pd.DataFrame:
                         'name': name_val,
                         'molecular_weight': mw,
                         'is_approved': True,  # These are known drugs
-                        'targets': []
+                        'targets': [],
+                        'formula': '',
+                        'inchi': '',
+                        'inchikey': '',
+                        'pubchem_cid': str(cid) if cid else ''
                     })
                     seen_cids.add(cid)
                     
@@ -840,7 +903,11 @@ def download_pubchem_subset(max_molecules: int = 10000) -> pd.DataFrame:
                             'name': name_val,
                             'molecular_weight': mw,
                             'is_approved': False,
-                            'targets': []
+                            'targets': [],
+                            'formula': '',
+                            'inchi': '',
+                            'inchikey': '',
+                            'pubchem_cid': str(cid) if cid else ''
                         })
                         seen_cids.add(cid)
                         
@@ -992,7 +1059,11 @@ def download_chembl_subset(max_molecules: int = 10000) -> pd.DataFrame:
                 'name': drug.get('pref_name', ''),
                 'molecular_weight': drug.get('molecular_weight', 0),
                 'is_approved': True,
-                'targets': []  # Will be filled later if needed
+                'targets': [],  # Will be filled later if needed
+                'formula': '',
+                'inchi': '',
+                'inchikey': '',
+                'pubchem_cid': ''
             })
             seen_ids.add(chembl_id)
             
@@ -1036,7 +1107,11 @@ def download_chembl_subset(max_molecules: int = 10000) -> pd.DataFrame:
                     'name': mol.get('pref_name', ''),
                     'molecular_weight': mol.get('molecular_weight', 0),
                     'is_approved': False,
-                    'targets': []
+                    'targets': [],
+                    'formula': '',
+                    'inchi': '',
+                    'inchikey': '',
+                    'pubchem_cid': ''
                 })
                 seen_ids.add(chembl_id)
                 
@@ -1075,7 +1150,7 @@ def save_to_cache(df: pd.DataFrame):
     print("✅ Cache saved")
 
 
-def save_to_database(df: pd.DataFrame):
+def save_to_database(df: pd.DataFrame, timeout: float = 30.0):
     """Save molecules DataFrame to SQLite database."""
     print(f"💾 Saving {len(df)} molecules to database: {DB_PATH}")
     
@@ -1086,8 +1161,36 @@ def save_to_database(df: pd.DataFrame):
             lambda x: json.dumps(x) if isinstance(x, list) else json.dumps([])
         )
     
-    conn = sqlite3.connect(DB_PATH)
-    df_copy.to_sql('molecules', conn, if_exists='replace', index=False)
+    # Ensure new columns exist with default values if missing
+    new_columns = {
+        'formula': '',
+        'inchi': '',
+        'inchikey': '',
+        'pubchem_cid': ''
+    }
+    for col, default_val in new_columns.items():
+        if col not in df_copy.columns:
+            df_copy[col] = default_val
+    
+    # Use timeout and WAL mode for better concurrency
+    conn = sqlite3.connect(DB_PATH, timeout=timeout)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
+        
+        # Use replace mode but with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                df_copy.to_sql('molecules', conn, if_exists='replace', index=False)
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    print(f"  ⚠️  Database locked, retrying ({attempt + 1}/{max_retries})...")
+                    time.sleep(2)
+                else:
+                    raise
+    finally:
+        conn.close()
     
     # Create index on chembl_id for faster lookups
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chembl_id ON molecules(chembl_id)")
@@ -1110,6 +1213,17 @@ def load_from_database() -> Optional[pd.DataFrame]:
             df['targets'] = df['targets'].apply(
                 lambda x: json.loads(x) if isinstance(x, str) else []
             )
+        
+        # Add new columns with default values if missing (backward compatibility)
+        new_columns = {
+            'formula': '',
+            'inchi': '',
+            'inchikey': '',
+            'pubchem_cid': ''
+        }
+        for col, default_val in new_columns.items():
+            if col not in df.columns:
+                df[col] = default_val
         
         print(f"✅ Loaded {len(df)} molecules from database")
         return df

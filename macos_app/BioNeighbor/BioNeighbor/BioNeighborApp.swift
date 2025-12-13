@@ -29,11 +29,17 @@ struct ContentTabView: View {
                 }
                 .tag(0)
             
+            DiseaseBrowseView()
+                .tabItem {
+                    Label("Diseases", systemImage: "cross.case")
+                }
+                .tag(1)
+            
             SearchView()
                 .tabItem {
                     Label("Advanced Search", systemImage: "magnifyingglass")
                 }
-                .tag(1)
+                .tag(2)
         }
     }
 }

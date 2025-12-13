@@ -312,6 +312,239 @@ class BackendService: ObservableObject {
         return image
     }
     
+    func getMoleculeThumbnail(index: Int, width: Int = 100, height: Int = 100) async throws -> NSImage? {
+        guard let url = URL(string: "\(baseURL)/molecule/\(index)/thumbnail?width=\(width)&height=\(height)") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let responseDict = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        
+        guard let success = responseDict?["success"] as? Bool,
+              success,
+              let imageBase64 = responseDict?["image"] as? String else {
+            throw BackendError.invalidResponse
+        }
+        
+        // Extract base64 data (remove data:image/png;base64, prefix if present)
+        let base64String = imageBase64.components(separatedBy: ",").last ?? imageBase64
+        
+        guard let imageData = Data(base64Encoded: base64String),
+              let image = NSImage(data: imageData) else {
+            throw BackendError.invalidResponse
+        }
+        
+        return image
+    }
+    
+    func getMolecule3D(index: Int) async throws -> Molecule3DCoordinates {
+        guard let url = URL(string: "\(baseURL)/molecule/\(index)/3d") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(Molecule3DResponse.self, from: data)
+        
+        guard response.success,
+              let atoms = response.atoms,
+              let bonds = response.bonds,
+              let smiles = response.smiles else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return Molecule3DCoordinates(atoms: atoms, bonds: bonds, smiles: smiles)
+    }
+    
+    func getAllDiseases() async throws -> [Disease] {
+        guard let url = URL(string: "\(baseURL)/diseases") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DiseasesResponse.self, from: data)
+        
+        guard response.success else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return response.diseases
+    }
+    
+    func getDiseaseMolecules(diseaseName: String, limit: Int? = nil) async throws -> [MoleculeBasic] {
+        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(diseaseName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? diseaseName)/molecules")
+        
+        if let limit = limit {
+            urlComponents?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
+        }
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DiseaseMoleculesResponse.self, from: data)
+        
+        guard response.success, let molecules = response.molecules else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return molecules
+    }
+    
+    func getDiseaseTopMolecules(diseaseName: String, topK: Int = 10) async throws -> [MoleculeBasic] {
+        var urlComponents = URLComponents(string: "\(baseURL)/diseases/\(diseaseName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? diseaseName)/top-molecules")
+        urlComponents?.queryItems = [URLQueryItem(name: "top_k", value: "\(topK)")]
+        
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let response = try JSONDecoder().decode(DiseaseMoleculesResponse.self, from: data)
+        
+        guard response.success, let molecules = response.molecules else {
+            if let error = response.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return molecules
+    }
+    
+    func searchByDisease(diseaseName: String, topK: Int = 10) async throws -> [Molecule] {
+        guard let url = URL(string: "\(baseURL)/search/by-disease") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        let requestBody: [String: Any] = [
+            "disease_name": diseaseName,
+            "top_k": topK
+        ]
+        
+        let requestData = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = requestData
+        urlRequest.timeoutInterval = 30.0
+        
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+        
+        let searchResponse = try JSONDecoder().decode(DiseaseSearchResponse.self, from: data)
+        
+        guard searchResponse.success, let results = searchResponse.results else {
+            if let error = searchResponse.error {
+                throw BackendError.unknownError(error)
+            }
+            throw BackendError.invalidResponse
+        }
+        
+        return results
+    }
+    
     private func getProjectRoot() -> URL? {
         // Try to find the project root by looking for backend/api.py
         let fileManager = FileManager.default

@@ -307,6 +307,12 @@ struct SelectedMoleculeSection: View {
     let isLoadingSimilar: Bool
     let onMoleculeTap: (MoleculeBasic) -> Void
     
+    @State private var selectedTab = 0
+    @State private var molecule2DImage: NSImage?
+    @State private var isLoading2D = false
+    @State private var molecule3DCoords: Molecule3DCoordinates?
+    @State private var isLoading3D = false
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Selected molecule header
@@ -323,6 +329,14 @@ struct SelectedMoleculeSection: View {
                             .fontWeight(molecule.name.isEmpty ? .bold : .regular)
                             .foregroundColor(molecule.name.isEmpty ? .primary : .secondary)
                             .fontDesign(.monospaced)
+                        
+                        if let formula = molecule.formula, !formula.isEmpty {
+                            Text(formula)
+                                .font(.title3)
+                                .foregroundColor(.blue)
+                                .fontDesign(.monospaced)
+                                .padding(.top, 4)
+                        }
                     }
                     
                     Spacer()
@@ -335,14 +349,112 @@ struct SelectedMoleculeSection: View {
                 }
                 
                 HStack(spacing: 20) {
-                    Label("\(String(format: "%.2f", molecule.molecularWeight)) Da", systemImage: "scalemass")
+                    Label {
+                        Text("Molecular Weight (Da)")
+                            .help("Daltons (Da) are atomic mass units. 1 Da ≈ 1.66 × 10⁻²⁷ kg")
+                    } icon: {
+                        Image(systemName: "scalemass")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    
+                    Text("\(String(format: "%.2f", molecule.molecularWeight))")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .fontWeight(.medium)
                 }
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(8)
+            
+            // Tabbed interface
+            TabView(selection: $selectedTab) {
+                // 2D Structure tab
+                VStack {
+                    if isLoading2D {
+                        ProgressView("Loading structure...")
+                            .frame(maxWidth: .infinity, minHeight: 400)
+                    } else if let image = molecule2DImage {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, minHeight: 400)
+                            .background(Color.white)
+                            .cornerRadius(8)
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(minHeight: 400)
+                            .overlay {
+                                Text("2D structure not available")
+                                    .foregroundColor(.secondary)
+                            }
+                    }
+                }
+                .tabItem {
+                    Label("2D Structure", systemImage: "square.grid.2x2")
+                }
+                .tag(0)
+                
+                // 3D Structure tab
+                Group {
+                    if isLoading3D {
+                        ProgressView("Generating 3D coordinates...")
+                            .frame(maxWidth: .infinity, minHeight: 400)
+                    } else if let coords = molecule3DCoords {
+                        Molecule3DView(coordinates: coords)
+                            .frame(minHeight: 400)
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(minHeight: 400)
+                            .overlay {
+                                VStack {
+                                    Text("3D structure not available")
+                                        .foregroundColor(.secondary)
+                                    Button("Load 3D View") {
+                                        load3DCoordinates()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .padding(.top, 8)
+                                }
+                            }
+                    }
+                }
+                .tabItem {
+                    Label("3D Structure", systemImage: "cube")
+                }
+                .tag(1)
+                
+                // Properties tab
+                VStack(alignment: .leading, spacing: 16) {
+                    PropertyRow(label: "ChEMBL ID", value: molecule.chemblId)
+                    if let formula = molecule.formula, !formula.isEmpty {
+                        PropertyRow(label: "Formula", value: formula)
+                    }
+                    PropertyRow(label: "Molecular Weight", value: "\(String(format: "%.2f", molecule.molecularWeight)) Da")
+                    PropertyRow(label: "SMILES", value: molecule.smiles)
+                    PropertyRow(label: "Status", value: molecule.isApproved ? "Approved Drug" : "Research Compound")
+                }
+                .padding()
+                .tabItem {
+                    Label("Properties", systemImage: "info.circle")
+                }
+                .tag(2)
+            }
+            .frame(minHeight: 450)
+            .onChange(of: selectedTab) { newValue in
+                if newValue == 0 && molecule2DImage == nil {
+                    load2DImage()
+                } else if newValue == 1 && molecule3DCoords == nil && !isLoading3D {
+                    load3DCoordinates()
+                }
+            }
+            .onAppear {
+                if selectedTab == 0 {
+                    load2DImage()
+                }
+            }
             
             // Similar molecules section
             VStack(alignment: .leading, spacing: 12) {
@@ -364,7 +476,7 @@ struct SelectedMoleculeSection: View {
                         .padding()
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 16) {
                             ForEach(similarMolecules) { similarMolecule in
                                 MoleculeCardWithSimilarity(molecule: similarMolecule) {
                                     // Convert Molecule to MoleculeBasic for selection
@@ -374,15 +486,57 @@ struct SelectedMoleculeSection: View {
                                         name: similarMolecule.name,
                                         smiles: similarMolecule.smiles,
                                         molecularWeight: similarMolecule.molecularWeight,
-                                        isApproved: similarMolecule.isApproved
+                                        isApproved: similarMolecule.isApproved,
+                                        formula: similarMolecule.formula
                                     )
                                     onMoleculeTap(basic)
                                 }
-                                .frame(width: 200)
                             }
                         }
                         .padding(.horizontal, 4)
                     }
+                }
+            }
+        }
+    }
+    
+    private func load2DImage() {
+        guard molecule2DImage == nil && !isLoading2D else { return }
+        isLoading2D = true
+        
+        Task {
+            do {
+                let image = try await BackendService.shared.renderMolecule(
+                    smiles: molecule.smiles,
+                    width: 400,
+                    height: 400
+                )
+                await MainActor.run {
+                    molecule2DImage = image
+                    isLoading2D = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading2D = false
+                }
+            }
+        }
+    }
+    
+    private func load3DCoordinates() {
+        guard molecule3DCoords == nil && !isLoading3D else { return }
+        isLoading3D = true
+        
+        Task {
+            do {
+                let coords = try await BackendService.shared.getMolecule3D(index: molecule.id)
+                await MainActor.run {
+                    molecule3DCoords = coords
+                    isLoading3D = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading3D = false
                 }
             }
         }

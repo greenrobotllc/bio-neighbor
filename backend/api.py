@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 from search_engine import SearchEngine, get_search_engine
-from molecule_renderer import render_molecule_to_base64
+from molecule_renderer import render_molecule_to_base64, generate_3d_coordinates
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -283,6 +283,95 @@ def get_molecule(index: int):
         return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
 
 
+@app.route('/molecule/<int:index>/thumbnail', methods=['GET'])
+def get_molecule_thumbnail(index: int):
+    """
+    Get a small thumbnail image of a molecule for use in cards.
+    
+    Query parameters:
+    - width (int): Image width (default: 100)
+    - height (int): Image height (default: 100)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "image": "data:image/png;base64,..."
+    }
+    """
+    try:
+        width = request.args.get('width', 100, type=int)
+        height = request.args.get('height', 100, type=int)
+        
+        engine = get_engine()
+        molecule = engine.get_molecule_by_index(index)
+        
+        if not molecule.get('smiles'):
+            return jsonify({'success': False, 'error': 'Molecule has no SMILES'}), 400
+        
+        image_base64 = render_molecule_to_base64(
+            molecule['smiles'], 
+            width=width, 
+            height=height, 
+            enhanced=True
+        )
+        
+        if image_base64 is None:
+            return jsonify({'success': False, 'error': 'Could not render molecule'}), 400
+        
+        return jsonify({
+            'success': True,
+            'image': image_base64
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecule/<index>/thumbnail endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+
+
+@app.route('/molecule/<int:index>/3d', methods=['GET'])
+def get_molecule_3d(index: int):
+    """
+    Get 3D coordinates for a molecule.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "atoms": [{"symbol": "C", "x": 0.0, "y": 0.0, "z": 0.0, "index": 0}, ...],
+        "bonds": [{"atom1": 0, "atom2": 1, "order": 1}, ...],
+        "smiles": "..."
+    }
+    """
+    try:
+        engine = get_engine()
+        molecule = engine.get_molecule_by_index(index)
+        
+        if not molecule.get('smiles'):
+            return jsonify({'success': False, 'error': 'Molecule has no SMILES'}), 400
+        
+        coords = generate_3d_coordinates(molecule['smiles'])
+        if coords is None:
+            return jsonify({'success': False, 'error': 'Could not generate 3D coordinates'}), 400
+        
+        return jsonify({
+            'success': True,
+            **coords
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecule/<index>/3d endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+
+
 @app.route('/render', methods=['POST'])
 def render_molecule():
     """
@@ -312,8 +401,9 @@ def render_molecule():
         
         width = data.get('width', 400)
         height = data.get('height', 400)
+        enhanced = data.get('enhanced', False)
         
-        image_base64 = render_molecule_to_base64(smiles, width=width, height=height)
+        image_base64 = render_molecule_to_base64(smiles, width=width, height=height, enhanced=enhanced)
         if image_base64 is None:
             return jsonify({'success': False, 'error': 'Invalid SMILES string'}), 400
         
@@ -324,6 +414,178 @@ def render_molecule():
     
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/diseases', methods=['GET'])
+def list_diseases():
+    """
+    List all diseases in the database.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "diseases": [
+            {
+                "id": 1,
+                "name": "Alzheimer's disease",
+                "mesh_id": "D000544",
+                "description": null
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        engine = get_engine()
+        diseases = engine.get_all_diseases()
+        
+        return jsonify({
+            'success': True,
+            'diseases': diseases
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /diseases endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/diseases/<disease_name>/molecules', methods=['GET'])
+def get_disease_molecules(disease_name: str):
+    """
+    Get all molecules associated with a disease.
+    
+    Query parameters:
+    - limit (int): Maximum number of molecules to return (default: no limit)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "disease": "Alzheimer's disease",
+        "molecules": [...]
+    }
+    """
+    try:
+        limit = request.args.get('limit', None, type=int)
+        
+        engine = get_engine()
+        molecules = engine.get_disease_molecules(disease_name, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'disease': disease_name,
+            'molecules': molecules,
+            'count': len(molecules)
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /diseases/<disease_name>/molecules endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/diseases/<disease_name>/top-molecules', methods=['GET'])
+def get_disease_top_molecules(disease_name: str):
+    """
+    Get top N molecules for a disease (most commonly used drugs).
+    
+    Query parameters:
+    - top_k (int): Number of top molecules to return (default: 10)
+    
+    Response (JSON):
+    {
+        "success": true,
+        "disease": "Alzheimer's disease",
+        "molecules": [...]
+    }
+    """
+    try:
+        top_k = request.args.get('top_k', 10, type=int)
+        top_k = min(max(top_k, 1), 100)  # Clamp between 1 and 100
+        
+        engine = get_engine()
+        molecules = engine.get_disease_molecules(disease_name, limit=top_k)
+        
+        return jsonify({
+            'success': True,
+            'disease': disease_name,
+            'molecules': molecules,
+            'count': len(molecules)
+        })
+    
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /diseases/<disease_name>/top-molecules endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
+
+
+@app.route('/search/by-disease', methods=['POST'])
+def search_by_disease():
+    """
+    Search for similar molecules to drugs used for a specific disease.
+    
+    Request body (JSON):
+    {
+        "disease_name": "Alzheimer's disease",
+        "top_k": 10
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "disease": "Alzheimer's disease",
+        "results": [...]
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+        
+        disease_name = data.get('disease_name')
+        if not disease_name:
+            return jsonify({'success': False, 'error': 'disease_name is required'}), 400
+        
+        top_k = data.get('top_k', 10)
+        if not isinstance(top_k, int) or top_k < 1:
+            top_k = 10
+        
+        engine = get_engine()
+        results = engine.search_by_disease(disease_name, top_k=top_k)
+        
+        return jsonify({
+            'success': True,
+            'disease': disease_name,
+            'results': results,
+            'count': len(results)
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /search/by-disease endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {error_msg}'
+        }), 500
 
 
 def handle_stdin_request():
@@ -418,6 +680,10 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print(f"   GET  /health - Health check")
     print(f"   POST /search - Search by SMILES")
     print(f"   POST /search/chembl - Search by ChEMBL ID")
+    print(f"   POST /search/by-disease - Search similar molecules to disease-related drugs")
+    print(f"   GET  /diseases - List all diseases")
+    print(f"   GET  /diseases/<name>/molecules - Get molecules for a disease")
+    print(f"   GET  /diseases/<name>/top-molecules - Get top molecules for a disease")
     print(f"   GET  /molecule/<index> - Get molecule by index")
     app.run(host=host, port=port, debug=debug)
 

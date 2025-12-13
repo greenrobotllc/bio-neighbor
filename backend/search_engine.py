@@ -8,17 +8,19 @@ import faiss
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdMolDescriptors
 import pandas as pd
 
 from index_builder import load_index
 from fingerprints import compute_morgan_fingerprint, FINGERPRINT_SIZE, RADIUS
 from data_loader import get_molecule_by_id, load_from_database
+import sqlite3
 
 # Configuration
 DATA_DIR = Path(__file__).parent.parent / "data"
 INDEX_PATH = DATA_DIR / "faiss_index.bin"
 METADATA_PATH = DATA_DIR / "index_metadata.pkl"
+DB_PATH = DATA_DIR / "molecules.db"
 
 
 class SearchEngine:
@@ -60,6 +62,26 @@ class SearchEngine:
         except Exception as e:
             print(f"⚠️  Warning: Could not load molecule database: {e}")
     
+    def _calculate_formula(self, smiles: str) -> Optional[str]:
+        """
+        Calculate molecular formula from SMILES string.
+        
+        Args:
+            smiles: SMILES string
+            
+        Returns:
+            Molecular formula (e.g., "C9H8O4") or None if invalid
+        """
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return None
+            formula = rdMolDescriptors.CalcMolFormula(mol)
+            return formula
+        except Exception as e:
+            print(f"⚠️  Warning: Could not calculate formula for {smiles[:50]}: {e}")
+            return None
+    
     def _get_molecule_info(self, index: int) -> Dict:
         """
         Get molecule information by index.
@@ -77,13 +99,20 @@ class SearchEngine:
                 # Convert all values to Python native types for JSON serialization
                 mw = row.get('molecular_weight', 0)
                 mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+                smiles = str(row.get('smiles', ''))
+                # Use stored formula if available, otherwise calculate
+                formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
                 return {
                     'index': int(index),
                     'chembl_id': str(row.get('chembl_id', '')),
                     'name': str(row.get('name', '')),
-                    'smiles': str(row.get('smiles', '')),
+                    'smiles': smiles,
                     'molecular_weight': mw_float,
-                    'is_approved': bool(row.get('is_approved', False))
+                    'is_approved': bool(row.get('is_approved', False)),
+                    'formula': formula,
+                    'inchi': str(row.get('inchi', '')),
+                    'inchikey': str(row.get('inchikey', '')),
+                    'pubchem_cid': str(row.get('pubchem_cid', ''))
                 }
         else:
             # Fallback to metadata
@@ -99,7 +128,11 @@ class SearchEngine:
                 'name': '',
                 'smiles': '',
                 'molecular_weight': 0,
-                'is_approved': False
+                'is_approved': False,
+                'formula': None,
+                'inchi': '',
+                'inchikey': '',
+                'pubchem_cid': ''
             }
     
     def search_similar(self, query_smiles: str, top_k: int = 10) -> List[Dict]:
@@ -237,13 +270,20 @@ class SearchEngine:
             # Convert all values to Python native types for JSON serialization
             mw = row.get('molecular_weight', 0)
             mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+            smiles = str(row.get('smiles', ''))
+            # Use stored formula if available, otherwise calculate
+            formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
             molecule_info = {
                 'index': original_idx,
                 'chembl_id': str(row.get('chembl_id', '')),
                 'name': str(row.get('name', '')),
-                'smiles': str(row.get('smiles', '')),
+                'smiles': smiles,
                 'molecular_weight': mw_float,
-                'is_approved': bool(row.get('is_approved', False))
+                'is_approved': bool(row.get('is_approved', False)),
+                'formula': formula,
+                'inchi': str(row.get('inchi', '')),
+                'inchikey': str(row.get('inchikey', '')),
+                'pubchem_cid': str(row.get('pubchem_cid', ''))
             }
             molecules.append(molecule_info)
         
@@ -279,13 +319,20 @@ class SearchEngine:
             # Convert all values to Python native types for JSON serialization
             mw = row.get('molecular_weight', 0)
             mw_float = float(mw.item() if hasattr(mw, 'item') else mw) if mw is not None else 0.0
+            smiles = str(row.get('smiles', ''))
+            # Use stored formula if available, otherwise calculate
+            formula = str(row.get('formula', '')) if row.get('formula', '') else (self._calculate_formula(smiles) if smiles else None)
             molecule_info = {
                 'index': int(idx),  # Keep original index for random samples
                 'chembl_id': str(row.get('chembl_id', '')),
                 'name': str(row.get('name', '')),
-                'smiles': str(row.get('smiles', '')),
+                'smiles': smiles,
                 'molecular_weight': mw_float,
-                'is_approved': bool(row.get('is_approved', False))
+                'is_approved': bool(row.get('is_approved', False)),
+                'formula': formula,
+                'inchi': str(row.get('inchi', '')),
+                'inchikey': str(row.get('inchikey', '')),
+                'pubchem_cid': str(row.get('pubchem_cid', ''))
             }
             molecules.append(molecule_info)
         
@@ -333,6 +380,148 @@ class SearchEngine:
             'molecule': molecule,
             'similar': similar
         }
+    
+    def get_all_diseases(self) -> List[Dict]:
+        """
+        Get all diseases in the database.
+        
+        Returns:
+            List of dictionaries with disease information
+        """
+        if not DB_PATH.exists():
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT id, name, mesh_id, description FROM diseases ORDER BY name")
+            rows = cursor.fetchall()
+            
+            diseases = []
+            for row in rows:
+                diseases.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'mesh_id': row[2],
+                    'description': row[3]
+                })
+            
+            return diseases
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet
+            return []
+        finally:
+            conn.close()
+    
+    def get_disease_molecules(self, disease_name: str, limit: Optional[int] = None) -> List[Dict]:
+        """
+        Get all molecules associated with a disease.
+        
+        Args:
+            disease_name: Name of the disease (case-insensitive partial match)
+            limit: Optional limit on number of molecules to return
+            
+        Returns:
+            List of molecule dictionaries
+        """
+        if not DB_PATH.exists() or self.molecule_df is None:
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Find disease by name (case-insensitive partial match)
+            cursor.execute(
+                "SELECT id FROM diseases WHERE LOWER(name) LIKE LOWER(?)",
+                (f'%{disease_name}%',)
+            )
+            disease_rows = cursor.fetchall()
+            
+            if not disease_rows:
+                return []
+            
+            # Get all molecule indices for this disease
+            molecule_indices = []
+            for disease_row in disease_rows:
+                disease_id = disease_row[0]
+                cursor.execute(
+                    "SELECT molecule_index FROM drug_diseases WHERE disease_id = ?",
+                    (disease_id,)
+                )
+                indices = cursor.fetchall()
+                molecule_indices.extend([idx[0] for idx in indices])
+            
+            # Remove duplicates
+            molecule_indices = list(set(molecule_indices))
+            
+            # Apply limit if specified
+            if limit:
+                molecule_indices = molecule_indices[:limit]
+            
+            # Get molecule information
+            molecules = []
+            for idx in molecule_indices:
+                if 0 <= idx < len(self.molecule_df):
+                    molecule_info = self._get_molecule_info(int(idx))
+                    molecules.append(molecule_info)
+            
+            return molecules
+        
+        except sqlite3.OperationalError:
+            # Tables don't exist yet
+            return []
+        finally:
+            conn.close()
+    
+    def search_by_disease(self, disease_name: str, top_k: int = 10) -> List[Dict]:
+        """
+        Find molecules for a disease, then find similar molecules to those drugs.
+        This aggregates similar molecules from all disease-related drugs.
+        
+        Args:
+            disease_name: Name of the disease
+            top_k: Number of similar molecules to return per disease drug
+            
+        Returns:
+            List of similar molecules (aggregated and deduplicated)
+        """
+        # Get molecules for this disease
+        disease_molecules = self.get_disease_molecules(disease_name)
+        
+        if not disease_molecules:
+            return []
+        
+        # For each disease molecule, find similar molecules
+        all_similar = []
+        seen_indices = set()
+        
+        for disease_mol in disease_molecules:
+            smiles = disease_mol.get('smiles')
+            if not smiles:
+                continue
+            
+            try:
+                # Find similar molecules
+                similar = self.search_similar(smiles, top_k=top_k)
+                
+                # Add to results (avoid duplicates)
+                for mol in similar:
+                    mol_idx = mol.get('index')
+                    if mol_idx not in seen_indices:
+                        all_similar.append(mol)
+                        seen_indices.add(mol_idx)
+            
+            except (ValueError, Exception) as e:
+                # Skip if similarity search fails
+                continue
+        
+        # Sort by similarity (higher is better)
+        all_similar.sort(key=lambda x: x.get('similarity', 0), reverse=True)
+        
+        # Return top results
+        return all_similar[:top_k * len(disease_molecules)]
 
 
 # Global search engine instance (lazy loading)
