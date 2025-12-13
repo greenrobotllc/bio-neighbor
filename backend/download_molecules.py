@@ -61,7 +61,13 @@ def retry_with_backoff(func, max_retries=5, base_delay=1.0, max_delay=60.0):
     raise Exception("Max retries exceeded")
 
 from rdkit import Chem
-from data_loader import DB_PATH, save_to_database, load_from_database
+try:
+    from .data_loader import DB_PATH, save_to_database, load_from_database
+except ImportError:
+    try:
+        from data_loader import DB_PATH, save_to_database, load_from_database
+    except ImportError:
+        from backend.data_loader import DB_PATH, save_to_database, load_from_database
 import pandas as pd
 import sqlite3
 

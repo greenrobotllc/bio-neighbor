@@ -145,14 +145,19 @@ def load_fingerprints(filepath: Path = FINGERPRINTS_PATH) -> Tuple[Optional[np.n
         return None, None
     
     print(f"📂 Loading fingerprints from {filepath}...")
-    with open(filepath, 'rb') as f:
-        data = pickle.load(f)
-    
-    fingerprints = data['fingerprints']
-    metadata = data['metadata']
-    
-    print(f"✅ Loaded {len(fingerprints)} fingerprints")
-    return fingerprints, metadata
+    try:
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+        
+        fingerprints = data['fingerprints']
+        metadata = data['metadata']
+        
+        print(f"✅ Loaded {len(fingerprints)} fingerprints")
+        return fingerprints, metadata
+    except (pickle.UnpicklingError, EOFError, OSError) as e:
+        print(f"⚠️  Failed to load fingerprints cache ({filepath}): {e}")
+        print(f"   Cache file may be corrupted or truncated. Will regenerate on next build.")
+        return None, None
 
 
 def compute_and_save_fingerprints(df: pd.DataFrame, force_recompute: bool = False) -> Tuple[np.ndarray, pd.DataFrame]:

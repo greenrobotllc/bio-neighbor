@@ -185,7 +185,7 @@ def decompress_files(gz_files: list, output_dir: Path, keep_gz: bool = False):
     print(f"✅ Decompressed {len(smi_files)} files")
     return smi_files
 
-def combine_smi_files(smi_files: list, output_file: Path, max_molecules: int = None):
+def combine_smi_files(smi_files: list, output_file: Path, max_molecules: Optional[int] = None):
     """
     Combine multiple .smi files into one, optionally sampling.
     

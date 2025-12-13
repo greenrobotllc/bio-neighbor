@@ -157,6 +157,8 @@ def parse_drugbank_xml(xml_path: Path, target_disease: Optional[str] = None) -> 
     
     try:
         # Use iterparse for large XML files (memory efficient)
+        # Note: If XML can be user-supplied or from untrusted sources, consider using
+        # defusedxml.ElementTree.iterparse() instead to prevent XML bomb attacks
         context = ET.iterparse(xml_path, events=('start', 'end'))
         context = iter(context)
         event, root = next(context)
@@ -204,18 +206,16 @@ def parse_drugbank_xml(xml_path: Path, target_disease: Optional[str] = None) -> 
                             if indication_text:
                                 indications.append(indication_text.strip())
                     
-                    # Filter by target disease if specified
+                    # Filter by target disease if specified (and only keep matching indications)
                     if target_disease:
-                        # Check if any indication matches target disease
-                        matches_disease = False
-                        for indication in indications:
-                            if target_disease.lower() in indication.lower():
-                                matches_disease = True
-                                break
-                        
-                        if not matches_disease:
+                        td = target_disease.lower()
+                        # Filter indications to only those matching target_disease
+                        matching_indications = [i for i in indications if td in i.lower()]
+                        if not matching_indications:
                             elem.clear()
                             continue
+                        # Use only matching indications for relationships
+                        indications = matching_indications
                     
                     # Store relationship
                     if drug_id and (drug_smiles or drug_name) and indications:
@@ -557,12 +557,24 @@ def save_drugs_to_db(
         cursor = conn.cursor()
         
         # Initialize drugs table schema
-        from drug_schema import create_drugs_table
+        try:
+            from .drug_schema import create_drugs_table
+        except ImportError:
+            try:
+                from drug_schema import create_drugs_table
+            except ImportError:
+                from backend.drug_schema import create_drugs_table
         create_drugs_table(conn)
         
         drugs_added = 0
         
         for drug in drugs:
+            # Normalize name field (handle both 'name' and 'drug_name' keys)
+            name = drug.get('name') or drug.get('drug_name')
+            if not name:
+                # Skip drugs without a name (required NOT NULL field)
+                continue
+            
             # Check if drug already exists (by pubchem_cid or name)
             existing_id = None
             if drug.get('pubchem_cid'):
@@ -571,9 +583,9 @@ def save_drugs_to_db(
                 if result:
                     existing_id = result[0]
             
-            if existing_id is None and drug.get('name'):
+            if existing_id is None and name:
                 cursor.execute("SELECT id FROM drugs WHERE name = ? AND generic_name = ?", 
-                             (drug['name'], drug.get('generic_name')))
+                             (name, drug.get('generic_name')))
                 result = cursor.fetchone()
                 if result:
                     existing_id = result[0]
@@ -609,7 +621,7 @@ def save_drugs_to_db(
                         dosage_form, route
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    drug.get('name'),
+                    name,
                     drug.get('generic_name'),
                     json.dumps(drug.get('brand_names', [])),
                     drug.get('pubchem_cid'),
@@ -654,7 +666,13 @@ def save_disease_data_to_db(
     cursor = conn.cursor()
     
     # Ensure database schema is up to date
-    from db_migrations import migrate_database
+    try:
+        from .db_migrations import migrate_database
+    except ImportError:
+        try:
+            from db_migrations import migrate_database
+        except ImportError:
+            from backend.db_migrations import migrate_database
     migrate_database(conn)
     
     # Save drugs if provided

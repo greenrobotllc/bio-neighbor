@@ -123,7 +123,7 @@ struct MoleculeWithSimilar: Codable {
 
 struct MoleculeWithSimilarResponse: Codable {
     let success: Bool
-    let molecule: MoleculeBasic
+    let molecule: MoleculeBasic?
     let similar: [Molecule]?
     let error: String?
 }
@@ -172,7 +172,7 @@ struct Disease: Codable, Identifiable {
 
 struct DiseasesResponse: Codable {
     let success: Bool
-    let diseases: [Disease]
+    let diseases: [Disease]?
     let error: String?
 }
 

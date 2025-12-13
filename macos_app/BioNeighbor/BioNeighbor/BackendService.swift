@@ -68,6 +68,16 @@ class BackendService: ObservableObject {
     }
     
     func startBackend() throws {
+        // Make idempotent: if backend is already running, return early
+        if backendProcess != nil && isBackendRunning {
+            return
+        }
+        
+        // If process exists but isn't marked as running, clean it up first
+        if backendProcess != nil {
+            stopBackend()
+        }
+        
         // Get the path to the Python backend
         guard let projectRoot = getProjectRoot() else {
             throw BackendError.backendNotAvailable
@@ -105,6 +115,22 @@ class BackendService: ObservableObject {
         self.outputPipe = outputPipe
         self.errorPipe = errorPipe
         
+        // Set termination handler to keep UI state correct
+        process.terminationHandler = { [weak self] process in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                // Clear process and pipes when it exits
+                if self.backendProcess === process {
+                    self.backendProcess = nil
+                    self.isBackendRunning = false
+                    self.outputPipe?.fileHandleForReading.readabilityHandler = nil
+                    self.errorPipe?.fileHandleForReading.readabilityHandler = nil
+                    self.outputPipe = nil
+                    self.errorPipe = nil
+                }
+            }
+        }
+        
         // Drain stdout to prevent deadlock
         let outputHandle = outputPipe.fileHandleForReading
         outputHandle.readabilityHandler = { [weak self] handle in
@@ -139,8 +165,9 @@ class BackendService: ObservableObject {
         
         try process.run()
         backendProcess = process
+        isBackendRunning = true
         
-        // Wait a bit for server to start
+        // Wait a bit for server to start, then check health with backoff
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             self?.checkBackendHealth()
         }

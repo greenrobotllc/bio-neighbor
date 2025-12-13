@@ -108,6 +108,13 @@ Notes:
     
     # Clear existing data if force flag is set
     if args.force:
+        print("⚠️  WARNING: --force will DELETE ALL disease and drug-disease relationship data!")
+        print("   This affects the entire database, not just the specified disease.")
+        response = input("   Type 'yes' to confirm: ")
+        if response.lower() != 'yes':
+            print("❌ Aborted. Use --force without confirmation to skip this prompt.")
+            return
+        
         print("🗑️  Clearing existing disease data...")
         import sqlite3
         conn = sqlite3.connect(DB_PATH)

@@ -40,7 +40,7 @@ def fetch_drug_info_from_pubchem(
         if pubchem_cid:
             try:
                 comp = pcp.Compound.from_cid(int(pubchem_cid))
-            except:
+            except (ValueError, TypeError, Exception) as e:
                 comp = None
         else:
             compounds = pcp.get_compounds(drug_name, 'name')
@@ -93,7 +93,7 @@ def fetch_drug_info_from_pubchem(
             summary = pcp.get_properties(['Title', 'CanonicalSMILES'], cid, 'cid')
             if summary:
                 description = summary[0].get('Title', '')
-        except:
+        except Exception:
             pass
         
         # Get indication/use from PubChem (if available)
@@ -101,7 +101,7 @@ def fetch_drug_info_from_pubchem(
         try:
             # PubChem may have indication in properties
             props = pcp.get_properties(['MolecularWeight', 'CanonicalSMILES'], cid, 'cid')
-        except:
+        except Exception:
             pass
         
         # Extract active ingredients

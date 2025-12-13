@@ -175,8 +175,8 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         error_msg = str(e).lower()
                         if 'duplicate column' in error_msg or 'already exists' in error_msg:
                             print(f"   ⚠️  Skipping (already applied): {sql[:50]}...")
-                    else:
-                        raise
+                        else:
+                            raise
             
             # Make migration atomic: set version before committing
             # (set_schema_version commits internally, so we don't commit here)

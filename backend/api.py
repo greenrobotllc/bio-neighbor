@@ -301,6 +301,9 @@ def get_molecule_thumbnail(index: int):
     try:
         width = request.args.get('width', 100, type=int)
         height = request.args.get('height', 100, type=int)
+        # Clamp dimensions to prevent DoS (thumbnail should be small)
+        width = min(max(width, 16), 512)
+        height = min(max(height, 16), 512)
         
         engine = get_engine()
         molecule = engine.get_molecule_by_index(index)
@@ -399,8 +402,11 @@ def render_molecule():
         if not smiles:
             return jsonify({'success': False, 'error': 'smiles is required'}), 400
         
-        width = data.get('width', 400)
-        height = data.get('height', 400)
+        width = int(data.get('width', 400))
+        height = int(data.get('height', 400))
+        # Clamp dimensions to prevent DoS (larger limit for render endpoint)
+        width = min(max(width, 16), 2048)
+        height = min(max(height, 16), 2048)
         enhanced = data.get('enhanced', False)
         
         image_base64 = render_molecule_to_base64(smiles, width=width, height=height, enhanced=enhanced)
@@ -1072,17 +1078,28 @@ def download_molecules():
                 'error': 'Invalid source. Must be one of: pubchem, chembl, zinc'
             }), 400
         
-        if isinstance(names, list) and len(names) > 200:
-            return jsonify({
-                'success': False,
-                'error': 'Too many names (max 200)'
-            }), 400
+        # Validate and clamp count
+        if count is not None:
+            if not isinstance(count, int):
+                return jsonify({'success': False, 'error': 'count must be an integer'}), 400
+            count = min(max(count, 1), 100000)  # Clamp to reasonable max
         
-        if any(isinstance(n, str) and len(n) > 200 for n in (names or [])):
-            return jsonify({
-                'success': False,
-                'error': 'Name too long (max 200 chars)'
-            }), 400
+        # Validate names
+        if names:
+            if not isinstance(names, list):
+                return jsonify({'success': False, 'error': 'names must be a list'}), 400
+            if len(names) > 200:
+                return jsonify({
+                    'success': False,
+                    'error': 'Too many names (max 200)'
+                }), 400
+            if not all(isinstance(n, str) for n in names):
+                return jsonify({'success': False, 'error': 'names must be a list of strings'}), 400
+            if any(len(n) > 200 for n in names):
+                return jsonify({
+                    'success': False,
+                    'error': 'Name too long (max 200 chars)'
+                }), 400
         
         if not count and not names and not full_file:
             return jsonify({
@@ -1165,6 +1182,24 @@ def download_molecules():
             from stream_process_output import stream_output
             stream_output(process, log_callback=lambda msg: print(msg))
             
+            # Start a daemon thread to wait for process and update final status
+            import threading
+            def process_reaper():
+                try:
+                    process.wait()  # Wait for process to complete
+                    # Update progress file with final status
+                    from progress_tracker import write_progress
+                    exit_code = process.returncode
+                    if exit_code == 0:
+                        write_progress(task_id, 'completed', 'Download completed successfully', {})
+                    else:
+                        write_progress(task_id, 'failed', f'Download failed with exit code {exit_code}', {'exit_code': exit_code})
+                except Exception as e:
+                    print(f"⚠️  Error in process reaper: {e}")
+            
+            reaper_thread = threading.Thread(target=process_reaper, daemon=True)
+            reaper_thread.start()
+            
             return jsonify({
                 'success': True,
                 'message': 'Download started',
@@ -1217,17 +1252,28 @@ def download_drugs():
         bulk = data.get('bulk', False)
         
         # Validate inputs
-        if isinstance(names, list) and len(names) > 200:
-            return jsonify({
-                'success': False,
-                'error': 'Too many names (max 200)'
-            }), 400
+        # Validate and clamp count
+        if count is not None:
+            if not isinstance(count, int):
+                return jsonify({'success': False, 'error': 'count must be an integer'}), 400
+            count = min(max(count, 1), 100000)  # Clamp to reasonable max
         
-        if any(isinstance(n, str) and len(n) > 200 for n in (names or [])):
-            return jsonify({
-                'success': False,
-                'error': 'Name too long (max 200 chars)'
-            }), 400
+        # Validate names
+        if names:
+            if not isinstance(names, list):
+                return jsonify({'success': False, 'error': 'names must be a list'}), 400
+            if len(names) > 200:
+                return jsonify({
+                    'success': False,
+                    'error': 'Too many names (max 200)'
+                }), 400
+            if not all(isinstance(n, str) for n in names):
+                return jsonify({'success': False, 'error': 'names must be a list of strings'}), 400
+            if any(len(n) > 200 for n in names):
+                return jsonify({
+                    'success': False,
+                    'error': 'Name too long (max 200 chars)'
+                }), 400
         
         if isinstance(disease, str) and len(disease) > 200:
             return jsonify({
@@ -1338,6 +1384,24 @@ def download_drugs():
             from stream_process_output import stream_output
             stream_output(process, log_callback=lambda msg: print(msg))
             
+            # Start a daemon thread to wait for process and update final status
+            import threading
+            def process_reaper():
+                try:
+                    process.wait()  # Wait for process to complete
+                    # Update progress file with final status
+                    from progress_tracker import write_progress
+                    exit_code = process.returncode
+                    if exit_code == 0:
+                        write_progress(task_id, 'completed', 'Download completed successfully', {})
+                    else:
+                        write_progress(task_id, 'failed', f'Download failed with exit code {exit_code}', {'exit_code': exit_code})
+                except Exception as e:
+                    print(f"⚠️  Error in process reaper: {e}")
+            
+            reaper_thread = threading.Thread(target=process_reaper, daemon=True)
+            reaper_thread.start()
+            
             return jsonify({
                 'success': True,
                 'message': 'Download started',
@@ -1392,17 +1456,28 @@ def download_diseases():
         count = data.get('count')
         
         # Validate inputs
-        if isinstance(names, list) and len(names) > 200:
-            return jsonify({
-                'success': False,
-                'error': 'Too many names (max 200)'
-            }), 400
+        # Validate and clamp count
+        if count is not None:
+            if not isinstance(count, int):
+                return jsonify({'success': False, 'error': 'count must be an integer'}), 400
+            count = min(max(count, 1), 100000)  # Clamp to reasonable max
         
-        if any(isinstance(n, str) and len(n) > 200 for n in (names or [])):
-            return jsonify({
-                'success': False,
-                'error': 'Name too long (max 200 chars)'
-            }), 400
+        # Validate names
+        if names:
+            if not isinstance(names, list):
+                return jsonify({'success': False, 'error': 'names must be a list'}), 400
+            if len(names) > 200:
+                return jsonify({
+                    'success': False,
+                    'error': 'Too many names (max 200)'
+                }), 400
+            if not all(isinstance(n, str) for n in names):
+                return jsonify({'success': False, 'error': 'names must be a list of strings'}), 400
+            if any(len(n) > 200 for n in names):
+                return jsonify({
+                    'success': False,
+                    'error': 'Name too long (max 200 chars)'
+                }), 400
         
         if not names and count is None:
             # If no names and no count, download all diseases from NLM
@@ -1486,6 +1561,24 @@ def download_diseases():
             # Stream output in background thread
             from stream_process_output import stream_output
             stream_output(process, log_callback=lambda msg: print(msg))
+            
+            # Start a daemon thread to wait for process and update final status
+            import threading
+            def process_reaper():
+                try:
+                    process.wait()  # Wait for process to complete
+                    # Update progress file with final status
+                    from progress_tracker import write_progress
+                    exit_code = process.returncode
+                    if exit_code == 0:
+                        write_progress(task_id, 'completed', 'Download completed successfully', {})
+                    else:
+                        write_progress(task_id, 'failed', f'Download failed with exit code {exit_code}', {'exit_code': exit_code})
+                except Exception as e:
+                    print(f"⚠️  Error in process reaper: {e}")
+            
+            reaper_thread = threading.Thread(target=process_reaper, daemon=True)
+            reaper_thread.start()
             
             return jsonify({
                 'success': True,

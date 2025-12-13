@@ -84,7 +84,7 @@ def render_molecule_2d_enhanced(smiles: str, width: int = 400, height: int = 400
             img_data = drawer.GetDrawingText()
             img = Image.open(io.BytesIO(img_data))
             return img
-        except:
+        except Exception:
             # Fallback to basic rendering with larger size for better quality
             # Cap dimensions to prevent memory spikes (max 2000px)
             max_dimension = 2000
@@ -161,7 +161,7 @@ def generate_3d_coordinates(smiles: str) -> Optional[Dict]:
         # Optimize geometry using MMFF
         try:
             AllChem.MMFFOptimizeMolecule(mol)
-        except:
+        except Exception:
             # If MMFF fails, try UFF
             AllChem.UFFOptimizeMolecule(mol)
         

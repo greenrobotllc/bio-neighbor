@@ -1143,13 +1143,18 @@ class SearchEngine:
 
 # Global search engine instance (lazy loading)
 _search_engine = None
+import threading
+_search_engine_lock = threading.Lock()
 
 
 def get_search_engine() -> SearchEngine:
-    """Get or create the global search engine instance."""
+    """Get or create the global search engine instance (thread-safe)."""
     global _search_engine
     if _search_engine is None:
-        _search_engine = SearchEngine()
+        with _search_engine_lock:
+            # Double-check pattern to avoid race conditions
+            if _search_engine is None:
+                _search_engine = SearchEngine()
     return _search_engine
 
 

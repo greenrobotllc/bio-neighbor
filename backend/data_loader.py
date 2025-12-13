@@ -1373,14 +1373,15 @@ def get_molecule_by_id(chembl_id: str) -> Optional[Dict]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM molecules WHERE chembl_id = ?", (chembl_id,))
     row = cursor.fetchone()
+    
+    # Capture columns before closing connection (cursor.description becomes invalid after close)
+    columns = [d[0] for d in cursor.description] if cursor.description else []
     conn.close()
     
     if row is None:
         return None
     
-    # Use cursor.description to get actual column names from schema
-    # This ensures we return all columns even as schema evolves
-    columns = [d[0] for d in cursor.description]
+    # Use captured column names to ensure we return all columns even as schema evolves
     return dict(zip(columns, row))
 
 
