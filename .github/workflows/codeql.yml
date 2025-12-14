@@ -1,5 +1,9 @@
 name: "CodeQL"
 
+# NOTE: If you see an error about "default setup is enabled", you need to disable
+# GitHub's default CodeQL setup in repository settings:
+# Settings > Code security and analysis > Code scanning > CodeQL analysis > Disable
+
 on:
   push:
     branches: [ "main", "master" ]
@@ -36,12 +40,6 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
-
-    - name: Setup proxy for registries
-      if: matrix.language == 'swift'
-      run: |
-        echo "##[add-matcher].github/codeql/codeql-ubitrace-matcher.json"
-        echo "##[add-matcher].github/codeql/codeql-ubitrace-matcher.json" >> $GITHUB_ENV
 
     - name: Autobuild
       if: matrix.language == 'python'
