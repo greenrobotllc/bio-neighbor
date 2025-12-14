@@ -6,12 +6,16 @@ Provides JSON-based API via HTTP (Flask) or stdin/stdout.
 import json
 import sys
 import os
+import re
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 from search_engine import SearchEngine, get_search_engine
 from molecule_renderer import render_molecule_to_base64, generate_3d_coordinates
+
+# Compiled regex for validating names in download endpoints
+ALLOWED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -1105,6 +1109,13 @@ def download_molecules():
                     'success': False,
                     'error': 'Name too long (max 200 chars)'
                 }), 400
+            # Additional validation: allow only safe characters in names
+            for n in names:
+                if not ALLOWED_NAME_PATTERN.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+                    }), 400
         
         if not count and not names and not full_file:
             return jsonify({
@@ -1279,6 +1290,13 @@ def download_drugs():
                     'success': False,
                     'error': 'Name too long (max 200 chars)'
                 }), 400
+            # Additional validation: allow only safe characters in names
+            for n in names:
+                if not ALLOWED_NAME_PATTERN.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+                    }), 400
         
         if isinstance(disease, str) and len(disease) > 200:
             return jsonify({
@@ -1483,6 +1501,13 @@ def download_diseases():
                     'success': False,
                     'error': 'Name too long (max 200 chars)'
                 }), 400
+            # Additional validation: allow only safe characters in names
+            for n in names:
+                if not ALLOWED_NAME_PATTERN.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+                    }), 400
         
         if not names and count is None:
             # If no names and no count, download all diseases from NLM
