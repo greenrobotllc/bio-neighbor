@@ -91,7 +91,8 @@ struct DrugsView: View {
         } detail: {
             NavigationStack(path: $navigationPath) {
                 // Main content
-                ScrollView {
+                Group {
+                    ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         // Breadcrumb
                         BreadcrumbView(coordinator: navCoordinator)
@@ -135,11 +136,14 @@ struct DrugsView: View {
                 }
                 }
                 .padding()
-            }
-            }
+                    }
+                }
             .navigationTitle("All Drugs")
             .navigationDestination(for: Drug.self) { drug in
                 DrugDetailView(drug: drug)
+            }
+            .navigationDestination(for: Molecule.self) { molecule in
+                MoleculeDetailView(molecule: molecule)
             }
             .onAppear {
                 // Push "Drugs" breadcrumb when view appears
@@ -151,6 +155,7 @@ struct DrugsView: View {
                 ))
                 loadDrugs()
             }
+        }
         }
     }
     

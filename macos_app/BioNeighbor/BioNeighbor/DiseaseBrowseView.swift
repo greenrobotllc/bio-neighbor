@@ -159,7 +159,8 @@ struct DiseaseBrowseView: View {
         } detail: {
             NavigationStack(path: $navigationPath) {
                 // Main content area
-                if let disease = selectedDisease {
+                Group {
+                    if let disease = selectedDisease {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
                             // Breadcrumb
@@ -410,8 +411,8 @@ struct DiseaseBrowseView: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            }
+                    }
+                }
             .navigationTitle("Disease Browser")
             .navigationDestination(for: Molecule.self) { molecule in
                 MoleculeDetailView(molecule: molecule)
@@ -437,6 +438,7 @@ struct DiseaseBrowseView: View {
                 if diseases.isEmpty {
                     loadDiseases()
                 }
+            }
             }
         }
     }

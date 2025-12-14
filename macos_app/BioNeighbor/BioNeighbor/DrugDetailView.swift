@@ -190,9 +190,6 @@ struct DrugDetailView: View {
                 .padding()
             }
         .navigationTitle("Drug Details")
-        .navigationDestination(for: Molecule.self) { molecule in
-            MoleculeDetailView(molecule: molecule)
-        }
         .frame(minWidth: 700, minHeight: 600)
         .onAppear {
             print("🟡 DrugDetailView onAppear - pushing drug breadcrumb: \(drug.name)")
