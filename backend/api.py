@@ -6,6 +6,7 @@ Provides JSON-based API via HTTP (Flask) or stdin/stdout.
 import json
 import sys
 import os
+import re
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -1105,6 +1106,14 @@ def download_molecules():
                     'success': False,
                     'error': 'Name too long (max 200 chars)'
                 }), 400
+            # Additional validation: allow only safe characters in names
+            allowed_pattern = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
+            for n in names:
+                if not allowed_pattern.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+                    }), 400
         
         if not count and not names and not full_file:
             return jsonify({
@@ -1279,6 +1288,14 @@ def download_drugs():
                     'success': False,
                     'error': 'Name too long (max 200 chars)'
                 }), 400
+            # Additional validation: allow only safe characters in names
+            allowed_pattern = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
+            for n in names:
+                if not allowed_pattern.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+                    }), 400
         
         if isinstance(disease, str) and len(disease) > 200:
             return jsonify({
@@ -1484,13 +1501,12 @@ def download_diseases():
                     'error': 'Name too long (max 200 chars)'
                 }), 400
             # Additional validation: allow only safe characters in names
-            import re
-            allowed_pattern = re.compile(r'^[A-Za-z0-9 \-_\(\),\.]+$')
+            allowed_pattern = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
             for n in names:
                 if not allowed_pattern.match(n):
                     return jsonify({
                         'success': False,
-                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period."
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
                     }), 400
         
         if not names and count is None:
