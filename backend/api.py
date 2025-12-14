@@ -14,6 +14,9 @@ from flask_cors import CORS
 from search_engine import SearchEngine, get_search_engine
 from molecule_renderer import render_molecule_to_base64, generate_3d_coordinates
 
+# Compiled regex for validating names in download endpoints
+ALLOWED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
 
@@ -1107,9 +1110,8 @@ def download_molecules():
                     'error': 'Name too long (max 200 chars)'
                 }), 400
             # Additional validation: allow only safe characters in names
-            allowed_pattern = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
             for n in names:
-                if not allowed_pattern.match(n):
+                if not ALLOWED_NAME_PATTERN.match(n):
                     return jsonify({
                         'success': False,
                         'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
@@ -1289,9 +1291,8 @@ def download_drugs():
                     'error': 'Name too long (max 200 chars)'
                 }), 400
             # Additional validation: allow only safe characters in names
-            allowed_pattern = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
             for n in names:
-                if not allowed_pattern.match(n):
+                if not ALLOWED_NAME_PATTERN.match(n):
                     return jsonify({
                         'success': False,
                         'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
@@ -1501,9 +1502,8 @@ def download_diseases():
                     'error': 'Name too long (max 200 chars)'
                 }), 400
             # Additional validation: allow only safe characters in names
-            allowed_pattern = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
             for n in names:
-                if not allowed_pattern.match(n):
+                if not ALLOWED_NAME_PATTERN.match(n):
                     return jsonify({
                         'success': False,
                         'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
