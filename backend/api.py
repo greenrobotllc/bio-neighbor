@@ -1483,6 +1483,15 @@ def download_diseases():
                     'success': False,
                     'error': 'Name too long (max 200 chars)'
                 }), 400
+            # Additional validation: allow only safe characters in names
+            import re
+            allowed_pattern = re.compile(r'^[A-Za-z0-9 \-_\(\),\.]+$')
+            for n in names:
+                if not allowed_pattern.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period."
+                    }), 400
         
         if not names and count is None:
             # If no names and no count, download all diseases from NLM
