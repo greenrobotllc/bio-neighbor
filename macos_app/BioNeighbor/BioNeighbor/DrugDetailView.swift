@@ -195,6 +195,7 @@ struct DrugDetailView: View {
         }
         .frame(minWidth: 700, minHeight: 600)
         .onAppear {
+            print("🟡 DrugDetailView onAppear - pushing drug breadcrumb: \(drug.name)")
             navCoordinator.push(BreadcrumbItem(
                 title: drug.name,
                 icon: "pills",

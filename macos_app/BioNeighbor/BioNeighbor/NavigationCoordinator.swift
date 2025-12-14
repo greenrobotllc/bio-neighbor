@@ -22,6 +22,7 @@ struct BreadcrumbItem: Identifiable, Hashable {
         case drugs
         case molecule
         case drug
+        case disease  // Individual disease (not the category)
         case comparison
     }
     
@@ -44,13 +45,56 @@ class NavigationCoordinator: ObservableObject {
     }
     
     func push(_ item: BreadcrumbItem) {
-        // Remove any items after the current position if we're not at the end
-        // This handles the case where user navigates back then forward
-        if let currentIndex = breadcrumbPath.firstIndex(where: { $0.id == item.id }) {
-            breadcrumbPath = Array(breadcrumbPath.prefix(currentIndex + 1))
+        print("🔵 NavigationCoordinator.push: title='\(item.title)', type=\(item.type)")
+        print("🔵 Current breadcrumbPath before push: \(breadcrumbPath.map { "\($0.title)(\($0.type))" }.joined(separator: " > "))")
+        
+        // Check if an item with the same title and type already exists
+        if let existingIndex = breadcrumbPath.firstIndex(where: { $0.title == item.title && $0.type == item.type }) {
+            // If it exists, remove everything after it and keep it
+            breadcrumbPath = Array(breadcrumbPath.prefix(existingIndex + 1))
+            print("🔵 Item already exists at index \(existingIndex), trimmed path")
         } else {
+            // If it's a category type (diseases, drugs, molecules), remove ALL other category types
+            // AND all individual items (disease, drug, molecule) AND comparison breadcrumbs
+            // This ensures only one category appears in breadcrumbs at a time, without individual items
+            if item.type == .diseases || item.type == .drugs || item.type == .molecules {
+                let removedCategories = breadcrumbPath.filter { 
+                    $0.type == .diseases || $0.type == .drugs || $0.type == .molecules 
+                }
+                let removedIndividuals = breadcrumbPath.filter {
+                    $0.type == .disease || $0.type == .drug || $0.type == .molecule
+                }
+                let removedComparisons = breadcrumbPath.filter {
+                    $0.type == .comparison
+                }
+                breadcrumbPath = breadcrumbPath.filter { 
+                    $0.type != .diseases && $0.type != .drugs && $0.type != .molecules &&
+                    $0.type != .disease && $0.type != .drug && $0.type != .molecule &&
+                    $0.type != .comparison
+                }
+                print("🔵 Removed all category breadcrumbs: \(removedCategories.map { $0.title })")
+                print("🔵 Removed all individual items: \(removedIndividuals.map { $0.title })")
+                print("🔵 Removed comparison breadcrumbs: \(removedComparisons.map { $0.title })")
+            }
+            // If it's an individual item type (disease, drug, molecule), remove any other items of the same type
+            // AND remove all category breadcrumbs (diseases, drugs, molecules) since we're now viewing a specific item
+            if item.type == .disease || item.type == .drug || item.type == .molecule {
+                let removedIndividuals = breadcrumbPath.filter { $0.type == item.type }
+                let removedCategories = breadcrumbPath.filter { 
+                    $0.type == .diseases || $0.type == .drugs || $0.type == .molecules 
+                }
+                breadcrumbPath = breadcrumbPath.filter { 
+                    $0.type != item.type &&
+                    $0.type != .diseases && $0.type != .drugs && $0.type != .molecules
+                }
+                print("🔵 Removed individual items: \(removedIndividuals.map { $0.title })")
+                print("🔵 Removed category breadcrumbs: \(removedCategories.map { $0.title })")
+            }
             breadcrumbPath.append(item)
         }
+        
+        print("🔵 Final breadcrumbPath: \(breadcrumbPath.map { "\($0.title)(\($0.type))" }.joined(separator: " > "))")
+        assert(breadcrumbPath.count > 0, "Breadcrumb path should never be empty")
     }
     
     func pop() {

@@ -229,19 +229,20 @@ struct WebViewRepresentable: NSViewRepresentable {
         let atomList = atomIndices.map { String($0) }.joined(separator: ",")
         
         // Generate JavaScript to highlight atoms with appropriate scale based on representation
+        // Use color instead of colorscheme for specific color highlighting
         let sphereStyle: String
         switch representation {
         case .ballAndStick:
-            sphereStyle = "sphere: {colorscheme: {elem: '\(highlightColor)'}, scale: 0.3}"
+            sphereStyle = "sphere: {color: '\(highlightColor)', scale: 0.3}"
         case .spaceFilling:
-            sphereStyle = "sphere: {colorscheme: {elem: '\(highlightColor)'}, scale: 1.0}"
+            sphereStyle = "sphere: {color: '\(highlightColor)', scale: 1.0}"
         default:
-            sphereStyle = "sphere: {colorscheme: {elem: '\(highlightColor)'}}"
+            sphereStyle = "sphere: {color: '\(highlightColor)'}"
         }
         
         let script = """
             var highlightAtoms = [\(atomList)];
-            viewer.setStyle({serial: highlightAtoms}, {stick: {colorscheme: {elem: '\(highlightColor)'}, radius: 0.1}, \(sphereStyle)});
+            viewer.setStyle({serial: highlightAtoms}, {stick: {color: '\(highlightColor)', radius: 0.1}, \(sphereStyle)});
         """
         
         return script

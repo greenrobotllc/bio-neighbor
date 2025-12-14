@@ -9,6 +9,7 @@ import SwiftUI
 
 struct DiseaseBrowseView: View {
     @StateObject private var backendService = BackendService.shared
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
     @State private var diseases: [Disease] = []
     @State private var selectedDisease: Disease?
     @State private var diseaseMolecules: [MoleculeBasic] = []
@@ -24,6 +25,7 @@ struct DiseaseBrowseView: View {
     @State private var showDrugs = true  // Default to showing drugs
     @State private var isDownloadingDrugs = false
     @State private var downloadProgress: String?
+    @State private var navigationPath = NavigationPath()
     
     var filteredDiseases: [Disease] {
         if diseaseSearchText.isEmpty {
@@ -35,8 +37,7 @@ struct DiseaseBrowseView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            NavigationSplitView {
+        NavigationSplitView {
             // Sidebar with disease selector
             VStack(alignment: .leading, spacing: 20) {
                 Text("Disease Browser")
@@ -100,6 +101,13 @@ struct DiseaseBrowseView: View {
                                     isSelected: selectedDisease?.id == disease.id
                                 ) {
                                 selectedDisease = disease
+                            // Push disease breadcrumb when selected
+                            print("🟡 Disease selected: \(disease.name)")
+                            navCoordinator.push(BreadcrumbItem(
+                                title: disease.name,
+                                icon: "cross.case",
+                                type: .disease
+                            ))
                             if showDrugs {
                                 loadDiseaseDrugs()
                             }
@@ -149,10 +157,16 @@ struct DiseaseBrowseView: View {
             .padding()
             .frame(minWidth: 300)
         } detail: {
-            // Main content area
-            if let disease = selectedDisease {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+            NavigationStack(path: $navigationPath) {
+                // Main content area
+                if let disease = selectedDisease {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            // Breadcrumb
+                            BreadcrumbView(coordinator: navCoordinator)
+                            
+                            Divider()
+                        
                         // Disease header
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
@@ -281,10 +295,10 @@ struct DiseaseBrowseView: View {
                                     ], spacing: 16) {
                                         ForEach(diseaseDrugs) { drug in
                                             NavigationLink(value: drug) {
-                                                DrugCard(drug: drug) {
-                                                    // Navigation handled by NavigationLink
-                                                }
+                                                DrugCard(drug: drug)
+                                                    .contentShape(Rectangle())
                                             }
+                                            .buttonStyle(.plain)
                                         }
                                     }
                                 }
@@ -335,10 +349,10 @@ struct DiseaseBrowseView: View {
                                                 isApproved: molecule.isApproved,
                                                 formula: molecule.formula
                                             )) {
-                                                MoleculeCard(molecule: molecule) {
-                                                    // Navigation handled by NavigationLink
-                                                }
+                                                MoleculeCard(molecule: molecule)
+                                                    .contentShape(Rectangle())
                                             }
+                                            .buttonStyle(.plain)
                                         }
                                     }
                                 }
@@ -368,10 +382,10 @@ struct DiseaseBrowseView: View {
                                         HStack(spacing: 16) {
                                             ForEach(similarMolecules) { molecule in
                                                 NavigationLink(value: molecule) {
-                                                    MoleculeCardWithSimilarity(molecule: molecule) {
-                                                        // Navigation handled by NavigationLink
-                                                    }
+                                                    MoleculeCardWithSimilarity(molecule: molecule)
+                                                        .contentShape(Rectangle())
                                                 }
+                                                .buttonStyle(.plain)
                                             }
                                         }
                                         .padding(.horizontal, 4)
@@ -387,10 +401,10 @@ struct DiseaseBrowseView: View {
                     Image(systemName: "cross.case")
                         .font(.system(size: 60))
                         .foregroundColor(.secondary)
-                    Text("Select a disease to view molecules")
+                    Text("Select a disease to continue")
                         .font(.headline)
                         .foregroundColor(.secondary)
-                    Text("Choose a disease from the sidebar to see molecules used to treat it")
+                    Text("Choose a disease from the sidebar to see molecules and drugs used to treat it")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -401,15 +415,28 @@ struct DiseaseBrowseView: View {
             .navigationTitle("Disease Browser")
             .navigationDestination(for: Molecule.self) { molecule in
                 MoleculeDetailView(molecule: molecule)
+                    .onAppear {
+                        print("🟢 NavigationDestination reached for molecule: \(molecule.name.isEmpty ? molecule.chemblId : molecule.name)")
+                    }
             }
             .navigationDestination(for: Drug.self) { drug in
                 DrugDetailView(drug: drug)
+                    .onAppear {
+                        print("🟢 NavigationDestination reached for drug: \(drug.name)")
+                    }
             }
-        }
-        .onAppear {
-            backendService.checkBackendHealth()
-            if diseases.isEmpty {
-                loadDiseases()
+            .onAppear {
+                backendService.checkBackendHealth()
+                // Push "Diseases" breadcrumb when view appears
+                print("🟡 DiseaseBrowseView onAppear - pushing 'Diseases' breadcrumb")
+                navCoordinator.push(BreadcrumbItem(
+                    title: "Diseases",
+                    icon: "cross.case",
+                    type: .diseases
+                ))
+                if diseases.isEmpty {
+                    loadDiseases()
+                }
             }
         }
     }
@@ -427,14 +454,8 @@ struct DiseaseBrowseView: View {
                     diseases = loadedDiseases
                     isLoadingDiseases = false
                     
-                    // Auto-select Alzheimer's if available
-                    if selectedDisease == nil, let alzheimers = diseases.first(where: { $0.name.localizedCaseInsensitiveContains("alzheimer") }) {
-                                selectedDisease = alzheimers
-                        if showDrugs {
-                            loadDiseaseDrugs()
-                        }
-                        loadDiseaseMolecules()
-                    }
+                    // Don't auto-select - let user choose a disease
+                    // This ensures a clean "select a disease" state when first opening the view
                 }
             } catch {
                 await MainActor.run {

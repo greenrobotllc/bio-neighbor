@@ -792,13 +792,19 @@ class BackendService: ObservableObject {
         var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = 30.0
         
+        print("🟡 getAllDrugs: Requesting \(url)")
         let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
         
         guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            print("🔴 getAllDrugs: Invalid response type")
             throw BackendError.invalidResponse
         }
         
+        print("🟡 getAllDrugs: HTTP status \(httpResponse.statusCode)")
+        
         guard httpResponse.statusCode == 200 else {
+            let errorString = String(data: data, encoding: .utf8) ?? "Unknown error"
+            print("🔴 getAllDrugs: HTTP \(httpResponse.statusCode), response: \(errorString)")
             if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
                let errorMessage = errorData["error"] {
                 throw BackendError.networkError(errorMessage)
@@ -806,16 +812,29 @@ class BackendService: ObservableObject {
             throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
         }
         
-        let response = try JSONDecoder().decode(DrugsResponse.self, from: data)
+        let dataString = String(data: data, encoding: .utf8) ?? "Unable to decode"
+        print("🟡 getAllDrugs: Response data (first 500 chars): \(String(dataString.prefix(500)))")
         
-        guard response.success, let drugs = response.drugs else {
-            if let error = response.error {
-                throw BackendError.unknownError(error)
+        do {
+            let response = try JSONDecoder().decode(DrugsResponse.self, from: data)
+            print("🟡 getAllDrugs: Decoded response - success: \(response.isSuccess), drugs count: \(response.drugs?.count ?? 0)")
+            
+            guard response.isSuccess, let drugs = response.drugs else {
+                let errorMsg = response.error ?? "Unknown error"
+                print("🔴 getAllDrugs: Response indicates failure - \(errorMsg)")
+                throw BackendError.unknownError(errorMsg)
             }
+            
+            print("🟡 getAllDrugs: Successfully returning \(drugs.count) drugs")
+            return drugs
+        } catch let decodingError as DecodingError {
+            print("🔴 getAllDrugs: Decoding error - \(decodingError)")
+            print("🔴 getAllDrugs: Raw data: \(dataString)")
             throw BackendError.invalidResponse
+        } catch {
+            print("🔴 getAllDrugs: Unexpected error - \(error)")
+            throw error
         }
-        
-        return drugs
     }
     
     func getDrug(id: Int) async throws -> Drug {

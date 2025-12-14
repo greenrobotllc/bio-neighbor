@@ -228,12 +228,72 @@ struct Drug: Codable, Identifiable, Hashable {
         case dosageForm = "dosage_form"
         case route
     }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        genericName = try container.decodeIfPresent(String.self, forKey: .genericName)
+        brandNames = try container.decodeIfPresent([String].self, forKey: .brandNames)
+        pubchemCid = try container.decodeIfPresent(String.self, forKey: .pubchemCid)
+        drugbankId = try container.decodeIfPresent(String.self, forKey: .drugbankId)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        indication = try container.decodeIfPresent(String.self, forKey: .indication)
+        inactiveIngredients = try container.decodeIfPresent([String].self, forKey: .inactiveIngredients)
+        dosageForm = try container.decodeIfPresent(String.self, forKey: .dosageForm)
+        route = try container.decodeIfPresent(String.self, forKey: .route)
+        
+        // Handle active_ingredient_molecule_indices which may contain null values
+        if let indicesArray = try? container.decodeIfPresent([Int?].self, forKey: .activeIngredientMoleculeIndices) {
+            // Filter out nil values and convert to [Int]
+            activeIngredientMoleculeIndices = indicesArray.compactMap { $0 }
+        } else if let indicesArray = try? container.decodeIfPresent([Int].self, forKey: .activeIngredientMoleculeIndices) {
+            // If it's already [Int], use it directly
+            activeIngredientMoleculeIndices = indicesArray
+        } else {
+            // If decoding fails or field is missing, set to nil
+            activeIngredientMoleculeIndices = nil
+        }
+    }
+    
+    // Explicit initializer for manual creation (e.g., in previews)
+    init(
+        id: Int,
+        name: String,
+        genericName: String? = nil,
+        brandNames: [String]? = nil,
+        pubchemCid: String? = nil,
+        drugbankId: String? = nil,
+        description: String? = nil,
+        indication: String? = nil,
+        activeIngredientMoleculeIndices: [Int]? = nil,
+        inactiveIngredients: [String]? = nil,
+        dosageForm: String? = nil,
+        route: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.genericName = genericName
+        self.brandNames = brandNames
+        self.pubchemCid = pubchemCid
+        self.drugbankId = drugbankId
+        self.description = description
+        self.indication = indication
+        self.activeIngredientMoleculeIndices = activeIngredientMoleculeIndices
+        self.inactiveIngredients = inactiveIngredients
+        self.dosageForm = dosageForm
+        self.route = route
+    }
 }
 
 struct DrugsResponse: Codable {
-    let success: Bool
+    let success: Bool?
     let drugs: [Drug]?
     let error: String?
+    
+    var isSuccess: Bool {
+        success ?? (drugs != nil)
+    }
 }
 
 struct DrugResponse: Codable {

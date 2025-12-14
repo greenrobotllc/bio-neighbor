@@ -9,10 +9,12 @@ import SwiftUI
 
 struct DrugsView: View {
     @StateObject private var backendService = BackendService.shared
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
     @State private var drugs: [Drug] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var searchText = ""
+    @State private var navigationPath = NavigationPath()
     
     var filteredDrugs: [Drug] {
         if searchText.isEmpty {
@@ -26,8 +28,7 @@ struct DrugsView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            NavigationSplitView {
+        NavigationSplitView {
             // Sidebar with search
             VStack(alignment: .leading, spacing: 16) {
                 Text("Drugs")
@@ -88,9 +89,16 @@ struct DrugsView: View {
             .padding()
             .frame(minWidth: 250)
         } detail: {
-            // Main content
-            ScrollView {
-                if isLoading {
+            NavigationStack(path: $navigationPath) {
+                // Main content
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Breadcrumb
+                        BreadcrumbView(coordinator: navCoordinator)
+                        
+                        Divider()
+                        
+                        if isLoading {
                     ProgressView("Loading drugs...")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
@@ -117,23 +125,32 @@ struct DrugsView: View {
                     ], spacing: 16) {
                         ForEach(filteredDrugs) { drug in
                             NavigationLink(value: drug) {
-                                DrugCard(drug: drug) {
-                                    // Navigation handled by NavigationLink
-                                }
+                                DrugCard(drug: drug)
+                                    .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding()
                 }
+                }
+                .padding()
             }
             }
             .navigationTitle("All Drugs")
             .navigationDestination(for: Drug.self) { drug in
                 DrugDetailView(drug: drug)
             }
-        }
-        .onAppear {
-            loadDrugs()
+            .onAppear {
+                // Push "Drugs" breadcrumb when view appears
+                print("🟡 DrugsView onAppear - pushing 'Drugs' breadcrumb")
+                navCoordinator.push(BreadcrumbItem(
+                    title: "Drugs",
+                    icon: "pills",
+                    type: .drugs
+                ))
+                loadDrugs()
+            }
         }
     }
     
@@ -145,12 +162,16 @@ struct DrugsView: View {
         
         Task {
             do {
+                print("🟡 Loading drugs from backend...")
                 let loadedDrugs = try await backendService.getAllDrugs()
+                print("🟡 Successfully loaded \(loadedDrugs.count) drugs")
                 await MainActor.run {
                     drugs = loadedDrugs
                     isLoading = false
+                    errorMessage = nil
                 }
             } catch {
+                print("🔴 Error loading drugs: \(error.localizedDescription)")
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     isLoading = false
