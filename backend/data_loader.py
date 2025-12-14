@@ -1159,10 +1159,18 @@ def load_from_cache() -> Optional[pd.DataFrame]:
         print(f"📂 Loading molecules from cache: {CSV_PATH}")
         df = pd.read_csv(CSV_PATH)
         # Parse JSON columns that were saved as strings
-        if 'targets' in df.columns:
-            df['targets'] = df['targets'].apply(
-                lambda x: json.loads(x) if isinstance(x, str) and x.strip().startswith('[') else []
-            )
+        if "targets" in df.columns:
+            def _parse_targets(x):
+                if not isinstance(x, str):
+                    return []
+                s = x.strip()
+                if not s.startswith("["):
+                    return []
+                try:
+                    return json.loads(s)
+                except (json.JSONDecodeError, ValueError):
+                    return []
+            df["targets"] = df["targets"].apply(_parse_targets)
         print(f"✅ Loaded {len(df)} molecules from cache")
         return df
     return None
@@ -1171,7 +1179,13 @@ def load_from_cache() -> Optional[pd.DataFrame]:
 def save_to_cache(df: pd.DataFrame):
     """Save molecules DataFrame to CSV cache."""
     print(f"💾 Saving {len(df)} molecules to cache: {CSV_PATH}")
-    df.to_csv(CSV_PATH, index=False)
+    df_copy = df.copy()
+    # Normalize list-like columns to JSON for safe round-trip
+    if "targets" in df_copy.columns:
+        df_copy["targets"] = df_copy["targets"].apply(
+            lambda x: json.dumps(x) if isinstance(x, list) else json.dumps([])
+        )
+    df_copy.to_csv(CSV_PATH, index=False)
     print("✅ Cache saved")
 
 
