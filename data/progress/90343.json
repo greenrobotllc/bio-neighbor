@@ -1,0 +1,13 @@
+{
+  "task_id": "90343",
+  "status": "completed",
+  "message": "Download completed successfully",
+  "timestamp": 1765652457.713878,
+  "details": {
+    "diseases_processed": 1,
+    "drugs_saved": 6,
+    "relationships_created": 6,
+    "total_time": 26.848471879959106,
+    "save_time": 5.128871917724609
+  }
+}
