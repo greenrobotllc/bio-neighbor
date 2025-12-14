@@ -124,64 +124,87 @@ struct MoleculeComparisonView: View {
     }
     
     private func sideBySideView(comparison: MoleculeComparisonResponse) -> some View {
-        HStack(spacing: 20) {
-            // Molecule 1
-            VStack(alignment: .leading, spacing: 0) {
-                Text(molecule1.name.isEmpty ? molecule1.chemblId : molecule1.name)
-                    .font(.headline)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
-                
-                if let coords1 = coordinates1 {
-                    Molecule3DView(
-                        coordinates: coords1,
-                        highlightedAtoms: comparison.mcs?.sharedAtoms1,
-                        highlightColor: "green",
-                        highlightMode: .sharedScaffold
-                    )
-                    .frame(height: 400)
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
+        VStack(spacing: 12) {
+            HStack(spacing: 20) {
+                // Molecule 1
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(molecule1.name.isEmpty ? molecule1.chemblId : molecule1.name)
+                        .font(.headline)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 24)
+                    
+                    if let coords1 = coordinates1 {
+                        Molecule3DView(
+                            coordinates: coords1,
+                            highlightedAtoms: comparison.mcs?.sharedAtoms1,
+                            highlightColor: "green",
+                            highlightMode: .sharedScaffold
+                        )
                         .frame(height: 400)
-                        .overlay {
-                            ProgressView()
-                        }
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(height: 400)
+                            .overlay {
+                                ProgressView()
+                            }
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                
+                // Molecule 2
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(molecule2.name.isEmpty ? molecule2.chemblId : molecule2.name)
+                        .font(.headline)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 24)
+                    
+                    if let coords2 = coordinates2 {
+                        Molecule3DView(
+                            coordinates: coords2,
+                            highlightedAtoms: comparison.mcs?.sharedAtoms2,
+                            highlightColor: "green",
+                            highlightMode: .sharedScaffold
+                        )
+                        .frame(height: 400)
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(height: 400)
+                            .overlay {
+                                ProgressView()
+                            }
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
             
-            // Molecule 2
-            VStack(alignment: .leading, spacing: 0) {
-                Text(molecule2.name.isEmpty ? molecule2.chemblId : molecule2.name)
-                    .font(.headline)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
-                
-                if let coords2 = coordinates2 {
-                    Molecule3DView(
-                        coordinates: coords2,
-                        highlightedAtoms: comparison.mcs?.sharedAtoms2,
-                        highlightColor: "green",
-                        highlightMode: .sharedScaffold
-                    )
-                    .frame(height: 400)
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
-                        .frame(height: 400)
-                        .overlay {
-                            ProgressView()
-                        }
+            // Legend for side-by-side view
+            HStack(spacing: 20) {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 12, height: 12)
+                    Text("Shared Scaffold")
+                        .font(.caption)
+                }
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 12, height: 12)
+                    Text("Differences")
+                        .font(.caption)
                 }
             }
-            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(8)
         }
     }
     
@@ -190,14 +213,19 @@ struct MoleculeComparisonView: View {
             Text("Overlay View")
                 .font(.headline)
             
-            // For overlay, we'll show molecule 1 with highlights
-            // In a full implementation, this would align both molecules
-            if let coords1 = coordinates1 {
+            // For overlay, show molecule 1 with both shared (green) and difference (red) highlights
+            if let coords1 = coordinates1, let sharedAtoms = comparison.mcs?.sharedAtoms1 {
+                // Calculate difference atoms (atoms in molecule1 that are NOT in shared scaffold)
+                let allAtomIndices = Array(0..<coords1.atoms.count)
+                let differenceAtoms = allAtomIndices.filter { !sharedAtoms.contains($0) }
+                
                 Molecule3DView(
                     coordinates: coords1,
-                    highlightedAtoms: comparison.mcs?.sharedAtoms1,
+                    highlightedAtoms: sharedAtoms,
                     highlightColor: "green",
-                    highlightMode: .sharedScaffold
+                    highlightMode: .sharedScaffold,
+                    differenceAtoms: differenceAtoms.isEmpty ? nil : differenceAtoms,
+                    differenceColor: "red"
                 )
                 .frame(height: 500)
             } else {
@@ -216,12 +244,14 @@ struct MoleculeComparisonView: View {
                         .fill(Color.green)
                         .frame(width: 12, height: 12)
                     Text("Shared Scaffold")
+                        .font(.caption)
                 }
                 HStack(spacing: 4) {
                     Circle()
                         .fill(Color.red)
                         .frame(width: 12, height: 12)
                     Text("Differences")
+                        .font(.caption)
                 }
             }
             .padding()

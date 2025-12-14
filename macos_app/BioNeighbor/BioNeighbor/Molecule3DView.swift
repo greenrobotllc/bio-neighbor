@@ -16,6 +16,8 @@ struct Molecule3DView: View {
     var highlightedBonds: [Int]? = nil
     var highlightColor: String = "green"
     var highlightMode: HighlightMode = .none
+    var differenceAtoms: [Int]? = nil
+    var differenceColor: String = "red"
     
     enum RepresentationType: String, CaseIterable {
         case ballAndStick = "stick"
@@ -63,7 +65,9 @@ struct Molecule3DView: View {
                     highlightedAtoms: highlightedAtoms,
                     highlightedBonds: highlightedBonds,
                     highlightColor: highlightColor,
-                    highlightMode: highlightMode
+                    highlightMode: highlightMode,
+                    differenceAtoms: differenceAtoms,
+                    differenceColor: differenceColor
                 )
                 .frame(minHeight: 400)
             }
@@ -84,6 +88,8 @@ struct WebViewRepresentable: NSViewRepresentable {
     let highlightedBonds: [Int]?
     let highlightColor: String
     let highlightMode: Molecule3DView.HighlightMode
+    let differenceAtoms: [Int]?
+    let differenceColor: String
     
     func makeNSView(context: Context) -> WKWebView {
         let webView = WKWebView()
@@ -95,7 +101,9 @@ struct WebViewRepresentable: NSViewRepresentable {
             representation: representation,
             highlightedAtoms: highlightedAtoms,
             highlightedBonds: highlightedBonds,
-            highlightColor: highlightColor
+            highlightColor: highlightColor,
+            differenceAtoms: differenceAtoms,
+            differenceColor: differenceColor
         )
         
         // Get the bundle URL for loading local resources
@@ -132,7 +140,9 @@ struct WebViewRepresentable: NSViewRepresentable {
         representation: Molecule3DView.RepresentationType,
         highlightedAtoms: [Int]?,
         highlightedBonds: [Int]?,
-        highlightColor: String
+        highlightColor: String,
+        differenceAtoms: [Int]?,
+        differenceColor: String
     ) -> String {
         // Convert coordinates to PDB format string
         let pdbString = generatePDBString(coordinates: coordinates)
@@ -145,7 +155,9 @@ struct WebViewRepresentable: NSViewRepresentable {
             highlightedAtoms: highlightedAtoms,
             highlightedBonds: highlightedBonds,
             highlightColor: highlightColor,
-            representation: representation
+            representation: representation,
+            differenceAtoms: differenceAtoms,
+            differenceColor: differenceColor
         )
         
         let initialScript: String
@@ -219,33 +231,52 @@ struct WebViewRepresentable: NSViewRepresentable {
         """
     }
     
-    private func generateHighlightScript(highlightedAtoms: [Int]?, highlightedBonds: [Int]?, highlightColor: String, representation: Molecule3DView.RepresentationType) -> String {
-        guard let atoms = highlightedAtoms, !atoms.isEmpty else {
-            return ""
+    private func generateHighlightScript(highlightedAtoms: [Int]?, highlightedBonds: [Int]?, highlightColor: String, representation: Molecule3DView.RepresentationType, differenceAtoms: [Int]?, differenceColor: String) -> String {
+        var scripts: [String] = []
+        
+        // Generate script for shared/highlighted atoms (green)
+        if let atoms = highlightedAtoms, !atoms.isEmpty {
+            let atomIndices = atoms.map { $0 + 1 }
+            let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+            
+            let sphereStyle: String
+            switch representation {
+            case .ballAndStick:
+                sphereStyle = "sphere: {color: '\(highlightColor)', scale: 0.3}"
+            case .spaceFilling:
+                sphereStyle = "sphere: {color: '\(highlightColor)', scale: 1.0}"
+            default:
+                sphereStyle = "sphere: {color: '\(highlightColor)'}"
+            }
+            
+            scripts.append("""
+                var highlightAtoms = [\(atomList)];
+                viewer.setStyle({serial: highlightAtoms}, {stick: {color: '\(highlightColor)', radius: 0.1}, \(sphereStyle)});
+            """)
         }
         
-        // Convert atom indices to 1-based (PDB format)
-        let atomIndices = atoms.map { $0 + 1 }
-        let atomList = atomIndices.map { String($0) }.joined(separator: ",")
-        
-        // Generate JavaScript to highlight atoms with appropriate scale based on representation
-        // Use color instead of colorscheme for specific color highlighting
-        let sphereStyle: String
-        switch representation {
-        case .ballAndStick:
-            sphereStyle = "sphere: {color: '\(highlightColor)', scale: 0.3}"
-        case .spaceFilling:
-            sphereStyle = "sphere: {color: '\(highlightColor)', scale: 1.0}"
-        default:
-            sphereStyle = "sphere: {color: '\(highlightColor)'}"
+        // Generate script for difference atoms (red)
+        if let diffAtoms = differenceAtoms, !diffAtoms.isEmpty {
+            let atomIndices = diffAtoms.map { $0 + 1 }
+            let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+            
+            let sphereStyle: String
+            switch representation {
+            case .ballAndStick:
+                sphereStyle = "sphere: {color: '\(differenceColor)', scale: 0.3}"
+            case .spaceFilling:
+                sphereStyle = "sphere: {color: '\(differenceColor)', scale: 1.0}"
+            default:
+                sphereStyle = "sphere: {color: '\(differenceColor)'}"
+            }
+            
+            scripts.append("""
+                var differenceAtoms = [\(atomList)];
+                viewer.setStyle({serial: differenceAtoms}, {stick: {color: '\(differenceColor)', radius: 0.1}, \(sphereStyle)});
+            """)
         }
         
-        let script = """
-            var highlightAtoms = [\(atomList)];
-            viewer.setStyle({serial: highlightAtoms}, {stick: {color: '\(highlightColor)', radius: 0.1}, \(sphereStyle)});
-        """
-        
-        return script
+        return scripts.joined(separator: "\n")
     }
     
     private func generatePDBString(coordinates: Molecule3DCoordinates) -> String {
