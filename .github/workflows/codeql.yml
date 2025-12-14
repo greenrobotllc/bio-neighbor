@@ -1,0 +1,76 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  schedule:
+    - cron: '30 1 * * 0'
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: python
+          build-mode: none
+        - language: swift
+          build-mode: manual
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+
+    - name: Setup proxy for registries
+      if: matrix.language == 'swift'
+      run: |
+        echo "##[add-matcher].github/codeql/codeql-ubitrace-matcher.json"
+        echo "##[add-matcher].github/codeql/codeql-ubitrace-matcher.json" >> $GITHUB_ENV
+
+    - name: Autobuild
+      if: matrix.language == 'python'
+      uses: github/codeql-action/autobuild@v4
+
+    - name: Verify Swift project structure
+      if: matrix.language == 'swift'
+      run: |
+        echo "Checking Swift project structure..."
+        ls -la macos_app/BioNeighbor/
+        ls -la macos_app/BioNeighbor/BioNeighbor/ | head -20
+        echo "Swift files found:"
+        find macos_app/BioNeighbor/BioNeighbor -name "*.swift" | head -10
+
+    - name: Build Swift code
+      if: matrix.language == 'swift'
+      working-directory: macos_app/BioNeighbor
+      run: |
+        xcodebuild clean build \
+          -scheme BioNeighbor \
+          -project BioNeighbor.xcodeproj \
+          -destination 'platform=macOS' \
+          -configuration Debug \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"
+
