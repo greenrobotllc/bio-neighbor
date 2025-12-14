@@ -41,23 +41,8 @@ class BackendService: ObservableObject {
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
     private let processQueue = DispatchQueue(label: "com.bioneighbor.backend.process", qos: .userInitiated)
-    private let logPath = "/Users/andytriboletti/Documents/GitHub/bio-neighbor/.cursor/debug.log"
     
     @Published var isBackendRunning = false
-    
-    // #region agent log
-    private func writeLog(sessionId: String, runId: String, hypothesisId: String, location: String, message: String, data: [String: Any]) {
-        if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": sessionId, "runId": runId, "hypothesisId": hypothesisId, "location": location, "message": message, "data": data, "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-            if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write((logStr + "\n").data(using: .utf8)!)
-                fileHandle.closeFile()
-            } else {
-                try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
-            }
-        }
-    }
-    // #endregion
     
     private init() {
         checkBackendHealth()
@@ -410,9 +395,6 @@ class BackendService: ObservableObject {
     }
     
     func listMolecules(page: Int = 1, perPage: Int = 20, search: String? = nil, random: Bool = false, randomCount: Int = 20) async throws -> (molecules: [MoleculeBasic], pagination: Pagination?) {
-        // #region agent log
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "A", location: "BackendService.swift:397", message: "listMolecules called", data: ["page": page, "perPage": perPage, "random": random])
-        // #endregion
         
         var urlComponents = URLComponents(string: "\(baseURL)/molecules")
         var queryItems: [URLQueryItem] = []
@@ -431,36 +413,17 @@ class BackendService: ObservableObject {
         urlComponents?.queryItems = queryItems
         
         guard let url = urlComponents?.url else {
-            // #region agent log
-            writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "B", location: "BackendService.swift:427", message: "Failed to create URL", data: [:])
-            // #endregion
             throw BackendError.backendNotAvailable
         }
-        
-        // #region agent log
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "A", location: "BackendService.swift:435", message: "Making request", data: ["url": url.absoluteString])
-        // #endregion
         
         var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = 30.0
         
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         
-        // #region agent log
-        let responsePreview = String(data: data, encoding: .utf8)?.prefix(500) ?? "Unable to decode"
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "B", location: "BackendService.swift:445", message: "Response received", data: ["dataLength": data.count, "preview": String(responsePreview)])
-        // #endregion
-        
         guard let httpResponse = response as? HTTPURLResponse else {
-            // #region agent log
-            writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "B", location: "BackendService.swift:454", message: "Invalid response type", data: [:])
-            // #endregion
             throw BackendError.invalidResponse
         }
-        
-        // #region agent log
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "A", location: "BackendService.swift:460", message: "HTTP status", data: ["statusCode": httpResponse.statusCode])
-        // #endregion
         
         guard httpResponse.statusCode == 200 else {
             if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
@@ -470,74 +433,23 @@ class BackendService: ObservableObject {
             throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
         }
         
-        // #region agent log
-        if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "BackendService.swift:435", "message": "Attempting decode", "data": ["dataLength": data.count], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-            try? logStr.write(toFile: logPath, atomically: true, encoding: .utf8)
-        }
-        // #endregion
-        
         do {
             let listResponse = try JSONDecoder().decode(MoleculeListResponse.self, from: data)
             
-            // #region agent log
-            writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "A", location: "BackendService.swift:478", message: "Decode successful", data: ["hasSuccess": listResponse.success != nil, "moleculesCount": listResponse.molecules?.count ?? 0, "hasPagination": listResponse.pagination != nil])
-            // #endregion
-            
             guard listResponse.isSuccess, let molecules = listResponse.molecules else {
-                // #region agent log
-                if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "BackendService.swift:437", "message": "Response validation failed", "data": ["isSuccess": listResponse.isSuccess, "hasMolecules": listResponse.molecules != nil, "error": listResponse.error ?? "none"], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-                    try? logStr.write(toFile: logPath, atomically: true, encoding: .utf8)
-                }
-                // #endregion
                 if let error = listResponse.error {
                     throw BackendError.unknownError(error)
                 }
                 throw BackendError.invalidResponse
             }
             
-            // #region agent log
-            if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "BackendService.swift:444", "message": "Validating molecules", "data": ["count": molecules.count], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-                try? logStr.write(toFile: logPath, atomically: true, encoding: .utf8)
-            }
-            // #endregion
-            
-            // Check each molecule for required fields
-            for (idx, mol) in molecules.enumerated() {
-                if mol.id < 0 || mol.chemblId.isEmpty || mol.name.isEmpty || mol.smiles.isEmpty {
-                    // #region agent log
-                    if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "BackendService.swift:450", "message": "Invalid molecule found", "data": ["index": idx, "id": mol.id, "chemblId": mol.chemblId, "name": mol.name, "smilesEmpty": mol.smiles.isEmpty], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-                        try? logStr.write(toFile: logPath, atomically: true, encoding: .utf8)
-                    }
-                    // #endregion
-                }
-            }
-            
             return (molecules, listResponse.pagination)
-        } catch let decodingError as DecodingError {
-            // #region agent log
-            let errorDesc: String
-            switch decodingError {
-            case .keyNotFound(let key, let context):
-                errorDesc = "Missing key: \(key.stringValue) at \(context.codingPath)"
-            case .typeMismatch(let type, let context):
-                errorDesc = "Type mismatch: \(type) at \(context.codingPath)"
-            case .valueNotFound(let type, let context):
-                errorDesc = "Value not found: \(type) at \(context.codingPath)"
-            case .dataCorrupted(let context):
-                errorDesc = "Data corrupted at \(context.codingPath): \(context.debugDescription)"
-            @unknown default:
-                errorDesc = "Unknown decoding error"
-            }
-            writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "A", location: "BackendService.swift:543", message: "Decode failed", data: ["error": errorDesc, "dataPreview": String(data: data, encoding: .utf8)?.prefix(200) ?? "unable to decode"])
-            // #endregion
-            throw decodingError
+        } catch {
+            throw error
         }
     }
     
     func getMoleculeWithSimilar(index: Int, topK: Int = 10) async throws -> (molecule: MoleculeBasic, similar: [Molecule]) {
-        // #region agent log
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "E", location: "BackendService.swift:557", message: "getMoleculeWithSimilar called", data: ["index": index, "topK": topK])
-        // #endregion
         
         var urlComponents = URLComponents(string: "\(baseURL)/molecule/\(index)")
         urlComponents?.queryItems = [
@@ -554,11 +466,6 @@ class BackendService: ObservableObject {
         
         let (data, urlResponse) = try await URLSession.shared.data(for: urlRequest)
         
-        // #region agent log
-        let responsePreview = String(data: data, encoding: .utf8)?.prefix(500) ?? "Unable to decode"
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "E", location: "BackendService.swift:578", message: "getMoleculeWithSimilar response", data: ["dataLength": data.count, "preview": String(responsePreview)])
-        // #endregion
-        
         guard let httpResponse = urlResponse as? HTTPURLResponse else {
             throw BackendError.invalidResponse
         }
@@ -571,16 +478,8 @@ class BackendService: ObservableObject {
             throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
         }
         
-        // #region agent log
-        writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "E", location: "BackendService.swift:599", message: "Attempting decode MoleculeWithSimilarResponse", data: ["dataLength": data.count])
-        // #endregion
-        
         do {
             let moleculeResponse = try JSONDecoder().decode(MoleculeWithSimilarResponse.self, from: data)
-            
-            // #region agent log
-            writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "E", location: "BackendService.swift:600", message: "Decode successful", data: ["hasMolecule": moleculeResponse.molecule != nil, "similarCount": moleculeResponse.similar?.count ?? 0])
-            // #endregion
             
             guard moleculeResponse.isSuccess else {
                 if let error = moleculeResponse.error {
@@ -594,24 +493,8 @@ class BackendService: ObservableObject {
             }
             
             return (molecule, moleculeResponse.similar ?? [])
-        } catch let decodingError as DecodingError {
-            // #region agent log
-            let errorDesc: String
-            switch decodingError {
-            case .keyNotFound(let key, let context):
-                errorDesc = "Missing key: \(key.stringValue) at \(context.codingPath)"
-            case .typeMismatch(let type, let context):
-                errorDesc = "Type mismatch: \(type) at \(context.codingPath)"
-            case .valueNotFound(let type, let context):
-                errorDesc = "Value not found: \(type) at \(context.codingPath)"
-            case .dataCorrupted(let context):
-                errorDesc = "Data corrupted at \(context.codingPath): \(context.debugDescription)"
-            @unknown default:
-                errorDesc = "Unknown decoding error"
-            }
-            writeLog(sessionId: "debug-session", runId: "run1", hypothesisId: "E", location: "BackendService.swift:614", message: "getMoleculeWithSimilar decode failed", data: ["error": errorDesc])
-            // #endregion
-            throw decodingError
+        } catch {
+            throw error
         }
     }
     

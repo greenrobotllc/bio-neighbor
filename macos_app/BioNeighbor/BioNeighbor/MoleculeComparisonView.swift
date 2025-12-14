@@ -10,8 +10,8 @@ import SwiftUI
 struct MoleculeComparisonView: View {
     let molecule1: Molecule
     let molecule2: Molecule
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var backendService = BackendService.shared
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
     @State private var comparisonData: MoleculeComparisonResponse?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -25,10 +25,15 @@ struct MoleculeComparisonView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Mode selector
-                Picker("Comparison Mode", selection: $comparisonMode) {
+        VStack(spacing: 0) {
+            // Breadcrumb
+            BreadcrumbView(coordinator: navCoordinator)
+                .padding(.top, 8)
+            
+            Divider()
+            
+            // Mode selector
+            Picker("Comparison Mode", selection: $comparisonMode) {
                     Text("Side by Side").tag(ComparisonMode.sideBySide)
                     Text("Overlay").tag(ComparisonMode.overlay)
                 }
@@ -60,17 +65,20 @@ struct MoleculeComparisonView: View {
                                     Text("Shared Scaffold (MCS)")
                                         .font(.headline)
                                     
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 4) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack(spacing: 16) {
                                             Text("Common Atoms: \(mcs.numAtoms)")
                                             Text("Common Bonds: \(mcs.numBonds)")
                                         }
-                                        Spacer()
-                                        Text(mcs.mcsSmiles)
-                                            .font(.system(.body, design: .monospaced))
-                                            .padding(8)
-                                            .background(Color.gray.opacity(0.1))
-                                            .cornerRadius(4)
+                                        .font(.subheadline)
+                                        
+                                        ScrollView(.horizontal, showsIndicators: false) {
+                                            Text(mcs.mcsSmiles)
+                                                .font(.system(.body, design: .monospaced))
+                                                .padding(8)
+                                                .background(Color.gray.opacity(0.1))
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
                                 .padding()
@@ -102,17 +110,14 @@ struct MoleculeComparisonView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .navigationTitle("Compare Molecules")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
-            }
-        }
+        .navigationTitle("Compare Molecules")
         .frame(minWidth: 1000, minHeight: 700)
         .onAppear {
+            navCoordinator.push(BreadcrumbItem(
+                title: "Compare with \(molecule2.name.isEmpty ? molecule2.chemblId : molecule2.name)",
+                icon: "square.grid.2x2",
+                type: .comparison
+            ))
             loadComparison()
             load3DCoordinates()
         }
@@ -121,9 +126,14 @@ struct MoleculeComparisonView: View {
     private func sideBySideView(comparison: MoleculeComparisonResponse) -> some View {
         HStack(spacing: 20) {
             // Molecule 1
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text(molecule1.name.isEmpty ? molecule1.chemblId : molecule1.name)
                     .font(.headline)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 24)
                 
                 if let coords1 = coordinates1 {
                     Molecule3DView(
@@ -145,9 +155,14 @@ struct MoleculeComparisonView: View {
             .frame(maxWidth: .infinity)
             
             // Molecule 2
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text(molecule2.name.isEmpty ? molecule2.chemblId : molecule2.name)
                     .font(.headline)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 24)
                 
                 if let coords2 = coordinates2 {
                     Molecule3DView(
@@ -219,6 +234,8 @@ struct MoleculeComparisonView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.headline)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             
             LazyVGrid(columns: [
                 GridItem(.adaptive(minimum: 200), spacing: 12)
@@ -228,14 +245,20 @@ struct MoleculeComparisonView: View {
                         Text(group.type.replacingOccurrences(of: "_", with: " ").capitalized)
                             .font(.subheadline)
                             .fontWeight(.medium)
+                            .lineLimit(1)
                         Text(group.description)
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Text("Atoms: \(group.atoms.map { String($0) }.joined(separator: ", "))")
-                            .font(.caption)
-                            .foregroundColor(.blue)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Text("Atoms: \(group.atoms.map { String($0) }.joined(separator: ", "))")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
                     }
                     .padding()
+                    .frame(minHeight: 80)
                     .background(Color.gray.opacity(0.1))
                     .cornerRadius(8)
                 }

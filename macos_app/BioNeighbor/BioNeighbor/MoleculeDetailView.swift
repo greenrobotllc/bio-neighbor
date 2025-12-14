@@ -9,8 +9,8 @@ import SwiftUI
 
 struct MoleculeDetailView: View {
     let molecule: Molecule
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var backendService = BackendService.shared
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
     @State private var moleculeImage: NSImage?
     @State private var isLoadingImage = false
     @State private var bondData: MoleculeBondData?
@@ -20,11 +20,19 @@ struct MoleculeDetailView: View {
     @State private var showBondAnalysis = false
     @State private var showFunctionalGroups = false
     @State private var errorMessage: String?
+    @State private var similarMolecules: [Molecule]?
+    @State private var isLoadingSimilar = false
+    @State private var comparisonData: MoleculeComparisonResponse?
+    @State private var showComparisonInline: [Int: Bool] = [:]
+    @State private var similarMoleculesCount: Int = 5
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Breadcrumb
+                BreadcrumbView(coordinator: navCoordinator)
+                
+                Divider()
                     // Header
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -272,21 +280,122 @@ struct MoleculeDetailView: View {
                             }
                         }
                     }
+                    
+                    Divider()
+                        .padding(.vertical, 8)
+                    
+                    // Similar Molecules Comparison
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Similar Molecules Comparison", systemImage: "square.grid.2x2")
+                                .font(.headline)
+                            Spacer()
+                            Picker("Count", selection: $similarMoleculesCount) {
+                                Text("3").tag(3)
+                                Text("5").tag(5)
+                                Text("10").tag(10)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 150)
+                            .onChange(of: similarMoleculesCount) { _ in
+                                loadSimilarMolecules()
+                            }
+                        }
+                        .padding(.top, 8)
+                        
+                        if isLoadingSimilar {
+                            ProgressView("Loading similar molecules...")
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                        } else if let similar = similarMolecules, !similar.isEmpty {
+                            LazyVGrid(columns: [
+                                GridItem(.adaptive(minimum: 250), spacing: 16)
+                            ], spacing: 16) {
+                                ForEach(similar) { similarMolecule in
+                                    SimilarMoleculeCard(
+                                        molecule: similarMolecule,
+                                        currentMolecule: molecule,
+                                        showComparison: Binding(
+                                            get: { showComparisonInline[similarMolecule.id] ?? false },
+                                            set: { showComparisonInline[similarMolecule.id] = $0 }
+                                        ),
+                                        comparisonData: comparisonData,
+                                        onQuickCompare: {
+                                            loadComparison(current: molecule, similar: similarMolecule)
+                                        },
+                                        onFullCompare: {
+                                            // Navigation handled by NavigationLink
+                                        }
+                                    )
+                                }
+                            }
+                        } else if similarMolecules != nil {
+                            Text("No similar molecules found")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding()
+                        }
+                    }
                 }
                 .padding()
             }
-            .navigationTitle("Molecule Details")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
-            }
+        .navigationTitle("Molecule Details")
+        .navigationDestination(for: Molecule.self) { similarMolecule in
+            MoleculeComparisonView(molecule1: molecule, molecule2: similarMolecule)
         }
         .frame(minWidth: 600, minHeight: 500)
         .onAppear {
+            navCoordinator.push(BreadcrumbItem(
+                title: molecule.name.isEmpty ? molecule.chemblId : molecule.name,
+                icon: "atom",
+                type: .molecule
+            ))
             loadMoleculeImage()
+            loadSimilarMolecules()
+        }
+    }
+    
+    private func loadSimilarMolecules() {
+        guard backendService.isBackendRunning else { return }
+        
+        isLoadingSimilar = true
+        
+        Task {
+            do {
+                let result = try await backendService.getMoleculeWithSimilar(
+                    index: molecule.id,
+                    topK: similarMoleculesCount
+                )
+                await MainActor.run {
+                    // Convert MoleculeBasic to Molecule for similar molecules
+                    similarMolecules = result.similar
+                    isLoadingSimilar = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingSimilar = false
+                    print("Error loading similar molecules: \(error)")
+                }
+            }
+        }
+    }
+    
+    private func loadComparison(current: Molecule, similar: Molecule) {
+        guard backendService.isBackendRunning else { return }
+        
+        Task {
+            do {
+                let comparison = try await backendService.compareMolecules(
+                    smiles1: current.smiles,
+                    smiles2: similar.smiles
+                )
+                await MainActor.run {
+                    comparisonData = comparison
+                    showComparisonInline[similar.id] = true
+                }
+            } catch {
+                print("Error loading comparison: \(error)")
+            }
         }
     }
     
@@ -372,6 +481,122 @@ struct PropertyRow: View {
             Spacer()
             Text(value)
                 .fontWeight(.medium)
+        }
+    }
+}
+
+struct SimilarMoleculeCard: View {
+    let molecule: Molecule
+    let currentMolecule: Molecule
+    @Binding var showComparison: Bool
+    let comparisonData: MoleculeComparisonResponse?
+    let onQuickCompare: () -> Void
+    let onFullCompare: () -> Void
+    
+    @State private var thumbnail: NSImage?
+    @State private var isLoadingThumbnail = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Molecule info
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !molecule.name.isEmpty {
+                        Text(molecule.name)
+                            .font(.headline)
+                            .lineLimit(2)
+                    }
+                    Text(molecule.chemblId)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fontDesign(.monospaced)
+                    
+                    HStack {
+                        Label("Similarity", systemImage: "chart.line.uptrend.xyaxis")
+                            .font(.caption)
+                        Text("\(String(format: "%.3f", molecule.similarity))")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                Spacer()
+                
+                if isLoadingThumbnail {
+                    ProgressView()
+                        .frame(width: 60, height: 60)
+                } else if let thumbnail = thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 60, height: 60)
+                        .background(Color.white)
+                        .cornerRadius(4)
+                }
+            }
+            
+            // Buttons
+            HStack(spacing: 8) {
+                Button("Quick Compare") {
+                    onQuickCompare()
+                    showComparison = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                
+                NavigationLink(value: molecule) {
+                    Text("Full Compare")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            
+            // Inline comparison (if shown)
+            if showComparison, let comparison = comparisonData {
+                Divider()
+                
+                if let mcs = comparison.mcs {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Shared Scaffold")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Text("\(mcs.numAtoms) atoms, \(mcs.numBonds) bonds")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(8)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(4)
+                }
+            }
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+        .task {
+            await loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() async {
+        guard thumbnail == nil && !isLoadingThumbnail else { return }
+        isLoadingThumbnail = true
+        
+        do {
+            let image = try await BackendService.shared.getMoleculeThumbnail(
+                index: molecule.id,
+                width: 100,
+                height: 100
+            )
+            await MainActor.run {
+                thumbnail = image
+                isLoadingThumbnail = false
+            }
+        } catch {
+            await MainActor.run {
+                isLoadingThumbnail = false
+            }
         }
     }
 }

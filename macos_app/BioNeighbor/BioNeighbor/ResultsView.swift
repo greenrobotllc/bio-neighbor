@@ -9,15 +9,12 @@ import SwiftUI
 
 struct ResultsView: View {
     let results: [Molecule]
-    @Binding var selectedMolecule: Molecule?
     
     var body: some View {
         List(results) { molecule in
-            MoleculeRow(molecule: molecule)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedMolecule = molecule
-                }
+            NavigationLink(value: molecule) {
+                MoleculeRow(molecule: molecule)
+            }
         }
         .navigationTitle("Search Results")
         .navigationSubtitle("\(results.count) molecules found")
@@ -82,8 +79,7 @@ struct MoleculeRow: View {
                 isApproved: true,
                 formula: "C9H8O4"
             )
-        ],
-        selectedMolecule: .constant(nil)
+        ]
     )
 }
 

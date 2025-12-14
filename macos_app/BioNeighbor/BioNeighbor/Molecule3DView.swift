@@ -34,7 +34,11 @@ struct Molecule3DView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Controls
-            HStack {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Representation")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
                 Picker("Representation", selection: $representation) {
                     Text("Ball & Stick").tag(RepresentationType.ballAndStick)
                     Text("Space Filling").tag(RepresentationType.spaceFilling)
@@ -42,11 +46,11 @@ struct Molecule3DView: View {
                     Text("Surface").tag(RepresentationType.surface)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 400)
-                
-                Spacer()
+                .labelsHidden()
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.top, 20)
+            .padding(.bottom, 8)
             
             // WebView
             if isLoading {
@@ -140,7 +144,8 @@ struct WebViewRepresentable: NSViewRepresentable {
         let highlightScript = generateHighlightScript(
             highlightedAtoms: highlightedAtoms,
             highlightedBonds: highlightedBonds,
-            highlightColor: highlightColor
+            highlightColor: highlightColor,
+            representation: representation
         )
         
         let initialScript: String
@@ -158,7 +163,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
-                viewer.setStyle({}, {stick: {}});
+                viewer.setStyle({}, {stick: {radius: 0.1}, sphere: {scale: 0.3}});
                 \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
@@ -167,7 +172,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
-                viewer.setStyle({}, {sphere: {}});
+                viewer.setStyle({}, {sphere: {scale: 1.0}});
                 \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
@@ -214,7 +219,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         """
     }
     
-    private func generateHighlightScript(highlightedAtoms: [Int]?, highlightedBonds: [Int]?, highlightColor: String) -> String {
+    private func generateHighlightScript(highlightedAtoms: [Int]?, highlightedBonds: [Int]?, highlightColor: String, representation: Molecule3DView.RepresentationType) -> String {
         guard let atoms = highlightedAtoms, !atoms.isEmpty else {
             return ""
         }
@@ -223,10 +228,20 @@ struct WebViewRepresentable: NSViewRepresentable {
         let atomIndices = atoms.map { $0 + 1 }
         let atomList = atomIndices.map { String($0) }.joined(separator: ",")
         
-        // Generate JavaScript to highlight atoms
+        // Generate JavaScript to highlight atoms with appropriate scale based on representation
+        let sphereStyle: String
+        switch representation {
+        case .ballAndStick:
+            sphereStyle = "sphere: {colorscheme: {elem: '\(highlightColor)'}, scale: 0.3}"
+        case .spaceFilling:
+            sphereStyle = "sphere: {colorscheme: {elem: '\(highlightColor)'}, scale: 1.0}"
+        default:
+            sphereStyle = "sphere: {colorscheme: {elem: '\(highlightColor)'}}"
+        }
+        
         let script = """
             var highlightAtoms = [\(atomList)];
-            viewer.setStyle({serial: highlightAtoms}, {stick: {colorscheme: {elem: '\(highlightColor)'}}, sphere: {colorscheme: {elem: '\(highlightColor)'}}});
+            viewer.setStyle({serial: highlightAtoms}, {stick: {colorscheme: {elem: '\(highlightColor)'}, radius: 0.1}, \(sphereStyle)});
         """
         
         return script
@@ -281,7 +296,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             (() => {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
-              viewer.setStyle({}, {stick: {}});
+              viewer.setStyle({}, {stick: {radius: 0.1}, sphere: {scale: 0.3}});
               viewer.render();
               return true;
             })();
@@ -291,7 +306,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             (() => {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
-              viewer.setStyle({}, {sphere: {}});
+              viewer.setStyle({}, {sphere: {scale: 1.0}});
               viewer.render();
               return true;
             })();

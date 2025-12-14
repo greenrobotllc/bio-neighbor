@@ -20,8 +20,6 @@ struct DiseaseBrowseView: View {
     @State private var isLoadingSimilar = false
     @State private var errorMessage: String?
     @State private var diseaseSearchText = ""
-    @State private var selectedMolecule: Molecule?
-    @State private var selectedDrug: Drug?
     @State private var showSimilarMolecules = false
     @State private var showDrugs = true  // Default to showing drugs
     @State private var isDownloadingDrugs = false
@@ -37,7 +35,8 @@ struct DiseaseBrowseView: View {
     }
     
     var body: some View {
-        NavigationSplitView {
+        NavigationStack {
+            NavigationSplitView {
             // Sidebar with disease selector
             VStack(alignment: .leading, spacing: 20) {
                 Text("Disease Browser")
@@ -281,8 +280,10 @@ struct DiseaseBrowseView: View {
                                         GridItem(.adaptive(minimum: 250), spacing: 16)
                                     ], spacing: 16) {
                                         ForEach(diseaseDrugs) { drug in
-                                            DrugCard(drug: drug) {
-                                                selectedDrug = drug
+                                            NavigationLink(value: drug) {
+                                                DrugCard(drug: drug) {
+                                                    // Navigation handled by NavigationLink
+                                                }
                                             }
                                         }
                                     }
@@ -323,19 +324,20 @@ struct DiseaseBrowseView: View {
                                         GridItem(.adaptive(minimum: 200), spacing: 16)
                                     ], spacing: 16) {
                                         ForEach(diseaseMolecules) { molecule in
-                                            MoleculeCard(molecule: molecule) {
-                                                // Convert MoleculeBasic to Molecule for detail view
-                                                selectedMolecule = Molecule(
-                                                    id: molecule.id,
-                                                    chemblId: molecule.chemblId,
-                                                    name: molecule.name,
-                                                    smiles: molecule.smiles,
-                                                    similarity: 1.0,
-                                                    similarityScore: 0.0,
-                                                    molecularWeight: molecule.molecularWeight,
-                                                    isApproved: molecule.isApproved,
-                                                    formula: molecule.formula
-                                                )
+                                            NavigationLink(value: Molecule(
+                                                id: molecule.id,
+                                                chemblId: molecule.chemblId,
+                                                name: molecule.name,
+                                                smiles: molecule.smiles,
+                                                similarity: 1.0,
+                                                similarityScore: 0.0,
+                                                molecularWeight: molecule.molecularWeight,
+                                                isApproved: molecule.isApproved,
+                                                formula: molecule.formula
+                                            )) {
+                                                MoleculeCard(molecule: molecule) {
+                                                    // Navigation handled by NavigationLink
+                                                }
                                             }
                                         }
                                     }
@@ -365,8 +367,10 @@ struct DiseaseBrowseView: View {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 16) {
                                             ForEach(similarMolecules) { molecule in
-                                                MoleculeCardWithSimilarity(molecule: molecule) {
-                                                    selectedMolecule = molecule
+                                                NavigationLink(value: molecule) {
+                                                    MoleculeCardWithSimilarity(molecule: molecule) {
+                                                        // Navigation handled by NavigationLink
+                                                    }
                                                 }
                                             }
                                         }
@@ -393,13 +397,14 @@ struct DiseaseBrowseView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .navigationTitle("Disease Browser")
-        .sheet(item: $selectedMolecule) { molecule in
-            MoleculeDetailView(molecule: molecule)
-        }
-        .sheet(item: $selectedDrug) { drug in
-            DrugDetailView(drug: drug)
+            }
+            .navigationTitle("Disease Browser")
+            .navigationDestination(for: Molecule.self) { molecule in
+                MoleculeDetailView(molecule: molecule)
+            }
+            .navigationDestination(for: Drug.self) { drug in
+                DrugDetailView(drug: drug)
+            }
         }
         .onAppear {
             backendService.checkBackendHealth()

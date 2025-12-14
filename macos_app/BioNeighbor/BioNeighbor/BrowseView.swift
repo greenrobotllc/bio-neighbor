@@ -18,12 +18,14 @@ struct BrowseView: View {
     @State private var currentPage = 1
     @State private var pagination: Pagination?
     @State private var isLoadingSimilar = false
-    @State private var detailViewMolecule: Molecule?
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
+    @State private var navigationPath = NavigationPath()
     
     var body: some View {
-        NavigationSplitView {
-            // Sidebar with controls
-            VStack(alignment: .leading, spacing: 20) {
+        NavigationStack(path: $navigationPath) {
+            HStack(spacing: 0) {
+                // Sidebar with controls
+                VStack(alignment: .leading, spacing: 20) {
                 Text("BioNeighbor")
                     .font(.largeTitle)
                     .fontWeight(.bold)
@@ -128,89 +130,154 @@ struct BrowseView: View {
                 }
                 
                 Spacer()
-            }
-            .padding()
-            .frame(minWidth: 300)
-        } detail: {
-            // Main content area
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Selected molecule section
-                    if let selected = selectedMolecule {
-                        SelectedMoleculeSection(
-                            molecule: selected,
-                            similarMolecules: similarMolecules,
-                            isLoadingSimilar: isLoadingSimilar,
-                            onMoleculeTap: { molecule in
-                                selectMolecule(molecule)
-                            },
-                            onOpenDetail: {
-                                // Convert MoleculeBasic to Molecule for detail view
-                                detailViewMolecule = Molecule(
-                                    id: selected.id,
-                                    chemblId: selected.chemblId,
-                                    name: selected.name,
-                                    smiles: selected.smiles,
-                                    similarity: 0.0,
-                                    similarityScore: 1.0,
-                                    molecularWeight: selected.molecularWeight,
-                                    isApproved: selected.isApproved,
-                                    formula: selected.formula
-                                )
+                }
+                .padding()
+                .frame(minWidth: 220, idealWidth: 250, maxWidth: 280)
+                .background(Color(NSColor.controlBackgroundColor))
+                
+                Divider()
+                
+                // Main content area
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Selected molecule section
+                        if let selected = selectedMolecule {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        if !selected.name.isEmpty {
+                                            Text(selected.name)
+                                                .font(.title)
+                                                .fontWeight(.bold)
+                                        }
+                                        Text(selected.chemblId)
+                                            .font(selected.name.isEmpty ? .title : .title3)
+                                            .fontWeight(selected.name.isEmpty ? .bold : .regular)
+                                            .foregroundColor(selected.name.isEmpty ? .primary : .secondary)
+                                            .fontDesign(.monospaced)
+                                        
+                                        if let formula = selected.formula, !formula.isEmpty {
+                                            Text(formula)
+                                                .font(.title3)
+                                                .foregroundColor(.blue)
+                                                .fontDesign(.monospaced)
+                                                .padding(.top, 4)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    HStack(spacing: 12) {
+                                        NavigationLink(value: selected) {
+                                            Text("View Details")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        
+                                        if selected.isApproved {
+                                            Label("Approved Drug", systemImage: "checkmark.circle.fill")
+                                                .font(.headline)
+                                                .foregroundColor(.green)
+                                        }
+                                    }
+                                }
+                                
+                                HStack(spacing: 20) {
+                                    Label {
+                                        Text("Molecular Weight (Da)")
+                                            .help("Daltons (Da) are atomic mass units. 1 Da ≈ 1.66 × 10⁻²⁷ kg")
+                                    } icon: {
+                                        Image(systemName: "scalemass")
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    
+                                    Text("\(String(format: "%.2f", selected.molecularWeight))")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
                             }
-                        )
-                        
-                        Divider()
-                    }
-                    
-                    // Browse section
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Molecules")
-                                .font(.title2)
-                                .fontWeight(.bold)
+                            .padding()
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(8)
                             
-                            Spacer()
+                            SelectedMoleculeSection(
+                                molecule: selected,
+                                similarMolecules: similarMolecules,
+                                isLoadingSimilar: isLoadingSimilar,
+                                onMoleculeTap: { molecule in
+                                    selectMolecule(molecule)
+                                }
+                            )
                             
-                            if isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            }
+                            Divider()
                         }
                         
-                        if molecules.isEmpty && !isLoading {
-                            VStack(spacing: 16) {
-                                Image(systemName: "molecule")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(.secondary)
-                                Text("No molecules found")
-                                    .font(.headline)
-                                    .foregroundColor(.secondary)
-                                Text("Try searching or loading a random sample")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                        // Browse section
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Molecules")
+                                    .font(.title2)
+                                    .fontWeight(.bold)
+                                
+                                Spacer()
+                                
+                                if isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                }
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                        } else {
-                            LazyVGrid(columns: [
-                                GridItem(.adaptive(minimum: 200), spacing: 16)
-                            ], spacing: 16) {
-                                ForEach(molecules) { molecule in
-                                    MoleculeCard(molecule: molecule) {
-                                        selectMolecule(molecule)
+                            
+                            if molecules.isEmpty && !isLoading {
+                                VStack(spacing: 16) {
+                                    Image(systemName: "molecule")
+                                        .font(.system(size: 60))
+                                        .foregroundColor(.secondary)
+                                    Text("No molecules found")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+                                    Text("Try searching or loading a random sample")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                            } else {
+                                LazyVGrid(columns: [
+                                    GridItem(.adaptive(minimum: 200), spacing: 16)
+                                ], spacing: 16) {
+                                    ForEach(molecules.filter { molecule in
+                                        // Filter out the selected molecule to avoid duplicates
+                                        selectedMolecule?.id != molecule.id
+                                    }) { molecule in
+                                        NavigationLink(value: molecule) {
+                                            MoleculeCard(molecule: molecule) {
+                                                selectMolecule(molecule)
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    .padding()
                 }
-                .padding()
+                .navigationTitle("Browse Molecules")
+                .navigationDestination(for: MoleculeBasic.self) { molecule in
+                    // Convert MoleculeBasic to Molecule for detail view
+                    let moleculeForDetail = Molecule(
+                        id: molecule.id,
+                        chemblId: molecule.chemblId,
+                        name: molecule.name,
+                        smiles: molecule.smiles,
+                        similarity: 0.0,
+                        similarityScore: 1.0,
+                        molecularWeight: molecule.molecularWeight,
+                        isApproved: molecule.isApproved,
+                        formula: molecule.formula
+                    )
+                    MoleculeDetailView(molecule: moleculeForDetail)
+                }
             }
-        }
-        .navigationTitle("Browse Molecules")
-        .sheet(item: $detailViewMolecule) { molecule in
-            MoleculeDetailView(molecule: molecule)
         }
         .onAppear {
             backendService.checkBackendHealth()
@@ -221,19 +288,6 @@ struct BrowseView: View {
     }
     
     private func loadMolecules() {
-        // #region agent log
-        let logPath = "/Users/andytriboletti/Documents/GitHub/bio-neighbor/.cursor/debug.log"
-        if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "BrowseView.swift:205", "message": "loadMolecules called", "data": ["page": currentPage, "search": searchText, "backendRunning": backendService.isBackendRunning], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-            if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write((logStr + "\n").data(using: .utf8)!)
-                fileHandle.closeFile()
-            } else {
-                try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
-            }
-        }
-        // #endregion
-        
         guard backendService.isBackendRunning else { return }
         
         isLoading = true
@@ -247,34 +301,16 @@ struct BrowseView: View {
                     search: searchText.isEmpty ? nil : searchText
                 )
                 await MainActor.run {
-                    // #region agent log
-                    if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "BrowseView.swift:218", "message": "loadMolecules success", "data": ["moleculesCount": result.molecules.count], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-                        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-                            fileHandle.seekToEndOfFile()
-                            fileHandle.write((logStr + "\n").data(using: .utf8)!)
-                            fileHandle.closeFile()
-                        } else {
-                            try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
-                        }
+                    // Deduplicate molecules by ID
+                    var seen = Set<Int>()
+                    molecules = result.molecules.filter { molecule in
+                        seen.insert(molecule.id).inserted
                     }
-                    // #endregion
-                    molecules = result.molecules
                     pagination = result.pagination
                     isLoading = false
                 }
             } catch {
                 await MainActor.run {
-                    // #region agent log
-                    if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "BrowseView.swift:224", "message": "loadMolecules error", "data": ["error": error.localizedDescription, "errorType": String(describing: type(of: error))], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
-                        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-                            fileHandle.seekToEndOfFile()
-                            fileHandle.write((logStr + "\n").data(using: .utf8)!)
-                            fileHandle.closeFile()
-                        } else {
-                            try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
-                        }
-                    }
-                    // #endregion
                     errorMessage = error.localizedDescription
                     isLoading = false
                 }
@@ -359,7 +395,6 @@ struct SelectedMoleculeSection: View {
     let similarMolecules: [Molecule]
     let isLoadingSimilar: Bool
     let onMoleculeTap: (MoleculeBasic) -> Void
-    let onOpenDetail: () -> Void
     
     @State private var selectedTab = 0
     @State private var molecule2DImage: NSImage?
@@ -369,65 +404,6 @@ struct SelectedMoleculeSection: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Selected molecule header
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if !molecule.name.isEmpty {
-                            Text(molecule.name)
-                                .font(.title)
-                                .fontWeight(.bold)
-                        }
-                        Text(molecule.chemblId)
-                            .font(molecule.name.isEmpty ? .title : .title3)
-                            .fontWeight(molecule.name.isEmpty ? .bold : .regular)
-                            .foregroundColor(molecule.name.isEmpty ? .primary : .secondary)
-                            .fontDesign(.monospaced)
-                        
-                        if let formula = molecule.formula, !formula.isEmpty {
-                            Text(formula)
-                                .font(.title3)
-                                .foregroundColor(.blue)
-                                .fontDesign(.monospaced)
-                                .padding(.top, 4)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    HStack(spacing: 12) {
-                        Button("View Details") {
-                            onOpenDetail()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        
-                        if molecule.isApproved {
-                            Label("Approved Drug", systemImage: "checkmark.circle.fill")
-                                .font(.headline)
-                                .foregroundColor(.green)
-                        }
-                    }
-                }
-                
-                HStack(spacing: 20) {
-                    Label {
-                        Text("Molecular Weight (Da)")
-                            .help("Daltons (Da) are atomic mass units. 1 Da ≈ 1.66 × 10⁻²⁷ kg")
-                    } icon: {
-                        Image(systemName: "scalemass")
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    
-                    Text("\(String(format: "%.2f", molecule.molecularWeight))")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
-            }
-            .padding()
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
-            
             // Tabbed interface
             TabView(selection: $selectedTab) {
                 // 2D Structure tab

@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct Molecule: Codable, Identifiable {
+struct Molecule: Codable, Identifiable, Hashable {
     let id: Int
     let chemblId: String
     let name: String
@@ -100,7 +100,7 @@ struct MoleculeListResponse: Codable {
     }
 }
 
-struct MoleculeBasic: Codable, Identifiable {
+struct MoleculeBasic: Codable, Identifiable, Hashable {
     let id: Int
     let chemblId: String
     let name: String
@@ -200,7 +200,7 @@ struct DiseaseSearchResponse: Codable {
     let error: String?
 }
 
-struct Drug: Codable, Identifiable {
+struct Drug: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
     let genericName: String?

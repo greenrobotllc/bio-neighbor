@@ -13,7 +13,6 @@ struct DrugsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var searchText = ""
-    @State private var selectedDrug: Drug?
     
     var filteredDrugs: [Drug] {
         if searchText.isEmpty {
@@ -27,7 +26,8 @@ struct DrugsView: View {
     }
     
     var body: some View {
-        NavigationSplitView {
+        NavigationStack {
+            NavigationSplitView {
             // Sidebar with search
             VStack(alignment: .leading, spacing: 16) {
                 Text("Drugs")
@@ -116,18 +116,21 @@ struct DrugsView: View {
                         GridItem(.adaptive(minimum: 300), spacing: 16)
                     ], spacing: 16) {
                         ForEach(filteredDrugs) { drug in
-                            DrugCard(drug: drug) {
-                                selectedDrug = drug
+                            NavigationLink(value: drug) {
+                                DrugCard(drug: drug) {
+                                    // Navigation handled by NavigationLink
+                                }
                             }
                         }
                     }
                     .padding()
                 }
             }
-        }
-        .navigationTitle("All Drugs")
-        .sheet(item: $selectedDrug) { drug in
-            DrugDetailView(drug: drug)
+            }
+            .navigationTitle("All Drugs")
+            .navigationDestination(for: Drug.self) { drug in
+                DrugDetailView(drug: drug)
+            }
         }
         .onAppear {
             loadDrugs()
