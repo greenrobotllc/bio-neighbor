@@ -13,6 +13,14 @@ from flask_cors import CORS
 
 from search_engine import SearchEngine, get_search_engine
 from molecule_renderer import render_molecule_to_base64, generate_3d_coordinates
+try:
+    from bond_analysis import extract_atom_bond_data, compute_mcs, identify_functional_groups, compare_molecules
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from bond_analysis import extract_atom_bond_data, compute_mcs, identify_functional_groups, compare_molecules
 
 # Compiled regex for validating names in download endpoints
 ALLOWED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
@@ -375,6 +383,206 @@ def get_molecule_3d(index: int):
         import traceback
         error_msg = str(e)
         print(f"❌ Unexpected error in /molecule/<index>/3d endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+
+
+@app.route('/molecule/<int:index>/bonds', methods=['GET'])
+def get_molecule_bonds(index: int):
+    """
+    Get detailed atom and bond data for a molecule.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "atoms": [
+            {
+                "index": 0,
+                "symbol": "C",
+                "atomic_num": 6,
+                "formal_charge": 0,
+                "hybridization": "SP3",
+                "is_aromatic": false,
+                ...
+            },
+            ...
+        ],
+        "bonds": [
+            {
+                "atom1": 0,
+                "atom2": 1,
+                "order": 1,
+                "is_aromatic": false,
+                "is_in_ring": false,
+                ...
+            },
+            ...
+        ],
+        "smiles": "..."
+    }
+    """
+    try:
+        engine = get_engine()
+        molecule = engine.get_molecule_by_index(index)
+        
+        if not molecule.get('smiles'):
+            return jsonify({'success': False, 'error': 'Molecule has no SMILES'}), 400
+        
+        bond_data = extract_atom_bond_data(molecule['smiles'])
+        if bond_data is None:
+            return jsonify({'success': False, 'error': 'Could not extract bond data'}), 400
+        
+        return jsonify({
+            'success': True,
+            **bond_data
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecule/<index>/bonds endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+
+
+@app.route('/molecule/<int:index>/functional-groups', methods=['GET'])
+def get_molecule_functional_groups(index: int):
+    """
+    Get functional groups identified in a molecule.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "functional_groups": [
+            {
+                "type": "hydroxyl",
+                "atoms": [5, 6],
+                "description": "Hydroxyl group (-OH)"
+            },
+            ...
+        ],
+        "smiles": "..."
+    }
+    """
+    try:
+        engine = get_engine()
+        molecule = engine.get_molecule_by_index(index)
+        
+        if not molecule.get('smiles'):
+            return jsonify({'success': False, 'error': 'Molecule has no SMILES'}), 400
+        
+        functional_groups = identify_functional_groups(molecule['smiles'])
+        
+        return jsonify({
+            'success': True,
+            'functional_groups': functional_groups,
+            'smiles': molecule['smiles']
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecule/<index>/functional-groups endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+
+
+@app.route('/molecules/compare', methods=['POST'])
+def compare_molecules_endpoint():
+    """
+    Compare two molecules and return MCS and differences.
+    
+    Request body (JSON):
+    {
+        "smiles1": "CC(=O)Oc1ccccc1C(=O)O",
+        "smiles2": "CC(=O)Nc1ccc(O)cc1",
+        "index1": 0,  // Optional: molecule index for first molecule
+        "index2": 1   // Optional: molecule index for second molecule
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "molecule1": {
+            "atoms": [...],
+            "bonds": [...],
+            "smiles": "..."
+        },
+        "molecule2": {
+            "atoms": [...],
+            "bonds": [...],
+            "smiles": "..."
+        },
+        "mcs": {
+            "mcs_smiles": "...",
+            "num_atoms": 5,
+            "num_bonds": 4,
+            "shared_atoms_1": [0, 1, 2, ...],
+            "shared_atoms_2": [0, 1, 2, ...],
+            "shared_bonds_1": [0, 1, ...],
+            "shared_bonds_2": [0, 1, ...],
+            ...
+        },
+        "functional_groups_1": [...],
+        "functional_groups_2": [...]
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+        
+        # Get SMILES from request or from molecule indices
+        smiles1 = data.get('smiles1')
+        smiles2 = data.get('smiles2')
+        index1 = data.get('index1')
+        index2 = data.get('index2')
+        
+        # If indices provided, get SMILES from database
+        if index1 is not None:
+            engine = get_engine()
+            mol1 = engine.get_molecule_by_index(index1)
+            if not mol1.get('smiles'):
+                return jsonify({'success': False, 'error': f'Molecule at index {index1} has no SMILES'}), 400
+            smiles1 = mol1['smiles']
+        
+        if index2 is not None:
+            engine = get_engine()
+            mol2 = engine.get_molecule_by_index(index2)
+            if not mol2.get('smiles'):
+                return jsonify({'success': False, 'error': f'Molecule at index {index2} has no SMILES'}), 400
+            smiles2 = mol2['smiles']
+        
+        if not smiles1 or not smiles2:
+            return jsonify({'success': False, 'error': 'smiles1 and smiles2 (or index1 and index2) are required'}), 400
+        
+        # Validate SMILES length
+        if len(smiles1) > 1000 or len(smiles2) > 1000:
+            return jsonify({
+                'success': False,
+                'error': 'SMILES strings too long (max 1000 characters each)'
+            }), 400
+        
+        # Compare molecules
+        comparison = compare_molecules(smiles1, smiles2)
+        if comparison is None:
+            return jsonify({'success': False, 'error': 'Could not compare molecules'}), 400
+        
+        return jsonify({
+            'success': True,
+            **comparison
+        })
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"❌ Unexpected error in /molecules/compare endpoint: {error_msg}")
         print(traceback.format_exc())
         return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
 

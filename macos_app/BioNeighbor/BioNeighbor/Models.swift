@@ -90,10 +90,14 @@ struct Pagination: Codable {
 }
 
 struct MoleculeListResponse: Codable {
-    let success: Bool
+    let success: Bool?
     let molecules: [MoleculeBasic]?
     let pagination: Pagination?
     let error: String?
+    
+    var isSuccess: Bool {
+        success ?? (molecules != nil)
+    }
 }
 
 struct MoleculeBasic: Codable, Identifiable {
@@ -122,10 +126,14 @@ struct MoleculeWithSimilar: Codable {
 }
 
 struct MoleculeWithSimilarResponse: Codable {
-    let success: Bool
+    let success: Bool?
     let molecule: MoleculeBasic?
     let similar: [Molecule]?
     let error: String?
+    
+    var isSuccess: Bool {
+        success ?? (molecule != nil)
+    }
 }
 
 struct Atom3D: Codable {
@@ -391,5 +399,168 @@ struct DownloadStatusResponse: Codable {
         case error
         case progress
     }
+}
+
+// MARK: - Bond Analysis Models
+
+struct AtomDetail: Codable {
+    let index: Int
+    let symbol: String
+    let atomicNum: Int
+    let formalCharge: Int
+    let hybridization: String
+    let isAromatic: Bool
+    let degree: Int
+    let totalValence: Int
+    let numHydrogens: Int
+    let isInRing: Bool
+    let chiralTag: String
+    
+    enum CodingKeys: String, CodingKey {
+        case index
+        case symbol
+        case atomicNum = "atomic_num"
+        case formalCharge = "formal_charge"
+        case hybridization
+        case isAromatic = "is_aromatic"
+        case degree
+        case totalValence = "total_valence"
+        case numHydrogens = "num_hydrogens"
+        case isInRing = "is_in_ring"
+        case chiralTag = "chiral_tag"
+    }
+}
+
+struct BondDetail: Codable {
+    let atom1: Int
+    let atom2: Int
+    let order: Int
+    let isAromatic: Bool
+    let isInRing: Bool
+    let bondType: String
+    let stereo: String
+    
+    enum CodingKeys: String, CodingKey {
+        case atom1
+        case atom2
+        case order
+        case isAromatic = "is_aromatic"
+        case isInRing = "is_in_ring"
+        case bondType = "bond_type"
+        case stereo
+    }
+}
+
+struct MoleculeBondData: Codable {
+    let atoms: [AtomDetail]
+    let bonds: [BondDetail]
+    let smiles: String
+}
+
+struct MoleculeBondDataResponse: Codable {
+    let success: Bool
+    let atoms: [AtomDetail]?
+    let bonds: [BondDetail]?
+    let smiles: String?
+    let error: String?
+}
+
+struct FunctionalGroup: Codable, Identifiable, Equatable {
+    let id: UUID
+    let type: String
+    let atoms: [Int]
+    let description: String
+    
+    init(type: String, atoms: [Int], description: String) {
+        self.id = UUID()
+        self.type = type
+        self.atoms = atoms
+        self.description = description
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case atoms
+        case description
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = UUID()
+        self.type = try container.decode(String.self, forKey: .type)
+        self.atoms = try container.decode([Int].self, forKey: .atoms)
+        self.description = try container.decode(String.self, forKey: .description)
+    }
+}
+
+struct FunctionalGroupsResponse: Codable {
+    let success: Bool
+    let functionalGroups: [FunctionalGroup]?
+    let smiles: String?
+    let error: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case success
+        case functionalGroups = "functional_groups"
+        case smiles
+        case error
+    }
+}
+
+struct ScaffoldComparison: Codable {
+    let mcsSmiles: String
+    let mcsSmarts: String
+    let numAtoms: Int
+    let numBonds: Int
+    let atomMapping1: [String: Int]
+    let atomMapping2: [String: Int]
+    let bondMapping1: [String: Int]
+    let bondMapping2: [String: Int]
+    let sharedAtoms1: [Int]
+    let sharedAtoms2: [Int]
+    let sharedBonds1: [Int]
+    let sharedBonds2: [Int]
+    
+    enum CodingKeys: String, CodingKey {
+        case mcsSmiles = "mcs_smiles"
+        case mcsSmarts = "mcs_smarts"
+        case numAtoms = "num_atoms"
+        case numBonds = "num_bonds"
+        case atomMapping1 = "atom_mapping_1"
+        case atomMapping2 = "atom_mapping_2"
+        case bondMapping1 = "bond_mapping_1"
+        case bondMapping2 = "bond_mapping_2"
+        case sharedAtoms1 = "shared_atoms_1"
+        case sharedAtoms2 = "shared_atoms_2"
+        case sharedBonds1 = "shared_bonds_1"
+        case sharedBonds2 = "shared_bonds_2"
+    }
+}
+
+struct MoleculeComparisonResponse: Codable {
+    let success: Bool
+    let molecule1: MoleculeBondData?
+    let molecule2: MoleculeBondData?
+    let mcs: ScaffoldComparison?
+    let functionalGroups1: [FunctionalGroup]?
+    let functionalGroups2: [FunctionalGroup]?
+    let error: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case success
+        case molecule1
+        case molecule2
+        case mcs
+        case functionalGroups1 = "functional_groups_1"
+        case functionalGroups2 = "functional_groups_2"
+        case error
+    }
+}
+
+struct CompareMoleculesRequest: Codable {
+    let smiles1: String?
+    let smiles2: String?
+    let index1: Int?
+    let index2: Int?
 }
 

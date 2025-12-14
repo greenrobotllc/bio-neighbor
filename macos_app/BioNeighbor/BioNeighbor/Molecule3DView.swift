@@ -12,12 +12,23 @@ struct Molecule3DView: View {
     let coordinates: Molecule3DCoordinates
     @State private var representation: RepresentationType = .ballAndStick
     @State private var isLoading = true
+    var highlightedAtoms: [Int]? = nil
+    var highlightedBonds: [Int]? = nil
+    var highlightColor: String = "green"
+    var highlightMode: HighlightMode = .none
     
     enum RepresentationType: String, CaseIterable {
         case ballAndStick = "stick"
         case spaceFilling = "sphere"
         case wireframe = "line"
         case surface = "surface"
+    }
+    
+    enum HighlightMode {
+        case none
+        case sharedScaffold
+        case functionalGroup
+        case differences
     }
     
     var body: some View {
@@ -44,7 +55,11 @@ struct Molecule3DView: View {
             } else {
                 WebViewRepresentable(
                     coordinates: coordinates,
-                    representation: representation
+                    representation: representation,
+                    highlightedAtoms: highlightedAtoms,
+                    highlightedBonds: highlightedBonds,
+                    highlightColor: highlightColor,
+                    highlightMode: highlightMode
                 )
                 .frame(minHeight: 400)
             }
@@ -61,13 +76,23 @@ struct Molecule3DView: View {
 struct WebViewRepresentable: NSViewRepresentable {
     let coordinates: Molecule3DCoordinates
     let representation: Molecule3DView.RepresentationType
+    let highlightedAtoms: [Int]?
+    let highlightedBonds: [Int]?
+    let highlightColor: String
+    let highlightMode: Molecule3DView.HighlightMode
     
     func makeNSView(context: Context) -> WKWebView {
         let webView = WKWebView()
         webView.navigationDelegate = context.coordinator
         
         // Load HTML with 3Dmol.js from local bundle
-        let html = generateHTML(coordinates: coordinates, representation: representation)
+        let html = generateHTML(
+            coordinates: coordinates,
+            representation: representation,
+            highlightedAtoms: highlightedAtoms,
+            highlightedBonds: highlightedBonds,
+            highlightColor: highlightColor
+        )
         
         // Get the bundle URL for loading local resources
         if let bundleURL = Bundle.main.resourceURL {
@@ -98,7 +123,13 @@ struct WebViewRepresentable: NSViewRepresentable {
         var lastRepresentation: Molecule3DView.RepresentationType = .ballAndStick
     }
     
-    private func generateHTML(coordinates: Molecule3DCoordinates, representation: Molecule3DView.RepresentationType) -> String {
+    private func generateHTML(
+        coordinates: Molecule3DCoordinates,
+        representation: Molecule3DView.RepresentationType,
+        highlightedAtoms: [Int]?,
+        highlightedBonds: [Int]?,
+        highlightColor: String
+    ) -> String {
         // Convert coordinates to PDB format string
         let pdbString = generatePDBString(coordinates: coordinates)
         
@@ -106,9 +137,12 @@ struct WebViewRepresentable: NSViewRepresentable {
         let pdbBase64 = Data(pdbString.utf8).base64EncodedString()
         
         // Determine initial style based on representation
-        // Note: Loading 3Dmol-min.js from CDN requires network access and may fail offline.
-        // For production, consider bundling the JS library (npm install 3dmol, copy to app bundle)
-        // and loading via local file URL instead of CDN.
+        let highlightScript = generateHighlightScript(
+            highlightedAtoms: highlightedAtoms,
+            highlightedBonds: highlightedBonds,
+            highlightColor: highlightColor
+        )
+        
         let initialScript: String
         switch representation {
         case .surface:
@@ -116,6 +150,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
                 viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -124,6 +159,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
                 viewer.setStyle({}, {stick: {}});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -132,6 +168,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
                 viewer.setStyle({}, {sphere: {}});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -140,6 +177,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
                 viewer.setStyle({}, {line: {}});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -174,6 +212,24 @@ struct WebViewRepresentable: NSViewRepresentable {
         </body>
         </html>
         """
+    }
+    
+    private func generateHighlightScript(highlightedAtoms: [Int]?, highlightedBonds: [Int]?, highlightColor: String) -> String {
+        guard let atoms = highlightedAtoms, !atoms.isEmpty else {
+            return ""
+        }
+        
+        // Convert atom indices to 1-based (PDB format)
+        let atomIndices = atoms.map { $0 + 1 }
+        let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+        
+        // Generate JavaScript to highlight atoms
+        let script = """
+            var highlightAtoms = [\(atomList)];
+            viewer.setStyle({serial: highlightAtoms}, {stick: {colorscheme: {elem: '\(highlightColor)'}}, sphere: {colorscheme: {elem: '\(highlightColor)'}}});
+        """
+        
+        return script
     }
     
     private func generatePDBString(coordinates: Molecule3DCoordinates) -> String {

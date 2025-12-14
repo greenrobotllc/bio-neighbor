@@ -18,6 +18,7 @@ struct BrowseView: View {
     @State private var currentPage = 1
     @State private var pagination: Pagination?
     @State private var isLoadingSimilar = false
+    @State private var detailViewMolecule: Molecule?
     
     var body: some View {
         NavigationSplitView {
@@ -142,6 +143,20 @@ struct BrowseView: View {
                             isLoadingSimilar: isLoadingSimilar,
                             onMoleculeTap: { molecule in
                                 selectMolecule(molecule)
+                            },
+                            onOpenDetail: {
+                                // Convert MoleculeBasic to Molecule for detail view
+                                detailViewMolecule = Molecule(
+                                    id: selected.id,
+                                    chemblId: selected.chemblId,
+                                    name: selected.name,
+                                    smiles: selected.smiles,
+                                    similarity: 0.0,
+                                    similarityScore: 1.0,
+                                    molecularWeight: selected.molecularWeight,
+                                    isApproved: selected.isApproved,
+                                    formula: selected.formula
+                                )
                             }
                         )
                         
@@ -194,6 +209,9 @@ struct BrowseView: View {
             }
         }
         .navigationTitle("Browse Molecules")
+        .sheet(item: $detailViewMolecule) { molecule in
+            MoleculeDetailView(molecule: molecule)
+        }
         .onAppear {
             backendService.checkBackendHealth()
             if molecules.isEmpty {
@@ -203,6 +221,19 @@ struct BrowseView: View {
     }
     
     private func loadMolecules() {
+        // #region agent log
+        let logPath = "/Users/andytriboletti/Documents/GitHub/bio-neighbor/.cursor/debug.log"
+        if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "BrowseView.swift:205", "message": "loadMolecules called", "data": ["page": currentPage, "search": searchText, "backendRunning": backendService.isBackendRunning], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
+            if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write((logStr + "\n").data(using: .utf8)!)
+                fileHandle.closeFile()
+            } else {
+                try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
+            }
+        }
+        // #endregion
+        
         guard backendService.isBackendRunning else { return }
         
         isLoading = true
@@ -216,12 +247,34 @@ struct BrowseView: View {
                     search: searchText.isEmpty ? nil : searchText
                 )
                 await MainActor.run {
+                    // #region agent log
+                    if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "BrowseView.swift:218", "message": "loadMolecules success", "data": ["moleculesCount": result.molecules.count], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
+                        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+                            fileHandle.seekToEndOfFile()
+                            fileHandle.write((logStr + "\n").data(using: .utf8)!)
+                            fileHandle.closeFile()
+                        } else {
+                            try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
+                        }
+                    }
+                    // #endregion
                     molecules = result.molecules
                     pagination = result.pagination
                     isLoading = false
                 }
             } catch {
                 await MainActor.run {
+                    // #region agent log
+                    if let logData = try? JSONSerialization.data(withJSONObject: ["sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "BrowseView.swift:224", "message": "loadMolecules error", "data": ["error": error.localizedDescription, "errorType": String(describing: type(of: error))], "timestamp": Int64(Date().timeIntervalSince1970 * 1000)]), let logStr = String(data: logData, encoding: .utf8) {
+                        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+                            fileHandle.seekToEndOfFile()
+                            fileHandle.write((logStr + "\n").data(using: .utf8)!)
+                            fileHandle.closeFile()
+                        } else {
+                            try? (logStr + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
+                        }
+                    }
+                    // #endregion
                     errorMessage = error.localizedDescription
                     isLoading = false
                 }
@@ -306,6 +359,7 @@ struct SelectedMoleculeSection: View {
     let similarMolecules: [Molecule]
     let isLoadingSimilar: Bool
     let onMoleculeTap: (MoleculeBasic) -> Void
+    let onOpenDetail: () -> Void
     
     @State private var selectedTab = 0
     @State private var molecule2DImage: NSImage?
@@ -341,10 +395,17 @@ struct SelectedMoleculeSection: View {
                     
                     Spacer()
                     
-                    if molecule.isApproved {
-                        Label("Approved Drug", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
-                            .foregroundColor(.green)
+                    HStack(spacing: 12) {
+                        Button("View Details") {
+                            onOpenDetail()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        
+                        if molecule.isApproved {
+                            Label("Approved Drug", systemImage: "checkmark.circle.fill")
+                                .font(.headline)
+                                .foregroundColor(.green)
+                        }
                     }
                 }
                 

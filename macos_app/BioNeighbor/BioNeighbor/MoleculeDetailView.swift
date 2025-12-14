@@ -10,8 +10,16 @@ import SwiftUI
 struct MoleculeDetailView: View {
     let molecule: Molecule
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var backendService = BackendService.shared
     @State private var moleculeImage: NSImage?
     @State private var isLoadingImage = false
+    @State private var bondData: MoleculeBondData?
+    @State private var functionalGroups: [FunctionalGroup] = []
+    @State private var isLoadingBondData = false
+    @State private var isLoadingFunctionalGroups = false
+    @State private var showBondAnalysis = false
+    @State private var showFunctionalGroups = false
+    @State private var errorMessage: String?
     
     var body: some View {
         NavigationStack {
@@ -48,6 +56,23 @@ struct MoleculeDetailView: View {
                     }
                     
                     Divider()
+                    
+                    // Error message
+                    if let error = errorMessage {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text(error)
+                                .foregroundColor(.red)
+                            Spacer()
+                            Button("Dismiss") {
+                                errorMessage = nil
+                            }
+                        }
+                        .padding()
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(8)
+                    }
                     
                     // Molecule visualization
                     VStack(alignment: .leading, spacing: 12) {
@@ -102,6 +127,151 @@ struct MoleculeDetailView: View {
                             .cornerRadius(8)
                             .textSelection(.enabled)
                     }
+                    
+                    Divider()
+                        .padding(.vertical, 8)
+                    
+                    // Bond Analysis
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Bond Analysis", systemImage: "atom")
+                                .font(.headline)
+                            Spacer()
+                            Button(showBondAnalysis ? "Hide" : "Show") {
+                                showBondAnalysis.toggle()
+                                if showBondAnalysis && bondData == nil {
+                                    loadBondData()
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                        
+                        if showBondAnalysis {
+                            if isLoadingBondData {
+                                ProgressView("Loading bond data...")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                            } else if let bonds = bondData {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("Atoms: \(bonds.atoms.count)")
+                                        Spacer()
+                                        Text("Bonds: \(bonds.bonds.count)")
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    
+                                    // Atom details (first 10)
+                                    if bonds.atoms.count > 0 {
+                                        Text("Atom Details (showing first 10)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        
+                                        ForEach(Array(bonds.atoms.prefix(10)), id: \.index) { atom in
+                                            HStack {
+                                                Text("Atom \(atom.index): \(atom.symbol)")
+                                                    .font(.system(.caption, design: .monospaced))
+                                                Spacer()
+                                                Text("Charge: \(atom.formalCharge), Hybrid: \(atom.hybridization)")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        
+                                        if bonds.atoms.count > 10 {
+                                            Text("... and \(bonds.atoms.count - 10) more atoms")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background(Color.gray.opacity(0.05))
+                                .cornerRadius(8)
+                            } else if !backendService.isBackendRunning {
+                                Text("Backend is not running. Please start the backend to load bond data.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                    .padding()
+                            } else {
+                                // Show error if there was one, or empty state
+                                if let error = errorMessage, error.contains("bond") {
+                                    Text("Error: \(error)")
+                                        .font(.caption)
+                                        .foregroundColor(.red)
+                                        .padding()
+                                } else {
+                                    Text("No bond data available")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .padding()
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Functional Groups
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Functional Groups", systemImage: "sparkles")
+                                .font(.headline)
+                            Spacer()
+                            Button(showFunctionalGroups ? "Hide" : "Show") {
+                                showFunctionalGroups.toggle()
+                                if showFunctionalGroups && functionalGroups.isEmpty {
+                                    loadFunctionalGroups()
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                        
+                        if showFunctionalGroups {
+                            if isLoadingFunctionalGroups {
+                                ProgressView("Loading functional groups...")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                            } else if !functionalGroups.isEmpty {
+                                LazyVGrid(columns: [
+                                    GridItem(.adaptive(minimum: 200), spacing: 12)
+                                ], spacing: 12) {
+                                    ForEach(functionalGroups) { group in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(group.type.replacingOccurrences(of: "_", with: " ").capitalized)
+                                                .font(.subheadline)
+                                                .fontWeight(.medium)
+                                            Text(group.description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Text("Atoms: \(group.atoms.map { String($0) }.joined(separator: ", "))")
+                                                .font(.caption)
+                                                .foregroundColor(.blue)
+                                        }
+                                        .padding()
+                                        .background(Color.gray.opacity(0.1))
+                                        .cornerRadius(8)
+                                    }
+                                }
+                            } else if !backendService.isBackendRunning {
+                                Text("Backend is not running. Please start the backend to load functional groups.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                    .padding()
+                            } else {
+                                // Show error if there was one, or empty state
+                                if let error = errorMessage, error.contains("functional") {
+                                    Text("Error: \(error)")
+                                        .font(.caption)
+                                        .foregroundColor(.red)
+                                        .padding()
+                                } else if functionalGroups.isEmpty {
+                                    Text("No functional groups found")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .padding()
+                                }
+                            }
+                        }
+                    }
                 }
                 .padding()
             }
@@ -117,6 +287,58 @@ struct MoleculeDetailView: View {
         .frame(minWidth: 600, minHeight: 500)
         .onAppear {
             loadMoleculeImage()
+        }
+    }
+    
+    private func loadBondData() {
+        guard backendService.isBackendRunning else {
+            errorMessage = "Backend is not running"
+            return
+        }
+        
+        isLoadingBondData = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                let data = try await backendService.getMoleculeBonds(index: molecule.id)
+                await MainActor.run {
+                    bondData = data
+                    isLoadingBondData = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to load bond data: \(error.localizedDescription)"
+                    isLoadingBondData = false
+                    print("Error loading bond data: \(error)")
+                }
+            }
+        }
+    }
+    
+    private func loadFunctionalGroups() {
+        guard backendService.isBackendRunning else {
+            errorMessage = "Backend is not running"
+            return
+        }
+        
+        isLoadingFunctionalGroups = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                let groups = try await backendService.getFunctionalGroups(index: molecule.id)
+                await MainActor.run {
+                    functionalGroups = groups
+                    isLoadingFunctionalGroups = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to load functional groups: \(error.localizedDescription)"
+                    isLoadingFunctionalGroups = false
+                    print("Error loading functional groups: \(error)")
+                }
+            }
         }
     }
     
