@@ -488,7 +488,7 @@ def get_molecule_functional_groups(index: int):
         error_msg = str(e)
         print(f"❌ Unexpected error in /molecule/<index>/functional-groups endpoint: {error_msg}")
         print(traceback.format_exc())
-        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+        return jsonify({'success': False, 'error': 'An internal error has occurred.'}), 500
 
 
 @app.route('/molecules/compare', methods=['POST'])
