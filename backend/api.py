@@ -444,7 +444,7 @@ def get_molecule_bonds(index: int):
         error_msg = str(e)
         print(f"❌ Unexpected error in /molecule/<index>/bonds endpoint: {error_msg}")
         print(traceback.format_exc())
-        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+        return jsonify({'success': False, 'error': 'An internal error has occurred.'}), 500
 
 
 @app.route('/molecule/<int:index>/functional-groups', methods=['GET'])
