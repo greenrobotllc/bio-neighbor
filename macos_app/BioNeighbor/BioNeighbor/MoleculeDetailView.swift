@@ -22,9 +22,10 @@ struct MoleculeDetailView: View {
     @State private var errorMessage: String?
     @State private var similarMolecules: [Molecule]?
     @State private var isLoadingSimilar = false
-    @State private var comparisonData: MoleculeComparisonResponse?
+    @State private var comparisonData: [Int: MoleculeComparisonResponse] = [:]
     @State private var showComparisonInline: [Int: Bool] = [:]
     @State private var similarMoleculesCount: Int = 5
+    @State private var similarLoadError: String?
     
     var body: some View {
         ScrollView {
@@ -307,6 +308,28 @@ struct MoleculeDetailView: View {
                             ProgressView("Loading similar molecules...")
                                 .frame(maxWidth: .infinity)
                                 .padding()
+                        } else if let error = similarLoadError {
+                            VStack(spacing: 8) {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.red)
+                                    Text("Failed to load similar molecules")
+                                        .font(.headline)
+                                        .foregroundColor(.red)
+                                }
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                Button("Retry") {
+                                    loadSimilarMolecules()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(8)
                         } else if let similar = similarMolecules, !similar.isEmpty {
                             LazyVGrid(columns: [
                                 GridItem(.adaptive(minimum: 250), spacing: 16)
@@ -317,9 +340,15 @@ struct MoleculeDetailView: View {
                                         currentMolecule: molecule,
                                         showComparison: Binding(
                                             get: { showComparisonInline[similarMolecule.id] ?? false },
-                                            set: { showComparisonInline[similarMolecule.id] = $0 }
+                                            set: { newValue in
+                                                showComparisonInline[similarMolecule.id] = newValue
+                                                if !newValue {
+                                                    // Clear comparison data when closing inline view
+                                                    comparisonData.removeValue(forKey: similarMolecule.id)
+                                                }
+                                            }
                                         ),
-                                        comparisonData: comparisonData,
+                                        comparisonData: comparisonData[similarMolecule.id],
                                         onQuickCompare: {
                                             loadComparison(current: molecule, similar: similarMolecule)
                                         },
@@ -359,6 +388,7 @@ struct MoleculeDetailView: View {
         guard backendService.isBackendRunning else { return }
         
         isLoadingSimilar = true
+        similarLoadError = nil
         
         Task {
             do {
@@ -370,10 +400,12 @@ struct MoleculeDetailView: View {
                     // Convert MoleculeBasic to Molecule for similar molecules
                     similarMolecules = result.similar
                     isLoadingSimilar = false
+                    similarLoadError = nil
                 }
             } catch {
                 await MainActor.run {
                     isLoadingSimilar = false
+                    similarLoadError = error.localizedDescription
                     print("Error loading similar molecules: \(error)")
                 }
             }
@@ -383,6 +415,9 @@ struct MoleculeDetailView: View {
     private func loadComparison(current: Molecule, similar: Molecule) {
         guard backendService.isBackendRunning else { return }
         
+        // Clear any existing comparison data for this molecule before starting new fetch
+        comparisonData.removeValue(forKey: similar.id)
+        
         Task {
             do {
                 let comparison = try await backendService.compareMolecules(
@@ -390,11 +425,13 @@ struct MoleculeDetailView: View {
                     smiles2: similar.smiles
                 )
                 await MainActor.run {
-                    comparisonData = comparison
+                    comparisonData[similar.id] = comparison
                     showComparisonInline[similar.id] = true
                 }
             } catch {
-                print("Error loading comparison: \(error)")
+                await MainActor.run {
+                    print("Error loading comparison: \(error)")
+                }
             }
         }
     }

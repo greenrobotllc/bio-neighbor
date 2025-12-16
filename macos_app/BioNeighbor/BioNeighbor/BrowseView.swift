@@ -249,10 +249,8 @@ struct BrowseView: View {
                                         // Filter out the selected molecule to avoid duplicates
                                         selectedMolecule?.id != molecule.id
                                     }) { molecule in
-                                        NavigationLink(value: molecule) {
-                                            MoleculeCard(molecule: molecule) {
-                                                selectMolecule(molecule)
-                                            }
+                                        MoleculeCard(molecule: molecule) {
+                                            selectMolecule(molecule)
                                         }
                                     }
                                 }

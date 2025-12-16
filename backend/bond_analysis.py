@@ -171,14 +171,16 @@ def compute_mcs(smiles1: str, smiles2: str, timeout: int = 10) -> Optional[Dict]
         # Find shared bonds
         # A bond is shared if both its atoms are in the shared set
         shared_bonds_1 = set()
-        for i, bond in enumerate(mol1.GetBonds()):
+        for bond in mol1.GetBonds():
+            bond_idx = bond.GetIdx()
             if bond.GetBeginAtomIdx() in shared_atoms_1 and bond.GetEndAtomIdx() in shared_atoms_1:
-                shared_bonds_1.add(i)
+                shared_bonds_1.add(bond_idx)
         
         shared_bonds_2 = set()
-        for i, bond in enumerate(mol2.GetBonds()):
+        for bond in mol2.GetBonds():
+            bond_idx = bond.GetIdx()
             if bond.GetBeginAtomIdx() in shared_atoms_2 and bond.GetEndAtomIdx() in shared_atoms_2:
-                shared_bonds_2.add(i)
+                shared_bonds_2.add(bond_idx)
         
         # Create bond mappings (simplified - map by atom pairs)
         bond_mapping_1 = {}
