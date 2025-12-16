@@ -576,7 +576,10 @@ def compare_molecules_endpoint():
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"ValueError in /molecules/compare endpoint: {str(e)}")
+        return jsonify({'success': False, 'error': 'Invalid request parameters'}), 400
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
