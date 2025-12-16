@@ -430,7 +430,8 @@ struct MoleculeDetailView: View {
                 }
             } catch {
                 await MainActor.run {
-                    print("Error loading comparison: \(error)")
+                    errorMessage = "Failed to load comparison: \(error.localizedDescription)"
+                    showComparisonInline[similar.id] = false
                 }
             }
         }

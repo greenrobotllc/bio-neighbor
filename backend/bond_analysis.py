@@ -252,12 +252,14 @@ def identify_functional_groups(smiles: str) -> List[Dict]:
             'hydroxyl': '[OH]',
             'carboxyl': 'C(=O)[OH]',
             'amine_primary': '[NH2]',
-            'amine_secondary': '[NH]',
-            'amine_tertiary': '[N]',
+            # Exclude amide nitrogens from amine matches
+            'amine_secondary': '[NH;!$(NC=O)]',
+            'amine_tertiary': '[N;X3;!$(NC=O);!$([N+])]',
             'amide': 'C(=O)[NH]',
-            'ester': 'C(=O)[O]',
-            'ether': '[O]',
-            'ketone': 'C(=O)',
+            # More specific carbonyl-containing groups
+            'ester': '[#6][CX3](=O)[OX2][#6]',
+            'ether': '[OD2]([#6])[#6]',
+            'ketone': '[#6][CX3](=O)[#6]',
             'aldehyde': 'C(=O)[H]',
             'aromatic_ring': 'c1ccccc1',  # Benzene ring
             'halogen_fluorine': '[F]',

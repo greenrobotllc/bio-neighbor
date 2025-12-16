@@ -113,7 +113,10 @@ def search():
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /molecule/<index>/functional-groups endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except OSError as e:
         # Handle broken pipe and other OS errors
         return jsonify({
