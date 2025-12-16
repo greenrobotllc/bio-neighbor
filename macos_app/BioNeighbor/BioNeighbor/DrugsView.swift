@@ -14,7 +14,6 @@ struct DrugsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var searchText = ""
-    @State private var navigationPath = NavigationPath()
     
     var filteredDrugs: [Drug] {
         if searchText.isEmpty {
@@ -89,7 +88,7 @@ struct DrugsView: View {
             .padding()
             .frame(minWidth: 250)
         } detail: {
-            NavigationStack(path: $navigationPath) {
+            NavigationStack(path: $navCoordinator.navigationPath) {
                 // Main content
                 Group {
                     ScrollView {

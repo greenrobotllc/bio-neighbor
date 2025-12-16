@@ -25,7 +25,6 @@ struct DiseaseBrowseView: View {
     @State private var showDrugs = true  // Default to showing drugs
     @State private var isDownloadingDrugs = false
     @State private var downloadProgress: String?
-    @State private var navigationPath = NavigationPath()
     
     var filteredDiseases: [Disease] {
         if diseaseSearchText.isEmpty {
@@ -157,7 +156,7 @@ struct DiseaseBrowseView: View {
             .padding()
             .frame(minWidth: 300)
         } detail: {
-            NavigationStack(path: $navigationPath) {
+            NavigationStack(path: $navCoordinator.navigationPath) {
                 // Main content area
                 Group {
                     if let disease = selectedDisease {

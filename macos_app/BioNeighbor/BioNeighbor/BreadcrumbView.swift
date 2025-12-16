@@ -9,7 +9,6 @@ import SwiftUI
 
 struct BreadcrumbView: View {
     @ObservedObject var coordinator: NavigationCoordinator
-    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         HStack(spacing: 8) {
@@ -31,15 +30,7 @@ struct BreadcrumbView: View {
                         // Previous items - clickable
                         Button(action: {
                             // Pop to the selected item
-                            let targetIndex = coordinator.breadcrumbPath.firstIndex(where: { $0.id == item.id }) ?? 0
-                            let popsNeeded = coordinator.breadcrumbPath.count - targetIndex - 1
-                            
-                            // Pop the coordinator state to the target
-                            for _ in 0..<popsNeeded {
-                                coordinator.pop()
-                            }
-                            // Dismiss once (or navigate programmatically via NavigationPath)
-                            dismiss()
+                            coordinator.popToBreadcrumb(item)
                         }) {
                             Text(item.title)
                                 .font(.caption)

@@ -39,6 +39,7 @@ class NavigationCoordinator: ObservableObject {
     static let shared = NavigationCoordinator()
     
     @Published var breadcrumbPath: [BreadcrumbItem] = []
+    @Published var navigationPath: NavigationPath = NavigationPath()
     
     private init() {
         // Initialize with home
@@ -59,45 +60,11 @@ class NavigationCoordinator: ObservableObject {
             print("🔵 Item already exists at index \(existingIndex), trimmed path")
             #endif
         } else {
-            // If it's a category type (diseases, drugs, molecules), remove ALL other category types
-            // AND all individual items (disease, drug, molecule) AND comparison breadcrumbs
-            // This ensures only one category appears in breadcrumbs at a time, without individual items
-            if item.type == .diseases || item.type == .drugs || item.type == .molecules {
-                let removedCategories = breadcrumbPath.filter { 
-                    $0.type == .diseases || $0.type == .drugs || $0.type == .molecules 
-                }
-                let removedIndividuals = breadcrumbPath.filter {
-                    $0.type == .disease || $0.type == .drug || $0.type == .molecule
-                }
-                let removedComparisons = breadcrumbPath.filter {
-                    $0.type == .comparison
-                }
-                breadcrumbPath = breadcrumbPath.filter { 
-                    $0.type != .diseases && $0.type != .drugs && $0.type != .molecules &&
-                    $0.type != .disease && $0.type != .drug && $0.type != .molecule &&
-                    $0.type != .comparison
-                }
+            guard prepareForAppend(item) else {
                 #if DEBUG
-                print("🔵 Removed all category breadcrumbs: \(removedCategories.map { $0.title })")
-                print("🔵 Removed all individual items: \(removedIndividuals.map { $0.title })")
-                print("🔵 Removed comparison breadcrumbs: \(removedComparisons.map { $0.title })")
+                print("🔴 Invalid breadcrumb append for \(item.title) after \(breadcrumbPath.last?.title ?? "nil")")
                 #endif
-            }
-            // If it's an individual item type (disease, drug, molecule), remove any other items of the same type
-            // AND remove all category breadcrumbs (diseases, drugs, molecules) since we're now viewing a specific item
-            if item.type == .disease || item.type == .drug || item.type == .molecule {
-                let removedIndividuals = breadcrumbPath.filter { $0.type == item.type }
-                let removedCategories = breadcrumbPath.filter { 
-                    $0.type == .diseases || $0.type == .drugs || $0.type == .molecules 
-                }
-                breadcrumbPath = breadcrumbPath.filter { 
-                    $0.type != item.type &&
-                    $0.type != .diseases && $0.type != .drugs && $0.type != .molecules
-                }
-                #if DEBUG
-                print("🔵 Removed individual items: \(removedIndividuals.map { $0.title })")
-                print("🔵 Removed category breadcrumbs: \(removedCategories.map { $0.title })")
-                #endif
+                return
             }
             breadcrumbPath.append(item)
         }
@@ -106,6 +73,56 @@ class NavigationCoordinator: ObservableObject {
         print("🔵 Final breadcrumbPath: \(breadcrumbPath.map { "\($0.title)(\($0.type))" }.joined(separator: " > "))")
         #endif
         assert(breadcrumbPath.count > 0, "Breadcrumb path should never be empty")
+    }
+    
+    func popToBreadcrumb(_ item: BreadcrumbItem) {
+        guard let targetIndex = breadcrumbPath.firstIndex(where: { $0.id == item.id }) else { return }
+        #if DEBUG
+        print("🟠 popToBreadcrumb -> target index \(targetIndex) for \(item.title)")
+        #endif
+        breadcrumbPath = Array(breadcrumbPath.prefix(targetIndex + 1))
+        
+        let targetPathCount = max(0, targetIndex - 1) // Home and category sit outside the NavigationPath
+        while navigationPath.count > targetPathCount {
+            navigationPath.removeLast()
+        }
+    }
+    
+    private func prepareForAppend(_ item: BreadcrumbItem) -> Bool {
+        let allowedParents: [BreadcrumbItem.BreadcrumbType]
+        switch item.type {
+        case .home:
+            return false
+        case .molecules, .diseases, .drugs:
+            allowedParents = [.home]
+        case .molecule:
+            allowedParents = [.molecules]
+        case .drug:
+            allowedParents = [.drugs]
+        case .disease:
+            allowedParents = [.diseases]
+        case .comparison:
+            allowedParents = [.molecule, .drug, .disease]
+        }
+        
+        // If current tail satisfies hierarchy, allow append
+        if let last = breadcrumbPath.last, allowedParents.contains(last.type) {
+            return true
+        }
+        
+        // Try to trim back to the nearest allowed parent
+        if let parentIndex = breadcrumbPath.lastIndex(where: { allowedParents.contains($0.type) }) {
+            breadcrumbPath = Array(breadcrumbPath.prefix(parentIndex + 1))
+            return true
+        }
+        
+        // If the only allowed parent is Home, trim to root
+        if allowedParents.contains(.home), let root = breadcrumbPath.first {
+            breadcrumbPath = [root]
+            return true
+        }
+        
+        return false
     }
     
     func pop() {

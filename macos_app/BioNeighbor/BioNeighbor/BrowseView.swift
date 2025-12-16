@@ -19,10 +19,9 @@ struct BrowseView: View {
     @State private var pagination: Pagination?
     @State private var isLoadingSimilar = false
     @StateObject private var navCoordinator = NavigationCoordinator.shared
-    @State private var navigationPath = NavigationPath()
     
     var body: some View {
-        NavigationStack(path: $navigationPath) {
+        NavigationStack(path: $navCoordinator.navigationPath) {
             HStack(spacing: 0) {
                 // Sidebar with controls
                 VStack(alignment: .leading, spacing: 20) {
