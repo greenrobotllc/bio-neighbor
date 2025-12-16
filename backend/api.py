@@ -482,7 +482,10 @@ def get_molecule_functional_groups(index: int):
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import traceback
+        print(f"⚠️ ValueError in /molecule/<index>/functional-groups endpoint: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': 'Invalid request.'}), 400
     except Exception as e:
         import traceback
         error_msg = str(e)
