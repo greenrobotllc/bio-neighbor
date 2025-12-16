@@ -170,7 +170,7 @@ def search_by_chembl_id():
     except ValueError as e:
         import logging
         logger = logging.getLogger(__name__)
-        logger.warning("ValueError in /molecule/<index>/functional-groups endpoint: %s", str(e))
+        logger.warning("ValueError in /search/chembl endpoint: %s", str(e))
         return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
         import logging
