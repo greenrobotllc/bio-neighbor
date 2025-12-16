@@ -124,13 +124,12 @@ def search():
             'error': f'Backend error: {str(e)}. Please ensure the search engine is properly initialized.'
         }), 500
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /search endpoint: {error_msg}")
-        print(traceback.format_exc())
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /search endpoint")
         return jsonify({
             'success': False, 
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal server error'
         }), 500
 
 
@@ -169,9 +168,15 @@ def search_by_chembl_id():
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /molecule/<index>/functional-groups endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
-        return jsonify({'success': False, 'error': f'Internal error: {str(e)}'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /search/chembl endpoint")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/molecules', methods=['GET'])
@@ -234,13 +239,12 @@ def list_molecules():
             })
     
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecules endpoint: {error_msg}")
-        print(traceback.format_exc())
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecules endpoint")
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal server error'
         }), 500
 
 
@@ -291,11 +295,10 @@ def get_molecule(index: int):
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecule endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecule endpoint")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/molecule/<int:index>/thumbnail', methods=['GET'])
@@ -342,13 +345,15 @@ def get_molecule_thumbnail(index: int):
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /molecule/<index>/thumbnail endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecule/<index>/thumbnail endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecule/<index>/thumbnail endpoint")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/molecule/<int:index>/3d', methods=['GET'])
@@ -381,13 +386,15 @@ def get_molecule_3d(index: int):
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /molecule/<index>/3d endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecule/<index>/3d endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecule/<index>/3d endpoint")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/molecule/<int:index>/bonds', methods=['GET'])
@@ -492,7 +499,7 @@ def get_molecule_functional_groups(index: int):
         import logging
         logger = logging.getLogger(__name__)
         logger.exception("Unexpected error in /molecule/<index>/functional-groups endpoint")
-        return jsonify({'success': False, 'error': 'Internal error processing functional groups'}), 500
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/molecules/compare', methods=['POST'])
@@ -642,7 +649,10 @@ def render_molecule():
         })
     
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /render endpoint")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 @app.route('/diseases', methods=['GET'])

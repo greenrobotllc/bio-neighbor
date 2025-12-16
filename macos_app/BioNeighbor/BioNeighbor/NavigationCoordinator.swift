@@ -96,7 +96,7 @@ class NavigationCoordinator: ObservableObject {
         case .molecules, .diseases, .drugs:
             allowedParents = [.home]
         case .molecule:
-            allowedParents = [.molecules]
+            allowedParents = [.molecules, .diseases, .disease, .drugs, .drug, .home]
         case .drug:
             allowedParents = [.drugs]
         case .disease:
