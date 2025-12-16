@@ -440,11 +440,10 @@ def get_molecule_bonds(index: int):
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecule/<index>/bonds endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': 'An internal error has occurred.'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecule/<index>/bonds endpoint")
+        return jsonify({'success': False, 'error': 'Internal error processing bond data'}), 500
 
 
 @app.route('/molecule/<int:index>/functional-groups', methods=['GET'])
@@ -482,16 +481,12 @@ def get_molecule_functional_groups(index: int):
         })
     
     except ValueError as e:
-        import traceback
-        print(f"⚠️ ValueError in /molecule/<index>/functional-groups endpoint: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': 'Invalid request.'}), 400
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecule/<index>/functional-groups endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': 'An internal error has occurred.'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecule/<index>/functional-groups endpoint")
+        return jsonify({'success': False, 'error': 'Internal error processing functional groups'}), 500
 
 
 @app.route('/molecules/compare', methods=['POST'])
@@ -581,17 +576,12 @@ def compare_molecules_endpoint():
         })
     
     except ValueError as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ ValueError in /molecules/compare endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': 'Invalid input.'}), 400
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /molecules/compare endpoint: {error_msg}")
-        print(traceback.format_exc())
-        return jsonify({'success': False, 'error': f'Internal error: {error_msg}'}), 500
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /molecules/compare endpoint")
+        return jsonify({'success': False, 'error': 'Internal error processing molecule comparison'}), 500
 
 
 @app.route('/render', methods=['POST'])

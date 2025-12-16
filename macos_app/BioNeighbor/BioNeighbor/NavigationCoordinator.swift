@@ -34,6 +34,7 @@ struct BreadcrumbItem: Identifiable, Hashable {
     }
 }
 
+@MainActor
 class NavigationCoordinator: ObservableObject {
     static let shared = NavigationCoordinator()
     
@@ -45,14 +46,18 @@ class NavigationCoordinator: ObservableObject {
     }
     
     func push(_ item: BreadcrumbItem) {
+        #if DEBUG
         print("🔵 NavigationCoordinator.push: title='\(item.title)', type=\(item.type)")
         print("🔵 Current breadcrumbPath before push: \(breadcrumbPath.map { "\($0.title)(\($0.type))" }.joined(separator: " > "))")
+        #endif
         
         // Check if an item with the same title and type already exists
         if let existingIndex = breadcrumbPath.firstIndex(where: { $0.title == item.title && $0.type == item.type }) {
             // If it exists, remove everything after it and keep it
             breadcrumbPath = Array(breadcrumbPath.prefix(existingIndex + 1))
+            #if DEBUG
             print("🔵 Item already exists at index \(existingIndex), trimmed path")
+            #endif
         } else {
             // If it's a category type (diseases, drugs, molecules), remove ALL other category types
             // AND all individual items (disease, drug, molecule) AND comparison breadcrumbs
@@ -72,9 +77,11 @@ class NavigationCoordinator: ObservableObject {
                     $0.type != .disease && $0.type != .drug && $0.type != .molecule &&
                     $0.type != .comparison
                 }
+                #if DEBUG
                 print("🔵 Removed all category breadcrumbs: \(removedCategories.map { $0.title })")
                 print("🔵 Removed all individual items: \(removedIndividuals.map { $0.title })")
                 print("🔵 Removed comparison breadcrumbs: \(removedComparisons.map { $0.title })")
+                #endif
             }
             // If it's an individual item type (disease, drug, molecule), remove any other items of the same type
             // AND remove all category breadcrumbs (diseases, drugs, molecules) since we're now viewing a specific item
@@ -87,13 +94,17 @@ class NavigationCoordinator: ObservableObject {
                     $0.type != item.type &&
                     $0.type != .diseases && $0.type != .drugs && $0.type != .molecules
                 }
+                #if DEBUG
                 print("🔵 Removed individual items: \(removedIndividuals.map { $0.title })")
                 print("🔵 Removed category breadcrumbs: \(removedCategories.map { $0.title })")
+                #endif
             }
             breadcrumbPath.append(item)
         }
         
+        #if DEBUG
         print("🔵 Final breadcrumbPath: \(breadcrumbPath.map { "\($0.title)(\($0.type))" }.joined(separator: " > "))")
+        #endif
         assert(breadcrumbPath.count > 0, "Breadcrumb path should never be empty")
     }
     

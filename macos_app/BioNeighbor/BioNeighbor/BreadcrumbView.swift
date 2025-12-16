@@ -34,11 +34,12 @@ struct BreadcrumbView: View {
                             let targetIndex = coordinator.breadcrumbPath.firstIndex(where: { $0.id == item.id }) ?? 0
                             let popsNeeded = coordinator.breadcrumbPath.count - targetIndex - 1
                             
-                            // Pop the required number of times
+                            // Pop the coordinator state to the target
                             for _ in 0..<popsNeeded {
                                 coordinator.pop()
-                                dismiss()
                             }
+                            // Dismiss once (or navigate programmatically via NavigationPath)
+                            dismiss()
                         }) {
                             Text(item.title)
                                 .font(.caption)
