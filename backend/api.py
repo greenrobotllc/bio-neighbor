@@ -578,7 +578,11 @@ def compare_molecules_endpoint():
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import traceback
+        error_msg = str(e)
+        print(f"❌ ValueError in /molecules/compare endpoint: {error_msg}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': 'Invalid input.'}), 400
     except Exception as e:
         import traceback
         error_msg = str(e)
