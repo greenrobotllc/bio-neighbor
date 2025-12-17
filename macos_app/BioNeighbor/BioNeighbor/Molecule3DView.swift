@@ -113,18 +113,29 @@ struct WebViewRepresentable: NSViewRepresentable {
     }
     
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Update representation when it changes
-        if representation != context.coordinator.lastRepresentation {
+        // Update when representation or highlighting inputs change
+        let needsUpdate = representation != context.coordinator.lastRepresentation ||
+            highlightedAtoms != context.coordinator.lastHighlightedAtoms ||
+            differenceAtoms != context.coordinator.lastDifferenceAtoms ||
+            highlightColor != context.coordinator.lastHighlightColor ||
+            differenceColor != context.coordinator.lastDifferenceColor
+        
+        if needsUpdate {
             updateRepresentation(
                 webView: webView,
                 representation: representation,
                 highlightedAtoms: highlightedAtoms,
                 highlightColor: highlightColor,
                 differenceAtoms: differenceAtoms,
-                differenceColor: differenceColor
+                differenceColor: differenceColor,
+                highlightMode: highlightMode
             ) { didApply in
                 if didApply {
                     context.coordinator.lastRepresentation = representation
+                    context.coordinator.lastHighlightedAtoms = highlightedAtoms
+                    context.coordinator.lastDifferenceAtoms = differenceAtoms
+                    context.coordinator.lastHighlightColor = highlightColor
+                    context.coordinator.lastDifferenceColor = differenceColor
                 }
             }
         }
@@ -136,6 +147,10 @@ struct WebViewRepresentable: NSViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate {
         var lastRepresentation: Molecule3DView.RepresentationType = .ballAndStick
+        var lastHighlightedAtoms: [Int]?
+        var lastDifferenceAtoms: [Int]?
+        var lastHighlightColor: String = "green"
+        var lastDifferenceColor: String = "red"
     }
     
     private func generateHTML(
@@ -351,6 +366,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         highlightColor: String,
         differenceAtoms: [Int]?,
         differenceColor: String,
+        highlightMode: Molecule3DView.HighlightMode,
         completion: @escaping (Bool) -> Void
     ) {
         let highlightScript = generateHighlightScript(
