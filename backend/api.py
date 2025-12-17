@@ -1375,35 +1375,6 @@ def download_molecules():
                         'success': False,
                         'error': 'Invalid entry in "names". Only alphanumeric, underscores, and hyphens allowed.'
                     }), 400
-        if count is not None:
-            if not isinstance(count, int):
-                return jsonify({'success': False, 'error': 'count must be an integer'}), 400
-            count = min(max(count, 1), 100000)  # Clamp to reasonable max
-        
-        # Validate names
-        if names:
-            if not isinstance(names, list):
-                return jsonify({'success': False, 'error': 'names must be a list'}), 400
-            if len(names) > 200:
-                return jsonify({
-                    'success': False,
-                    'error': 'Too many names (max 200)'
-                }), 400
-            if not all(isinstance(n, str) for n in names):
-                return jsonify({'success': False, 'error': 'names must be a list of strings'}), 400
-            if any(len(n) > 200 for n in names):
-                return jsonify({
-                    'success': False,
-                    'error': 'Name too long (max 200 chars)'
-                }), 400
-            # Additional validation: allow only safe characters in names
-            for n in names:
-                if not ALLOWED_NAME_PATTERN.match(n):
-                    return jsonify({
-                        'success': False,
-                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
-                    }), 400
-        
         if not count and not names and not full_file:
             return jsonify({
                 'success': False,
