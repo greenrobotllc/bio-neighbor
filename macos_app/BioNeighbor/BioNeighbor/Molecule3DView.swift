@@ -12,6 +12,11 @@ struct Molecule3DView: View {
     let coordinates: Molecule3DCoordinates
     @State private var representation: RepresentationType = .ballAndStick
     @State private var isLoading = true
+    var highlightedAtoms: [Int]? = nil
+    var highlightColor: String = "green"
+    var highlightMode: HighlightMode = .none
+    var differenceAtoms: [Int]? = nil
+    var differenceColor: String = "red"
     
     enum RepresentationType: String, CaseIterable {
         case ballAndStick = "stick"
@@ -20,10 +25,21 @@ struct Molecule3DView: View {
         case surface = "surface"
     }
     
+    enum HighlightMode {
+        case none
+        case sharedScaffold
+        case functionalGroup
+        case differences
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Controls
-            HStack {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Representation")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
                 Picker("Representation", selection: $representation) {
                     Text("Ball & Stick").tag(RepresentationType.ballAndStick)
                     Text("Space Filling").tag(RepresentationType.spaceFilling)
@@ -31,11 +47,11 @@ struct Molecule3DView: View {
                     Text("Surface").tag(RepresentationType.surface)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 400)
-                
-                Spacer()
+                .labelsHidden()
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.top, 20)
+            .padding(.bottom, 8)
             
             // WebView
             if isLoading {
@@ -44,7 +60,12 @@ struct Molecule3DView: View {
             } else {
                 WebViewRepresentable(
                     coordinates: coordinates,
-                    representation: representation
+                    representation: representation,
+                    highlightedAtoms: highlightedAtoms,
+                    highlightColor: highlightColor,
+                    highlightMode: highlightMode,
+                    differenceAtoms: differenceAtoms,
+                    differenceColor: differenceColor
                 )
                 .frame(minHeight: 400)
             }
@@ -61,13 +82,25 @@ struct Molecule3DView: View {
 struct WebViewRepresentable: NSViewRepresentable {
     let coordinates: Molecule3DCoordinates
     let representation: Molecule3DView.RepresentationType
+    let highlightedAtoms: [Int]?
+    let highlightColor: String
+    let highlightMode: Molecule3DView.HighlightMode
+    let differenceAtoms: [Int]?
+    let differenceColor: String
     
     func makeNSView(context: Context) -> WKWebView {
         let webView = WKWebView()
         webView.navigationDelegate = context.coordinator
         
         // Load HTML with 3Dmol.js from local bundle
-        let html = generateHTML(coordinates: coordinates, representation: representation)
+        let html = generateHTML(
+            coordinates: coordinates,
+            representation: representation,
+            highlightedAtoms: highlightedAtoms,
+            highlightColor: highlightColor,
+            differenceAtoms: differenceAtoms,
+            differenceColor: differenceColor
+        )
         
         // Get the bundle URL for loading local resources
         if let bundleURL = Bundle.main.resourceURL {
@@ -80,11 +113,29 @@ struct WebViewRepresentable: NSViewRepresentable {
     }
     
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Update representation when it changes
-        if representation != context.coordinator.lastRepresentation {
-            updateRepresentation(webView: webView, representation: representation) { didApply in
+        // Update when representation or highlighting inputs change
+        let needsUpdate = representation != context.coordinator.lastRepresentation ||
+            highlightedAtoms != context.coordinator.lastHighlightedAtoms ||
+            differenceAtoms != context.coordinator.lastDifferenceAtoms ||
+            highlightColor != context.coordinator.lastHighlightColor ||
+            differenceColor != context.coordinator.lastDifferenceColor
+        
+        if needsUpdate {
+            updateRepresentation(
+                webView: webView,
+                representation: representation,
+                highlightedAtoms: highlightedAtoms,
+                highlightColor: highlightColor,
+                differenceAtoms: differenceAtoms,
+                differenceColor: differenceColor,
+                highlightMode: highlightMode
+            ) { didApply in
                 if didApply {
                     context.coordinator.lastRepresentation = representation
+                    context.coordinator.lastHighlightedAtoms = highlightedAtoms
+                    context.coordinator.lastDifferenceAtoms = differenceAtoms
+                    context.coordinator.lastHighlightColor = highlightColor
+                    context.coordinator.lastDifferenceColor = differenceColor
                 }
             }
         }
@@ -96,9 +147,20 @@ struct WebViewRepresentable: NSViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate {
         var lastRepresentation: Molecule3DView.RepresentationType = .ballAndStick
+        var lastHighlightedAtoms: [Int]?
+        var lastDifferenceAtoms: [Int]?
+        var lastHighlightColor: String = "green"
+        var lastDifferenceColor: String = "red"
     }
     
-    private func generateHTML(coordinates: Molecule3DCoordinates, representation: Molecule3DView.RepresentationType) -> String {
+    private func generateHTML(
+        coordinates: Molecule3DCoordinates,
+        representation: Molecule3DView.RepresentationType,
+        highlightedAtoms: [Int]?,
+        highlightColor: String,
+        differenceAtoms: [Int]?,
+        differenceColor: String
+    ) -> String {
         // Convert coordinates to PDB format string
         let pdbString = generatePDBString(coordinates: coordinates)
         
@@ -106,9 +168,15 @@ struct WebViewRepresentable: NSViewRepresentable {
         let pdbBase64 = Data(pdbString.utf8).base64EncodedString()
         
         // Determine initial style based on representation
-        // Note: Loading 3Dmol-min.js from CDN requires network access and may fail offline.
-        // For production, consider bundling the JS library (npm install 3dmol, copy to app bundle)
-        // and loading via local file URL instead of CDN.
+        let highlightScript = generateHighlightScript(
+            highlightedAtoms: highlightedAtoms,
+            highlightColor: highlightColor,
+            representation: representation,
+            differenceAtoms: differenceAtoms,
+            differenceColor: differenceColor,
+            highlightMode: highlightMode
+        )
+        
         let initialScript: String
         switch representation {
         case .surface:
@@ -116,6 +184,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
                 viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -123,7 +192,8 @@ struct WebViewRepresentable: NSViewRepresentable {
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
-                viewer.setStyle({}, {stick: {}});
+                viewer.setStyle({}, {stick: {radius: 0.1}, sphere: {scale: 0.3}});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -131,7 +201,8 @@ struct WebViewRepresentable: NSViewRepresentable {
             initialScript = """
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
-                viewer.setStyle({}, {sphere: {}});
+                viewer.setStyle({}, {sphere: {scale: 1.0}});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -140,6 +211,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 viewer.addModel(pdb, "pdb");
                 viewer.removeAllSurfaces();
                 viewer.setStyle({}, {line: {}});
+                \(highlightScript)
                 viewer.zoomTo();
                 viewer.render();
             """
@@ -176,6 +248,91 @@ struct WebViewRepresentable: NSViewRepresentable {
         """
     }
     
+    private func generateHighlightScript(
+        highlightedAtoms: [Int]?,
+        highlightColor: String,
+        representation: Molecule3DView.RepresentationType,
+        differenceAtoms: [Int]?,
+        differenceColor: String,
+        highlightMode: Molecule3DView.HighlightMode
+    ) -> String {
+        let safeHighlightColor = sanitizeColor(highlightColor)
+        let safeDifferenceColor = sanitizeColor(differenceColor)
+        var scripts: [String] = []
+        
+        switch highlightMode {
+        case .none:
+            break
+        case .sharedScaffold, .functionalGroup:
+            if let atoms = highlightedAtoms, !atoms.isEmpty {
+                let atomIndices = atoms.map { $0 + 1 }
+                let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+                
+                let sphereStyle: String
+                switch representation {
+                case .ballAndStick:
+                    sphereStyle = "sphere: {color: '\(safeHighlightColor)', scale: 0.3}"
+                case .spaceFilling:
+                    sphereStyle = "sphere: {color: '\(safeHighlightColor)', scale: 1.0}"
+                default:
+                    sphereStyle = "sphere: {color: '\(safeHighlightColor)'}"
+                }
+                
+                scripts.append("""
+                    var highlightAtoms = [\(atomList)];
+                    viewer.setStyle({serial: highlightAtoms}, {stick: {color: '\(safeHighlightColor)', radius: 0.1}, \(sphereStyle)});
+                """)
+            }
+            if highlightMode == .sharedScaffold, let diffAtoms = differenceAtoms, !diffAtoms.isEmpty {
+                let atomIndices = diffAtoms.map { $0 + 1 }
+                let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+                
+                let diffSphereStyle: String
+                switch representation {
+                case .ballAndStick:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 0.3}"
+                case .spaceFilling:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 1.0}"
+                default:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)'}"
+                }
+                
+                scripts.append("""
+                    var differenceAtoms = [\(atomList)];
+                    viewer.setStyle({serial: differenceAtoms}, {stick: {color: '\(safeDifferenceColor)', radius: 0.1}, \(diffSphereStyle)});
+                """)
+            }
+        case .differences:
+            if let diffAtoms = differenceAtoms, !diffAtoms.isEmpty {
+                let atomIndices = diffAtoms.map { $0 + 1 }
+                let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+                
+                let diffSphereStyle: String
+                switch representation {
+                case .ballAndStick:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 0.3}"
+                case .spaceFilling:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 1.0}"
+                default:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)'}"
+                }
+                
+                scripts.append("""
+                    var differenceAtoms = [\(atomList)];
+                    viewer.setStyle({serial: differenceAtoms}, {stick: {color: '\(safeDifferenceColor)', radius: 0.1}, \(diffSphereStyle)});
+                """)
+            }
+        }
+        
+        return scripts.joined(separator: "\n")
+    }
+    
+    private func sanitizeColor(_ color: String) -> String {
+        let filtered = color.filter { $0.isLetter || $0.isNumber || $0 == "#" }
+        let trimmed = String(filtered.prefix(32))
+        return trimmed.isEmpty ? "black" : trimmed
+    }
+    
     private func generatePDBString(coordinates: Molecule3DCoordinates) -> String {
         var pdb = "HEADER    MOLECULE\n"
         
@@ -205,8 +362,22 @@ struct WebViewRepresentable: NSViewRepresentable {
     private func updateRepresentation(
         webView: WKWebView,
         representation: Molecule3DView.RepresentationType,
+        highlightedAtoms: [Int]?,
+        highlightColor: String,
+        differenceAtoms: [Int]?,
+        differenceColor: String,
+        highlightMode: Molecule3DView.HighlightMode,
         completion: @escaping (Bool) -> Void
     ) {
+        let highlightScript = generateHighlightScript(
+            highlightedAtoms: highlightedAtoms,
+            highlightColor: highlightColor,
+            representation: representation,
+            differenceAtoms: differenceAtoms,
+            differenceColor: differenceColor,
+            highlightMode: highlightMode
+        )
+        
         let script: String
         switch representation {
         case .surface:
@@ -216,6 +387,7 @@ struct WebViewRepresentable: NSViewRepresentable {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
               viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
@@ -225,7 +397,8 @@ struct WebViewRepresentable: NSViewRepresentable {
             (() => {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
-              viewer.setStyle({}, {stick: {}});
+              viewer.setStyle({}, {stick: {radius: 0.1}, sphere: {scale: 0.3}});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
@@ -235,7 +408,8 @@ struct WebViewRepresentable: NSViewRepresentable {
             (() => {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
-              viewer.setStyle({}, {sphere: {}});
+              viewer.setStyle({}, {sphere: {scale: 1.0}});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
@@ -246,6 +420,7 @@ struct WebViewRepresentable: NSViewRepresentable {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
               viewer.setStyle({}, {line: {}});
+              \(highlightScript)
               viewer.render();
               return true;
             })();

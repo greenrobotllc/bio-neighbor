@@ -14,10 +14,10 @@ struct SearchView: View {
     @State private var isSearching = false
     @State private var searchResults: [Molecule] = []
     @State private var errorMessage: String?
-    @State private var selectedMolecule: Molecule?
     
     var body: some View {
-        NavigationSplitView {
+        NavigationStack {
+            NavigationSplitView {
             // Sidebar with search form
             VStack(alignment: .leading, spacing: 20) {
                 Text("BioNeighbor")
@@ -123,11 +123,12 @@ struct SearchView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ResultsView(results: searchResults, selectedMolecule: $selectedMolecule)
+                ResultsView(results: searchResults)
             }
-        }
-        .sheet(item: $selectedMolecule) { molecule in
-            MoleculeDetailView(molecule: molecule)
+            }
+            .navigationDestination(for: Molecule.self) { molecule in
+                MoleculeDetailView(molecule: molecule)
+            }
         }
         .onAppear {
             backendService.checkBackendHealth()

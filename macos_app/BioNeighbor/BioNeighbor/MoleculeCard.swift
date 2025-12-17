@@ -7,6 +7,18 @@
 
 import SwiftUI
 
+struct ConditionalTapGesture: ViewModifier {
+    let onTap: (() -> Void)?
+    
+    func body(content: Content) -> some View {
+        if let onTap = onTap {
+            content.onTapGesture(perform: onTap)
+        } else {
+            content
+        }
+    }
+}
+
 struct MoleculeCard: View {
     let molecule: MoleculeBasic
     let showSimilarity: Bool
@@ -22,7 +34,8 @@ struct MoleculeCard: View {
     }
     
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        Group {
+            HStack(alignment: .top, spacing: 12) {
             // Thumbnail icon
             if isLoadingThumbnail {
                 ProgressView()
@@ -98,11 +111,10 @@ struct MoleculeCard: View {
         .cornerRadius(8)
         .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
         .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?()
-        }
+        .modifier(ConditionalTapGesture(onTap: onTap))
         .task {
             await loadThumbnail()
+        }
         }
     }
     
@@ -142,8 +154,9 @@ struct MoleculeCardWithSimilarity: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Thumbnail at top
+        Group {
+            VStack(alignment: .leading, spacing: 8) {
+                // Thumbnail at top
             HStack {
                 if isLoadingThumbnail {
                     ProgressView()
@@ -232,11 +245,10 @@ struct MoleculeCardWithSimilarity: View {
         .cornerRadius(8)
         .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
         .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?()
-        }
+        .modifier(ConditionalTapGesture(onTap: onTap))
         .task {
             await loadThumbnail()
+        }
         }
     }
     

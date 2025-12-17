@@ -18,11 +18,13 @@ struct BrowseView: View {
     @State private var currentPage = 1
     @State private var pagination: Pagination?
     @State private var isLoadingSimilar = false
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
     
     var body: some View {
-        NavigationSplitView {
-            // Sidebar with controls
-            VStack(alignment: .leading, spacing: 20) {
+        NavigationStack(path: $navCoordinator.navigationPath) {
+            HStack(spacing: 0) {
+                // Sidebar with controls
+                VStack(alignment: .leading, spacing: 20) {
                 Text("BioNeighbor")
                     .font(.largeTitle)
                     .fontWeight(.bold)
@@ -127,73 +129,153 @@ struct BrowseView: View {
                 }
                 
                 Spacer()
-            }
-            .padding()
-            .frame(minWidth: 300)
-        } detail: {
-            // Main content area
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Selected molecule section
-                    if let selected = selectedMolecule {
-                        SelectedMoleculeSection(
-                            molecule: selected,
-                            similarMolecules: similarMolecules,
-                            isLoadingSimilar: isLoadingSimilar,
-                            onMoleculeTap: { molecule in
-                                selectMolecule(molecule)
+                }
+                .padding()
+                .frame(minWidth: 220, idealWidth: 250, maxWidth: 280)
+                .background(Color(NSColor.controlBackgroundColor))
+                
+                Divider()
+                
+                // Main content area
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Selected molecule section
+                        if let selected = selectedMolecule {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        if !selected.name.isEmpty {
+                                            Text(selected.name)
+                                                .font(.title)
+                                                .fontWeight(.bold)
+                                        }
+                                        Text(selected.chemblId)
+                                            .font(selected.name.isEmpty ? .title : .title3)
+                                            .fontWeight(selected.name.isEmpty ? .bold : .regular)
+                                            .foregroundColor(selected.name.isEmpty ? .primary : .secondary)
+                                            .fontDesign(.monospaced)
+                                        
+                                        if let formula = selected.formula, !formula.isEmpty {
+                                            Text(formula)
+                                                .font(.title3)
+                                                .foregroundColor(.blue)
+                                                .fontDesign(.monospaced)
+                                                .padding(.top, 4)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    HStack(spacing: 12) {
+                                        NavigationLink(value: selected) {
+                                            Text("View Details")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        
+                                        if selected.isApproved {
+                                            Label("Approved Drug", systemImage: "checkmark.circle.fill")
+                                                .font(.headline)
+                                                .foregroundColor(.green)
+                                        }
+                                    }
+                                }
+                                
+                                HStack(spacing: 20) {
+                                    Label {
+                                        Text("Molecular Weight (Da)")
+                                            .help("Daltons (Da) are atomic mass units. 1 Da ≈ 1.66 × 10⁻²⁷ kg")
+                                    } icon: {
+                                        Image(systemName: "scalemass")
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    
+                                    Text("\(String(format: "%.2f", selected.molecularWeight))")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
                             }
-                        )
-                        
-                        Divider()
-                    }
-                    
-                    // Browse section
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Molecules")
-                                .font(.title2)
-                                .fontWeight(.bold)
+                            .padding()
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(8)
                             
-                            Spacer()
+                            SelectedMoleculeSection(
+                                molecule: selected,
+                                similarMolecules: similarMolecules,
+                                isLoadingSimilar: isLoadingSimilar,
+                                onMoleculeTap: { molecule in
+                                    selectMolecule(molecule)
+                                }
+                            )
                             
-                            if isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            }
+                            Divider()
                         }
                         
-                        if molecules.isEmpty && !isLoading {
-                            VStack(spacing: 16) {
-                                Image(systemName: "molecule")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(.secondary)
-                                Text("No molecules found")
-                                    .font(.headline)
-                                    .foregroundColor(.secondary)
-                                Text("Try searching or loading a random sample")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                        // Browse section
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Molecules")
+                                    .font(.title2)
+                                    .fontWeight(.bold)
+                                
+                                Spacer()
+                                
+                                if isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                }
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                        } else {
-                            LazyVGrid(columns: [
-                                GridItem(.adaptive(minimum: 200), spacing: 16)
-                            ], spacing: 16) {
-                                ForEach(molecules) { molecule in
-                                    MoleculeCard(molecule: molecule) {
-                                        selectMolecule(molecule)
+                            
+                            if molecules.isEmpty && !isLoading {
+                                VStack(spacing: 16) {
+                                    Image(systemName: "molecule")
+                                        .font(.system(size: 60))
+                                        .foregroundColor(.secondary)
+                                    Text("No molecules found")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+                                    Text("Try searching or loading a random sample")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                            } else {
+                                LazyVGrid(columns: [
+                                    GridItem(.adaptive(minimum: 200), spacing: 16)
+                                ], spacing: 16) {
+                                    ForEach(molecules.filter { molecule in
+                                        // Filter out the selected molecule to avoid duplicates
+                                        selectedMolecule?.id != molecule.id
+                                    }) { molecule in
+                                        MoleculeCard(molecule: molecule) {
+                                            selectMolecule(molecule)
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    .padding()
                 }
-                .padding()
+                .navigationTitle("Browse Molecules")
+                .navigationDestination(for: MoleculeBasic.self) { molecule in
+                    // Convert MoleculeBasic to Molecule for detail view
+                    let moleculeForDetail = Molecule(
+                        id: molecule.id,
+                        chemblId: molecule.chemblId,
+                        name: molecule.name,
+                        smiles: molecule.smiles,
+                        similarity: 0.0,
+                        similarityScore: 1.0,
+                        molecularWeight: molecule.molecularWeight,
+                        isApproved: molecule.isApproved,
+                        formula: molecule.formula
+                    )
+                    MoleculeDetailView(molecule: moleculeForDetail)
+                }
             }
         }
-        .navigationTitle("Browse Molecules")
         .onAppear {
             backendService.checkBackendHealth()
             if molecules.isEmpty {
@@ -216,7 +298,11 @@ struct BrowseView: View {
                     search: searchText.isEmpty ? nil : searchText
                 )
                 await MainActor.run {
-                    molecules = result.molecules
+                    // Deduplicate molecules by ID
+                    var seen = Set<Int>()
+                    molecules = result.molecules.filter { molecule in
+                        seen.insert(molecule.id).inserted
+                    }
                     pagination = result.pagination
                     isLoading = false
                 }
@@ -315,58 +401,6 @@ struct SelectedMoleculeSection: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Selected molecule header
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if !molecule.name.isEmpty {
-                            Text(molecule.name)
-                                .font(.title)
-                                .fontWeight(.bold)
-                        }
-                        Text(molecule.chemblId)
-                            .font(molecule.name.isEmpty ? .title : .title3)
-                            .fontWeight(molecule.name.isEmpty ? .bold : .regular)
-                            .foregroundColor(molecule.name.isEmpty ? .primary : .secondary)
-                            .fontDesign(.monospaced)
-                        
-                        if let formula = molecule.formula, !formula.isEmpty {
-                            Text(formula)
-                                .font(.title3)
-                                .foregroundColor(.blue)
-                                .fontDesign(.monospaced)
-                                .padding(.top, 4)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    if molecule.isApproved {
-                        Label("Approved Drug", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
-                            .foregroundColor(.green)
-                    }
-                }
-                
-                HStack(spacing: 20) {
-                    Label {
-                        Text("Molecular Weight (Da)")
-                            .help("Daltons (Da) are atomic mass units. 1 Da ≈ 1.66 × 10⁻²⁷ kg")
-                    } icon: {
-                        Image(systemName: "scalemass")
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    
-                    Text("\(String(format: "%.2f", molecule.molecularWeight))")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
-            }
-            .padding()
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
-            
             // Tabbed interface
             TabView(selection: $selectedTab) {
                 // 2D Structure tab

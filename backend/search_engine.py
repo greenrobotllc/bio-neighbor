@@ -198,12 +198,16 @@ class SearchEngine:
                 # L2 distance on unit vectors: dist² = ||x-y||² ≈ 2(1 - cos(θ))
                 # Therefore: cos(θ) ≈ 1 - dist²/2
                 # FAISS returns dist², so we use it directly (no need to square again)
-                molecule_info['similarity'] = max(0.0, 1.0 - (dist_squared / 2.0))
+                similarity = max(0.0, 1.0 - (dist_squared / 2.0))
             else:
                 # For L2 distance: lower is better, convert to similarity score
                 # Use sqrt of squared distance for conversion
                 dist_euclidean = dist_squared ** 0.5
-                molecule_info['similarity'] = float(1.0 / (1.0 + dist_euclidean) if dist_euclidean >= 0 else 0.0)
+                similarity = float(1.0 / (1.0 + dist_euclidean) if dist_euclidean >= 0 else 0.0)
+            
+            molecule_info['similarity'] = similarity
+            # similarity_score is the same as similarity (for backward compatibility with Swift model)
+            molecule_info['similarity_score'] = dist_squared  # Use distance as similarity_score (lower = more similar)
             
             results.append(molecule_info)
         

@@ -9,17 +9,19 @@ import SwiftUI
 
 struct DrugDetailView: View {
     let drug: Drug
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var backendService = BackendService.shared
+    @StateObject private var navCoordinator = NavigationCoordinator.shared
     @State private var activeIngredientMolecules: [MoleculeBasic] = []
     @State private var isLoadingMolecules = false
     @State private var errorMessage: String?
-    @State private var selectedMolecule: Molecule?
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Breadcrumb
+                BreadcrumbView(coordinator: navCoordinator)
+                
+                Divider()
                     // Header
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -130,18 +132,20 @@ struct DrugDetailView: View {
                                 GridItem(.adaptive(minimum: 200), spacing: 16)
                             ], spacing: 16) {
                                 ForEach(activeIngredientMolecules) { molecule in
-                                    MoleculeCard(molecule: molecule) {
-                                        selectedMolecule = Molecule(
-                                            id: molecule.id,
-                                            chemblId: molecule.chemblId,
-                                            name: molecule.name,
-                                            smiles: molecule.smiles,
-                                            similarity: 1.0,
-                                            similarityScore: 0.0,
-                                            molecularWeight: molecule.molecularWeight,
-                                            isApproved: molecule.isApproved,
-                                            formula: molecule.formula
-                                        )
+                                    NavigationLink(value: Molecule(
+                                        id: molecule.id,
+                                        chemblId: molecule.chemblId,
+                                        name: molecule.name,
+                                        smiles: molecule.smiles,
+                                        similarity: 1.0,
+                                        similarityScore: 0.0,
+                                        molecularWeight: molecule.molecularWeight,
+                                        isApproved: molecule.isApproved,
+                                        formula: molecule.formula
+                                    )) {
+                                        MoleculeCard(molecule: molecule) {
+                                            // Navigation handled by NavigationLink
+                                        }
                                     }
                                 }
                             }
@@ -185,20 +189,15 @@ struct DrugDetailView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Drug Details")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
-            }
-        }
+        .navigationTitle("Drug Details")
         .frame(minWidth: 700, minHeight: 600)
-        .sheet(item: $selectedMolecule) { molecule in
-            MoleculeDetailView(molecule: molecule)
-        }
         .onAppear {
+            print("🟡 DrugDetailView onAppear - pushing drug breadcrumb: \(drug.name)")
+            navCoordinator.push(BreadcrumbItem(
+                title: drug.name,
+                icon: "pills",
+                type: .drug
+            ))
             loadActiveIngredientMolecules()
         }
     }

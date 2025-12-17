@@ -82,3 +82,5 @@ backend/*.pkl
 *.swp
 *.swo
 *~
+
+.cursor/

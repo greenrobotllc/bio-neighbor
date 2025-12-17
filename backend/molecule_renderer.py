@@ -12,6 +12,11 @@ from rdkit.Chem.Draw import rdMolDraw2D
 from PIL import Image
 import base64
 
+try:
+    from .bond_analysis import extract_atom_bond_data as extract_detailed_atom_bond_data
+except ImportError:
+    from bond_analysis import extract_atom_bond_data as extract_detailed_atom_bond_data
+
 
 def render_molecule_2d(smiles: str, width: int = 400, height: int = 400) -> Optional[Image.Image]:
     """
@@ -175,7 +180,10 @@ def generate_3d_coordinates(smiles: str) -> Optional[Dict]:
                 'x': float(pos.x),
                 'y': float(pos.y),
                 'z': float(pos.z),
-                'index': i
+                'index': i,
+                'formal_charge': atom.GetFormalCharge(),
+                'hybridization': str(atom.GetHybridization()),
+                'is_aromatic': atom.GetIsAromatic(),
             })
         
         # Extract bonds
@@ -184,7 +192,9 @@ def generate_3d_coordinates(smiles: str) -> Optional[Dict]:
             bonds.append({
                 'atom1': int(bond.GetBeginAtomIdx()),
                 'atom2': int(bond.GetEndAtomIdx()),
-                'order': int(bond.GetBondTypeAsDouble())
+                'order': int(bond.GetBondTypeAsDouble()),
+                'is_aromatic': bond.GetIsAromatic(),
+                'is_in_ring': bond.IsInRing(),
             })
         
         return {
@@ -196,6 +206,20 @@ def generate_3d_coordinates(smiles: str) -> Optional[Dict]:
     except Exception as e:
         print(f"Error generating 3D coordinates: {e}")
         return None
+
+
+def extract_atom_bond_data(smiles: str) -> Optional[Dict]:
+    """
+    Extract detailed atom and bond data from a SMILES string.
+    This is a convenience wrapper around bond_analysis.extract_atom_bond_data.
+    
+    Args:
+        smiles: SMILES string
+        
+    Returns:
+        Dictionary with atoms and bonds data, or None if SMILES is invalid
+    """
+    return extract_detailed_atom_bond_data(smiles)
 
 
 def render_molecule_to_file(smiles: str, output_path: Path, width: int = 400, height: int = 400, format: str = "PNG"):
