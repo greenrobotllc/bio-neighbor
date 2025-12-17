@@ -1348,7 +1348,7 @@ def download_molecules():
         MAX_COUNT = 1000
         try:
             count_int = int(count) if count is not None else None
-        except Exception:
+        except (ValueError, TypeError):
             return jsonify({
                 'success': False,
                 'error': 'Parameter "count" must be an integer.'
