@@ -13,7 +13,6 @@ struct Molecule3DView: View {
     @State private var representation: RepresentationType = .ballAndStick
     @State private var isLoading = true
     var highlightedAtoms: [Int]? = nil
-    var highlightedBonds: [Int]? = nil
     var highlightColor: String = "green"
     var highlightMode: HighlightMode = .none
     var differenceAtoms: [Int]? = nil
@@ -63,7 +62,6 @@ struct Molecule3DView: View {
                     coordinates: coordinates,
                     representation: representation,
                     highlightedAtoms: highlightedAtoms,
-                    highlightedBonds: highlightedBonds,
                     highlightColor: highlightColor,
                     highlightMode: highlightMode,
                     differenceAtoms: differenceAtoms,
@@ -85,7 +83,6 @@ struct WebViewRepresentable: NSViewRepresentable {
     let coordinates: Molecule3DCoordinates
     let representation: Molecule3DView.RepresentationType
     let highlightedAtoms: [Int]?
-    let highlightedBonds: [Int]?
     let highlightColor: String
     let highlightMode: Molecule3DView.HighlightMode
     let differenceAtoms: [Int]?
@@ -100,7 +97,6 @@ struct WebViewRepresentable: NSViewRepresentable {
             coordinates: coordinates,
             representation: representation,
             highlightedAtoms: highlightedAtoms,
-            highlightedBonds: highlightedBonds,
             highlightColor: highlightColor,
             differenceAtoms: differenceAtoms,
             differenceColor: differenceColor
@@ -123,7 +119,6 @@ struct WebViewRepresentable: NSViewRepresentable {
                 webView: webView,
                 representation: representation,
                 highlightedAtoms: highlightedAtoms,
-                highlightedBonds: highlightedBonds,
                 highlightColor: highlightColor,
                 differenceAtoms: differenceAtoms,
                 differenceColor: differenceColor
@@ -147,7 +142,6 @@ struct WebViewRepresentable: NSViewRepresentable {
         coordinates: Molecule3DCoordinates,
         representation: Molecule3DView.RepresentationType,
         highlightedAtoms: [Int]?,
-        highlightedBonds: [Int]?,
         highlightColor: String,
         differenceAtoms: [Int]?,
         differenceColor: String
@@ -161,11 +155,11 @@ struct WebViewRepresentable: NSViewRepresentable {
         // Determine initial style based on representation
         let highlightScript = generateHighlightScript(
             highlightedAtoms: highlightedAtoms,
-            highlightedBonds: highlightedBonds,
             highlightColor: highlightColor,
             representation: representation,
             differenceAtoms: differenceAtoms,
-            differenceColor: differenceColor
+            differenceColor: differenceColor,
+            highlightMode: highlightMode
         )
         
         let initialScript: String
@@ -239,52 +233,89 @@ struct WebViewRepresentable: NSViewRepresentable {
         """
     }
     
-    private func generateHighlightScript(highlightedAtoms: [Int]?, highlightedBonds: [Int]?, highlightColor: String, representation: Molecule3DView.RepresentationType, differenceAtoms: [Int]?, differenceColor: String) -> String {
+    private func generateHighlightScript(
+        highlightedAtoms: [Int]?,
+        highlightColor: String,
+        representation: Molecule3DView.RepresentationType,
+        differenceAtoms: [Int]?,
+        differenceColor: String,
+        highlightMode: Molecule3DView.HighlightMode
+    ) -> String {
+        let safeHighlightColor = sanitizeColor(highlightColor)
+        let safeDifferenceColor = sanitizeColor(differenceColor)
         var scripts: [String] = []
         
-        // Generate script for shared/highlighted atoms (green)
-        if let atoms = highlightedAtoms, !atoms.isEmpty {
-            let atomIndices = atoms.map { $0 + 1 }
-            let atomList = atomIndices.map { String($0) }.joined(separator: ",")
-            
-            let sphereStyle: String
-            switch representation {
-            case .ballAndStick:
-                sphereStyle = "sphere: {color: '\(highlightColor)', scale: 0.3}"
-            case .spaceFilling:
-                sphereStyle = "sphere: {color: '\(highlightColor)', scale: 1.0}"
-            default:
-                sphereStyle = "sphere: {color: '\(highlightColor)'}"
+        switch highlightMode {
+        case .none:
+            break
+        case .sharedScaffold, .functionalGroup:
+            if let atoms = highlightedAtoms, !atoms.isEmpty {
+                let atomIndices = atoms.map { $0 + 1 }
+                let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+                
+                let sphereStyle: String
+                switch representation {
+                case .ballAndStick:
+                    sphereStyle = "sphere: {color: '\(safeHighlightColor)', scale: 0.3}"
+                case .spaceFilling:
+                    sphereStyle = "sphere: {color: '\(safeHighlightColor)', scale: 1.0}"
+                default:
+                    sphereStyle = "sphere: {color: '\(safeHighlightColor)'}"
+                }
+                
+                scripts.append("""
+                    var highlightAtoms = [\(atomList)];
+                    viewer.setStyle({serial: highlightAtoms}, {stick: {color: '\(safeHighlightColor)', radius: 0.1}, \(sphereStyle)});
+                """)
             }
-            
-            scripts.append("""
-                var highlightAtoms = [\(atomList)];
-                viewer.setStyle({serial: highlightAtoms}, {stick: {color: '\(highlightColor)', radius: 0.1}, \(sphereStyle)});
-            """)
-        }
-        
-        // Generate script for difference atoms (red)
-        if let diffAtoms = differenceAtoms, !diffAtoms.isEmpty {
-            let atomIndices = diffAtoms.map { $0 + 1 }
-            let atomList = atomIndices.map { String($0) }.joined(separator: ",")
-            
-            let sphereStyle: String
-            switch representation {
-            case .ballAndStick:
-                sphereStyle = "sphere: {color: '\(differenceColor)', scale: 0.3}"
-            case .spaceFilling:
-                sphereStyle = "sphere: {color: '\(differenceColor)', scale: 1.0}"
-            default:
-                sphereStyle = "sphere: {color: '\(differenceColor)'}"
+            if highlightMode == .sharedScaffold, let diffAtoms = differenceAtoms, !diffAtoms.isEmpty {
+                let atomIndices = diffAtoms.map { $0 + 1 }
+                let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+                
+                let diffSphereStyle: String
+                switch representation {
+                case .ballAndStick:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 0.3}"
+                case .spaceFilling:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 1.0}"
+                default:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)'}"
+                }
+                
+                scripts.append("""
+                    var differenceAtoms = [\(atomList)];
+                    viewer.setStyle({serial: differenceAtoms}, {stick: {color: '\(safeDifferenceColor)', radius: 0.1}, \(diffSphereStyle)});
+                """)
             }
-            
-            scripts.append("""
-                var differenceAtoms = [\(atomList)];
-                viewer.setStyle({serial: differenceAtoms}, {stick: {color: '\(differenceColor)', radius: 0.1}, \(sphereStyle)});
-            """)
+        case .differences:
+            if let diffAtoms = differenceAtoms, !diffAtoms.isEmpty {
+                let atomIndices = diffAtoms.map { $0 + 1 }
+                let atomList = atomIndices.map { String($0) }.joined(separator: ",")
+                
+                let diffSphereStyle: String
+                switch representation {
+                case .ballAndStick:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 0.3}"
+                case .spaceFilling:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)', scale: 1.0}"
+                default:
+                    diffSphereStyle = "sphere: {color: '\(safeDifferenceColor)'}"
+                }
+                
+                scripts.append("""
+                    var differenceAtoms = [\(atomList)];
+                    viewer.setStyle({serial: differenceAtoms}, {stick: {color: '\(safeDifferenceColor)', radius: 0.1}, \(diffSphereStyle)});
+                """)
+            }
         }
         
         return scripts.joined(separator: "\n")
+    }
+    
+    private func sanitizeColor(_ color: String) -> String {
+        let filtered = color.filter { $0.isLetter || $0.isNumber || $0 == "#" }
+        let trimmed = String(filtered.prefix(32))
+        return trimmed.isEmpty ? "black" : trimmed
     }
     
     private func generatePDBString(coordinates: Molecule3DCoordinates) -> String {
@@ -317,7 +348,6 @@ struct WebViewRepresentable: NSViewRepresentable {
         webView: WKWebView,
         representation: Molecule3DView.RepresentationType,
         highlightedAtoms: [Int]?,
-        highlightedBonds: [Int]?,
         highlightColor: String,
         differenceAtoms: [Int]?,
         differenceColor: String,
@@ -325,11 +355,11 @@ struct WebViewRepresentable: NSViewRepresentable {
     ) {
         let highlightScript = generateHighlightScript(
             highlightedAtoms: highlightedAtoms,
-            highlightedBonds: highlightedBonds,
             highlightColor: highlightColor,
             representation: representation,
             differenceAtoms: differenceAtoms,
-            differenceColor: differenceColor
+            differenceColor: differenceColor,
+            highlightMode: highlightMode
         )
         
         let script: String

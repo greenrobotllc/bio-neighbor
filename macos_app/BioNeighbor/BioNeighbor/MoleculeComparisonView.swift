@@ -10,8 +10,8 @@ import SwiftUI
 struct MoleculeComparisonView: View {
     let molecule1: Molecule
     let molecule2: Molecule
-    @StateObject private var backendService = BackendService.shared
-    @StateObject private var navCoordinator = NavigationCoordinator.shared
+    @ObservedObject private var backendService = BackendService.shared
+    @ObservedObject private var navCoordinator = NavigationCoordinator.shared
     @State private var comparisonData: MoleculeComparisonResponse?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -339,26 +339,18 @@ struct MoleculeComparisonView: View {
     
     private func load3DCoordinates() {
         Task {
-            // Load 3D coordinates for both molecules
-            do {
-                // Find molecule indices - we'll need to search for them
-                // For now, use SMILES directly
-                let coords1 = try await backendService.getMolecule3D(index: molecule1.id)
-                await MainActor.run {
-                    coordinates1 = coords1
-                }
-            } catch {
-                // If index-based lookup fails, we could generate from SMILES
-                print("Could not load 3D coordinates for molecule 1: \(error)")
-            }
+            async let coords1Result = backendService.getMolecule3D(index: molecule1.id)
+            async let coords2Result = backendService.getMolecule3D(index: molecule2.id)
             
-            do {
-                let coords2 = try await backendService.getMolecule3D(index: molecule2.id)
-                await MainActor.run {
-                    coordinates2 = coords2
+            let coords1 = try? await coords1Result
+            let coords2 = try? await coords2Result
+            
+            await MainActor.run {
+                coordinates1 = coords1
+                coordinates2 = coords2
+                if coords1 == nil || coords2 == nil {
+                    errorMessage = "Failed to load 3D coordinates."
                 }
-            } catch {
-                print("Could not load 3D coordinates for molecule 2: \(error)")
             }
         }
     }

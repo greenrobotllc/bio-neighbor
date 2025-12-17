@@ -293,7 +293,10 @@ def get_molecule(index: int):
             })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /molecule endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
@@ -494,7 +497,10 @@ def get_molecule_functional_groups(index: int):
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /molecule/<index>/functional-groups endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
@@ -822,15 +828,17 @@ def search_by_disease():
         })
     
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("ValueError in /search/by-disease endpoint: %s", str(e))
+        return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
     except Exception as e:
-        import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /search/by-disease endpoint: {error_msg}")
-        print(traceback.format_exc())
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Unexpected error in /search/by-disease endpoint")
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal server error'
         }), 500
 
 
