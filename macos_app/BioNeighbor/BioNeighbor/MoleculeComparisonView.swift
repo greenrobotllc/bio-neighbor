@@ -137,11 +137,16 @@ struct MoleculeComparisonView: View {
                         .padding(.bottom, 24)
                     
                     if let coords1 = coordinates1 {
+                        let sharedAtoms1 = comparison.mcs?.sharedAtoms1 ?? []
+                        let allAtomIndices1 = Array(0..<coords1.atoms.count)
+                        let differenceAtoms1 = allAtomIndices1.filter { !sharedAtoms1.contains($0) }
                         Molecule3DView(
                             coordinates: coords1,
-                            highlightedAtoms: comparison.mcs?.sharedAtoms1,
+                            highlightedAtoms: sharedAtoms1,
                             highlightColor: "green",
-                            highlightMode: .sharedScaffold
+                            highlightMode: .sharedScaffold,
+                            differenceAtoms: differenceAtoms1.isEmpty ? nil : differenceAtoms1,
+                            differenceColor: "red"
                         )
                         .frame(height: 400)
                     } else {
@@ -166,11 +171,16 @@ struct MoleculeComparisonView: View {
                         .padding(.bottom, 24)
                     
                     if let coords2 = coordinates2 {
+                        let sharedAtoms2 = comparison.mcs?.sharedAtoms2 ?? []
+                        let allAtomIndices2 = Array(0..<coords2.atoms.count)
+                        let differenceAtoms2 = allAtomIndices2.filter { !sharedAtoms2.contains($0) }
                         Molecule3DView(
                             coordinates: coords2,
-                            highlightedAtoms: comparison.mcs?.sharedAtoms2,
+                            highlightedAtoms: sharedAtoms2,
                             highlightColor: "green",
-                            highlightMode: .sharedScaffold
+                            highlightMode: .sharedScaffold,
+                            differenceAtoms: differenceAtoms2.isEmpty ? nil : differenceAtoms2,
+                            differenceColor: "red"
                         )
                         .frame(height: 400)
                     } else {

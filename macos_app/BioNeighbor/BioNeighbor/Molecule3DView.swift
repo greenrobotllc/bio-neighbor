@@ -119,7 +119,15 @@ struct WebViewRepresentable: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         // Update representation when it changes
         if representation != context.coordinator.lastRepresentation {
-            updateRepresentation(webView: webView, representation: representation) { didApply in
+            updateRepresentation(
+                webView: webView,
+                representation: representation,
+                highlightedAtoms: highlightedAtoms,
+                highlightedBonds: highlightedBonds,
+                highlightColor: highlightColor,
+                differenceAtoms: differenceAtoms,
+                differenceColor: differenceColor
+            ) { didApply in
                 if didApply {
                     context.coordinator.lastRepresentation = representation
                 }
@@ -308,8 +316,22 @@ struct WebViewRepresentable: NSViewRepresentable {
     private func updateRepresentation(
         webView: WKWebView,
         representation: Molecule3DView.RepresentationType,
+        highlightedAtoms: [Int]?,
+        highlightedBonds: [Int]?,
+        highlightColor: String,
+        differenceAtoms: [Int]?,
+        differenceColor: String,
         completion: @escaping (Bool) -> Void
     ) {
+        let highlightScript = generateHighlightScript(
+            highlightedAtoms: highlightedAtoms,
+            highlightedBonds: highlightedBonds,
+            highlightColor: highlightColor,
+            representation: representation,
+            differenceAtoms: differenceAtoms,
+            differenceColor: differenceColor
+        )
+        
         let script: String
         switch representation {
         case .surface:
@@ -319,6 +341,7 @@ struct WebViewRepresentable: NSViewRepresentable {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
               viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity: 0.7, color: 'white'}, {});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
@@ -329,6 +352,7 @@ struct WebViewRepresentable: NSViewRepresentable {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
               viewer.setStyle({}, {stick: {radius: 0.1}, sphere: {scale: 0.3}});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
@@ -339,6 +363,7 @@ struct WebViewRepresentable: NSViewRepresentable {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
               viewer.setStyle({}, {sphere: {scale: 1.0}});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
@@ -349,6 +374,7 @@ struct WebViewRepresentable: NSViewRepresentable {
               if (typeof viewer === 'undefined') return false;
               viewer.removeAllSurfaces();
               viewer.setStyle({}, {line: {}});
+              \(highlightScript)
               viewer.render();
               return true;
             })();
