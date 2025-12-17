@@ -24,6 +24,8 @@ except ImportError:
 
 # Compiled regex for validating names in download endpoints
 ALLOWED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
+# Stricter pattern for comma-joined names (no spaces/commas) to avoid injection when joining
+ALLOWED_COMPACT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # Allow a restricted, human-friendly disease string (letters, numbers, spaces, ()-_,.' and comma)
 ALLOWED_DISEASE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 \-_\(\),\.']{0,199}$")
 # Detect control characters that should never be accepted in user input
@@ -1368,9 +1370,23 @@ def download_molecules():
                     'success': False,
                     'error': 'Parameter "names" must be a list.'
                 }), 400
-            allowed_name_pattern = re.compile(r'^[\w\-]+$')
+            if len(names) > 200:
+                return jsonify({
+                    'success': False,
+                    'error': 'Too many names (max 200)'
+                }), 400
             for n in names:
-                if not isinstance(n, str) or not allowed_name_pattern.match(n):
+                if not isinstance(n, str):
+                    return jsonify({
+                        'success': False,
+                        'error': 'All entries in "names" must be strings.'
+                    }), 400
+                if len(n) > 200:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Name too long (max 200 chars)'
+                    }), 400
+                if not ALLOWED_COMPACT_NAME_PATTERN.match(n):
                     return jsonify({
                         'success': False,
                         'error': 'Invalid entry in "names". Only alphanumeric, underscores, and hyphens allowed.'
