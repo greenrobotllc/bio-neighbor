@@ -1336,15 +1336,45 @@ def download_molecules():
         source = data.get('source', 'pubchem')
         names = data.get('names', [])
         full_file = data.get('full_file', False)
-        
-        # Validate inputs to prevent unbounded operations
+
+        # Validate source from allowlist (already present)
         if source not in {'pubchem', 'chembl', 'zinc'}:
             return jsonify({
                 'success': False,
                 'error': 'Invalid source. Must be one of: pubchem, chembl, zinc'
             }), 400
-        
+
         # Validate and clamp count
+        MAX_COUNT = 1000
+        try:
+            count_int = int(count) if count is not None else None
+        except Exception:
+            return jsonify({
+                'success': False,
+                'error': 'Parameter "count" must be an integer.'
+            }), 400
+        if count_int is not None:
+            if not (1 <= count_int <= MAX_COUNT):
+                return jsonify({
+                    'success': False,
+                    'error': f'Parameter "count" must be between 1 and {MAX_COUNT}.'
+                }), 400
+        count = count_int  # Use the validated int value from now on
+
+        # Validate names: must be a list of allowed names (alphanumeric/underscore)
+        if names:
+            if not isinstance(names, list):
+                return jsonify({
+                    'success': False,
+                    'error': 'Parameter "names" must be a list.'
+                }), 400
+            allowed_name_pattern = re.compile(r'^[\w\-]+$')
+            for n in names:
+                if not isinstance(n, str) or not allowed_name_pattern.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': 'Invalid entry in "names". Only alphanumeric, underscores, and hyphens allowed.'
+                    }), 400
         if count is not None:
             if not isinstance(count, int):
                 return jsonify({'success': False, 'error': 'count must be an integer'}), 400
