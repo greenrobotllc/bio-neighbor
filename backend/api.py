@@ -24,6 +24,8 @@ except ImportError:
 
 # Compiled regex for validating names in download endpoints
 ALLOWED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
+# Stricter pattern for comma-joined names (no spaces/commas) to avoid injection when joining
+ALLOWED_COMPACT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # Allow a restricted, human-friendly disease string (letters, numbers, spaces, ()-_,.' and comma)
 ALLOWED_DISEASE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 \-_\(\),\.']{0,199}$")
 # Detect control characters that should never be accepted in user input
@@ -1336,44 +1338,59 @@ def download_molecules():
         source = data.get('source', 'pubchem')
         names = data.get('names', [])
         full_file = data.get('full_file', False)
-        
-        # Validate inputs to prevent unbounded operations
+
+        # Validate source from allowlist (already present)
         if source not in {'pubchem', 'chembl', 'zinc'}:
             return jsonify({
                 'success': False,
                 'error': 'Invalid source. Must be one of: pubchem, chembl, zinc'
             }), 400
-        
+
         # Validate and clamp count
-        if count is not None:
-            if not isinstance(count, int):
-                return jsonify({'success': False, 'error': 'count must be an integer'}), 400
-            count = min(max(count, 1), 100000)  # Clamp to reasonable max
-        
-        # Validate names
+        MAX_COUNT = 1000
+        try:
+            count_int = int(count) if count is not None else None
+        except (ValueError, TypeError):
+            return jsonify({
+                'success': False,
+                'error': 'Parameter "count" must be an integer.'
+            }), 400
+        if count_int is not None:
+            if not (1 <= count_int <= MAX_COUNT):
+                return jsonify({
+                    'success': False,
+                    'error': f'Parameter "count" must be between 1 and {MAX_COUNT}.'
+                }), 400
+        count = count_int  # Use the validated int value from now on
+
+        # Validate names: must be a list of allowed names (alphanumeric/underscore)
         if names:
             if not isinstance(names, list):
-                return jsonify({'success': False, 'error': 'names must be a list'}), 400
+                return jsonify({
+                    'success': False,
+                    'error': 'Parameter "names" must be a list.'
+                }), 400
             if len(names) > 200:
                 return jsonify({
                     'success': False,
                     'error': 'Too many names (max 200)'
                 }), 400
-            if not all(isinstance(n, str) for n in names):
-                return jsonify({'success': False, 'error': 'names must be a list of strings'}), 400
-            if any(len(n) > 200 for n in names):
-                return jsonify({
-                    'success': False,
-                    'error': 'Name too long (max 200 chars)'
-                }), 400
-            # Additional validation: allow only safe characters in names
             for n in names:
-                if not ALLOWED_NAME_PATTERN.match(n):
+                if not isinstance(n, str):
                     return jsonify({
                         'success': False,
-                        'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+                        'error': 'All entries in "names" must be strings.'
                     }), 400
-        
+                if len(n) > 200:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Name too long (max 200 chars)'
+                    }), 400
+                if not ALLOWED_COMPACT_NAME_PATTERN.match(n):
+                    return jsonify({
+                        'success': False,
+                        'error': 'Invalid entry in "names". Only alphanumeric, underscores, and hyphens allowed.'
+                    }), 400
         if not count and not names and not full_file:
             return jsonify({
                 'success': False,
