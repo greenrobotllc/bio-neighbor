@@ -24,6 +24,10 @@ except ImportError:
 
 # Compiled regex for validating names in download endpoints
 ALLOWED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 \-_\(\),\.']+$")
+# Allow a restricted, human-friendly disease string (letters, numbers, spaces, ()-_,.' and comma)
+ALLOWED_DISEASE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 \-_\(\),\.']{0,199}$")
+# Detect control characters that should never be accepted in user input
+CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
@@ -44,6 +48,27 @@ def get_engine() -> SearchEngine:
             traceback.print_exc()
             raise
     return _engine
+
+
+def validate_disease_input(value: Any) -> Optional[str]:
+    """
+    Validate disease input before it is passed to subprocess commands.
+    Returns an error message when invalid, otherwise None.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return 'disease must be a string'
+    cleaned = value.strip()
+    if not cleaned:
+        return 'disease cannot be empty'
+    if len(cleaned) > 200:
+        return 'Disease name too long (max 200 chars)'
+    if CONTROL_CHAR_PATTERN.search(cleaned):
+        return 'Disease contains invalid control characters'
+    if not ALLOWED_DISEASE_PATTERN.match(cleaned):
+        return "Invalid characters detected in disease. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
+    return None
 
 
 @app.route('/health', methods=['GET'])
@@ -1529,12 +1554,11 @@ def download_drugs():
                         'success': False,
                         'error': f"Invalid characters detected in name: '{n}'. Allowed: letters, numbers, spaces, (), -, _, comma, period, apostrophe."
                     }), 400
-        
-        if isinstance(disease, str) and len(disease) > 200:
-            return jsonify({
-                'success': False,
-                'error': 'Disease name too long (max 200 chars)'
-            }), 400
+        disease_error = validate_disease_input(disease)
+        if disease_error:
+            return jsonify({'success': False, 'error': disease_error}), 400
+        if isinstance(disease, str):
+            disease = disease.strip()
         
         if not names and not disease and not bulk:
             return jsonify({
