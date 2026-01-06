@@ -2,69 +2,96 @@
 //  BreadcrumbView.swift
 //  BioNeighbor
 //
-//  Displays navigation breadcrumb path
+//  Breadcrumb navigation components
 //
 
 import SwiftUI
 
+// Original BreadcrumbView for use with NavigationCoordinator
 struct BreadcrumbView: View {
     @ObservedObject var coordinator: NavigationCoordinator
     
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(Array(coordinator.breadcrumbPath.enumerated()), id: \.element.id) { index, item in
-                HStack(spacing: 4) {
-                    if let icon = item.icon {
-                        Image(systemName: icon)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    if index == coordinator.breadcrumbPath.count - 1 {
-                        // Current item - not clickable
+            ForEach(coordinator.breadcrumbPath) { item in
+                if item.id != coordinator.breadcrumbPath.first?.id {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                }
+                
+                Button(action: {
+                    coordinator.popToBreadcrumb(item)
+                }) {
+                    HStack(spacing: 4) {
+                        if let icon = item.icon {
+                            Image(systemName: icon)
+                                .font(.caption2)
+                        }
                         Text(item.title)
                             .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
-                    } else {
-                        // Previous items - clickable
-                        Button(action: {
-                            // Pop to the selected item
-                            coordinator.popToBreadcrumb(item)
-                        }) {
-                            Text(item.title)
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
                     }
-                    
-                    // Chevron separator (not after last item)
-                    if index < coordinator.breadcrumbPath.count - 1 {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 2)
-                    }
+                    .foregroundColor(.blue)
                 }
+                .buttonStyle(.plain)
             }
             
             Spacer()
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal)
         .padding(.vertical, 8)
         .background(Color(NSColor.controlBackgroundColor))
     }
 }
 
-#Preview {
-    let coordinator = NavigationCoordinator.shared
-    coordinator.breadcrumbPath = [
-        BreadcrumbItem(title: "Home", icon: "house", type: .home),
-        BreadcrumbItem(title: "Molecules", icon: "atom", type: .molecules),
-        BreadcrumbItem(title: "Aspirin", icon: "atom", type: .molecule)
-    ]
-    return BreadcrumbView(coordinator: coordinator)
-        .frame(width: 600)
+// Cancer Research workspace breadcrumb component
+struct CancerBreadcrumbItem: Identifiable {
+    let id = UUID()
+    let title: String
+    let isClickable: Bool
+    let action: (() -> Void)?
+    
+    init(_ title: String, isClickable: Bool = false, action: (() -> Void)? = nil) {
+        self.title = title
+        self.isClickable = isClickable
+        self.action = action
+    }
 }
 
+struct CancerBreadcrumbView: View {
+    let items: [CancerBreadcrumbItem]
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(items) { item in
+                if item.id != items.first?.id {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                }
+                
+                if item.isClickable {
+                    Button(action: {
+                        item.action?()
+                    }) {
+                        Text(item.title)
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(item.title)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+}

@@ -1449,5 +1449,204 @@ class BackendService: ObservableObject {
         
         return nil
     }
+    
+    // MARK: - Cancer Research API Methods
+    
+    func fetchMechanisms() async throws -> [Mechanism] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch mechanisms")
+        }
+        
+        let mechanismsResponse = try JSONDecoder().decode(MechanismsResponse.self, from: data)
+        guard mechanismsResponse.success, let mechanisms = mechanismsResponse.mechanisms else {
+            throw BackendError.invalidResponse
+        }
+        
+        return mechanisms
+    }
+    
+    func fetchMechanism(id: Int) async throws -> Mechanism {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(id)") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch mechanism")
+        }
+        
+        let mechanismResponse = try JSONDecoder().decode(MechanismResponse.self, from: data)
+        guard mechanismResponse.success, let mechanism = mechanismResponse.mechanism else {
+            throw BackendError.invalidResponse
+        }
+        
+        return mechanism
+    }
+    
+    func fetchTargets(for mechanismId: Int) async throws -> [Target] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/targets") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch targets")
+        }
+        
+        let targetsResponse = try JSONDecoder().decode(TargetsResponse.self, from: data)
+        guard targetsResponse.success, let targets = targetsResponse.targets else {
+            throw BackendError.invalidResponse
+        }
+        
+        return targets
+    }
+    
+    func fetchLigands(for mechanismId: Int) async throws -> [Ligand] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/ligands") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch ligands")
+        }
+        
+        let ligandsResponse = try JSONDecoder().decode(LigandsResponse.self, from: data)
+        guard ligandsResponse.success, let ligands = ligandsResponse.ligands else {
+            throw BackendError.invalidResponse
+        }
+        
+        return ligands
+    }
+    
+    func fetchDrugOutcomes(for mechanismId: Int) async throws -> [DrugOutcome] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/drug-outcomes") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch drug outcomes")
+        }
+        
+        let outcomesResponse = try JSONDecoder().decode(DrugOutcomesResponse.self, from: data)
+        guard outcomesResponse.success, let outcomes = outcomesResponse.outcomes else {
+            throw BackendError.invalidResponse
+        }
+        
+        return outcomes
+    }
+    
+    func fetchAssays(for mechanismId: Int) async throws -> [Assay] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/assays") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch assays")
+        }
+        
+        let assaysResponse = try JSONDecoder().decode(AssaysResponse.self, from: data)
+        guard assaysResponse.success, let assays = assaysResponse.assays else {
+            throw BackendError.invalidResponse
+        }
+        
+        return assays
+    }
+    
+    func fetchCancers() async throws -> [String] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/cancers") else {
+            throw BackendError.invalidResponse
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch cancers")
+        }
+        
+        let cancersResponse = try JSONDecoder().decode(CancersResponse.self, from: data)
+        guard cancersResponse.success, let cancers = cancersResponse.cancers else {
+            throw BackendError.invalidResponse
+        }
+        
+        return cancers
+    }
+    
+    func createWorkspace(mechanismId: Int, filters: [String: Any] = [:], selections: [String: Any] = [:], notes: String = "") async throws -> Int {
+        guard let url = URL(string: "\(baseURL)/cancer-research/workspaces") else {
+            throw BackendError.invalidResponse
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "mechanism_id": mechanismId,
+            "filters": filters,
+            "selections": selections,
+            "notes": notes
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to create workspace")
+        }
+        
+        let workspaceResponse = try JSONDecoder().decode(WorkspaceCreateResponse.self, from: data)
+        guard workspaceResponse.success, let workspaceId = workspaceResponse.workspaceId else {
+            throw BackendError.invalidResponse
+        }
+        
+        return workspaceId
+    }
+    
+    func updateWorkspace(id: Int, filters: [String: Any]? = nil, selections: [String: Any]? = nil, notes: String? = nil) async throws {
+        guard let url = URL(string: "\(baseURL)/cancer-research/workspaces/\(id)") else {
+            throw BackendError.invalidResponse
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        var body: [String: Any] = [:]
+        if let filters = filters { body["filters"] = filters }
+        if let selections = selections { body["selections"] = selections }
+        if let notes = notes { body["notes"] = notes }
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to update workspace")
+        }
+    }
 }
 

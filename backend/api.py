@@ -1907,6 +1907,714 @@ def download_diseases():
         }), 500
 
 
+# Cancer Research API Endpoints
+
+@app.route('/cancer-research/mechanisms', methods=['GET'])
+def list_mechanisms():
+    """
+    List all mechanisms.
+    Auto-initializes adenosine mechanism if no mechanisms exist.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "mechanisms": [...]
+    }
+    """
+    try:
+        # Ensure database schema is up to date
+        from db_migrations import migrate_database
+        migrate_database()
+        
+        from cancer_mechanism_loader import get_all_mechanisms, load_adenosine_mechanism
+        
+        mechanisms = get_all_mechanisms()
+        
+        # Auto-initialize default mechanisms if database is empty
+        if not mechanisms:
+            print("📥 No mechanisms found - initializing default mechanisms...")
+            try:
+                from cancer_mechanism_loader import load_all_default_mechanisms
+                mechanism_ids = load_all_default_mechanisms()
+                if mechanism_ids:
+                    print(f"✅ Initialized {len(mechanism_ids)} mechanisms")
+                    mechanisms = get_all_mechanisms()
+                else:
+                    print("⚠️  Failed to initialize mechanisms")
+            except Exception as init_error:
+                print(f"⚠️  Error initializing mechanisms: {init_error}")
+                import traceback
+                traceback.print_exc()
+        
+        return jsonify({
+            'success': True,
+            'mechanisms': mechanisms,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/initialize', methods=['POST'])
+def initialize_mechanisms():
+    """
+    Initialize all default mechanisms (adenosine and PD-1/PD-L1) and related data.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "message": "Mechanisms initialized",
+        "mechanism_ids": [1, 2]
+    }
+    """
+    try:
+        from cancer_mechanism_loader import load_all_default_mechanisms
+        from target_loader import get_targets_for_mechanism
+        from cancer_mapping_loader import load_adenosine_cancer_mappings
+        
+        # Load all default mechanisms
+        mechanism_ids = load_all_default_mechanisms()
+        if not mechanism_ids:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to load mechanisms'
+            }), 500
+        
+        # Cancer mappings are loaded automatically by the mechanism loaders
+        
+        # Get target counts
+        total_targets = 0
+        for mechanism_id in mechanism_ids:
+            targets = get_targets_for_mechanism(mechanism_id)
+            total_targets += len(targets)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Initialized {len(mechanism_ids)} mechanisms successfully',
+            'mechanism_ids': mechanism_ids,
+            'targets_loaded': total_targets
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>', methods=['GET'])
+def get_mechanism(mechanism_id: int):
+    """
+    Get mechanism details.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "mechanism": {...}
+    }
+    """
+    try:
+        from cancer_mechanism_loader import get_mechanism_by_id
+        mechanism = get_mechanism_by_id(mechanism_id)
+        
+        if not mechanism:
+            return jsonify({
+                'success': False,
+                'error': f'Mechanism {mechanism_id} not found'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'mechanism': mechanism,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>/targets', methods=['GET'])
+def get_mechanism_targets(mechanism_id: int):
+    """
+    Get targets for a mechanism.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "targets": [...]
+    }
+    """
+    try:
+        from target_loader import get_targets_for_mechanism
+        targets = get_targets_for_mechanism(mechanism_id)
+        
+        return jsonify({
+            'success': True,
+            'targets': targets,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/targets/<int:target_id>', methods=['GET'])
+def get_target(target_id: int):
+    """
+    Get target details.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "target": {...}
+    }
+    """
+    try:
+        from target_loader import get_target_by_id
+        target = get_target_by_id(target_id)
+        
+        if not target:
+            return jsonify({
+                'success': False,
+                'error': f'Target {target_id} not found'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'target': target,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/targets/<int:target_id>/ligands', methods=['GET'])
+def get_target_ligands(target_id: int):
+    """
+    Get ligands for a target.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "ligands": [...]
+    }
+    """
+    try:
+        from ligand_loader import get_ligands_for_target
+        ligands = get_ligands_for_target(target_id)
+        
+        return jsonify({
+            'success': True,
+            'ligands': ligands,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>/ligands', methods=['GET'])
+def get_mechanism_ligands(mechanism_id: int):
+    """
+    Get all ligands for a mechanism.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "ligands": [...]
+    }
+    """
+    try:
+        from ligand_loader import get_ligands_for_mechanism
+        ligands = get_ligands_for_mechanism(mechanism_id)
+        
+        return jsonify({
+            'success': True,
+            'ligands': ligands,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>/drug-outcomes', methods=['GET'])
+def get_mechanism_drug_outcomes(mechanism_id: int):
+    """
+    Get drug outcomes for a mechanism.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "outcomes": [...]
+    }
+    """
+    try:
+        from drug_outcome_loader import get_drug_outcomes_for_mechanism
+        outcomes = get_drug_outcomes_for_mechanism(mechanism_id)
+        
+        return jsonify({
+            'success': True,
+            'outcomes': outcomes,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>/assays', methods=['GET'])
+def get_mechanism_assays(mechanism_id: int):
+    """
+    Get assays for a mechanism.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "assays": [...]
+    }
+    """
+    try:
+        from assay_loader import get_assays_for_mechanism
+        assays = get_assays_for_mechanism(mechanism_id)
+        
+        return jsonify({
+            'success': True,
+            'assays': assays,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/cancers', methods=['GET'])
+def list_cancers():
+    """
+    List all cancer types with mechanism activity.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "cancers": [...]
+    }
+    """
+    try:
+        from cancer_mapping_loader import get_all_cancer_types
+        cancers = get_all_cancer_types()
+        
+        return jsonify({
+            'success': True,
+            'cancers': cancers,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/cancers/<cancer_type>/mechanisms', methods=['GET'])
+def get_cancer_mechanisms(cancer_type: str):
+    """
+    Get mechanisms for a cancer type.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "mechanisms": [...]
+    }
+    """
+    try:
+        from cancer_mapping_loader import get_mechanisms_for_cancer
+        mechanisms = get_mechanisms_for_cancer(cancer_type)
+        
+        return jsonify({
+            'success': True,
+            'cancer_type': cancer_type,
+            'mechanisms': mechanisms,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/workspaces', methods=['GET'])
+def list_workspaces():
+    """
+    List all workspaces.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "workspaces": [...]
+    }
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM workspaces ORDER BY updated_at DESC")
+        rows = cursor.fetchall()
+        
+        columns = [d[0] for d in cursor.description]
+        workspaces = [dict(zip(columns, row)) for row in rows]
+        
+        # Parse JSON fields
+        for workspace in workspaces:
+            for field in ['filters', 'selections']:
+                if workspace.get(field):
+                    try:
+                        workspace[field] = json.loads(workspace[field])
+                    except (json.JSONDecodeError, TypeError):
+                        workspace[field] = {}
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'workspaces': workspaces
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/workspaces/<int:workspace_id>', methods=['GET'])
+def get_workspace(workspace_id: int):
+    """
+    Get workspace state.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "workspace": {...}
+    }
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return jsonify({
+                'success': False,
+                'error': f'Workspace {workspace_id} not found'
+            }), 404
+        
+        columns = [d[0] for d in cursor.description]
+        workspace = dict(zip(columns, row))
+        
+        # Parse JSON fields
+        for field in ['filters', 'selections']:
+            if workspace.get(field):
+                try:
+                    workspace[field] = json.loads(workspace[field])
+                except (json.JSONDecodeError, TypeError):
+                    workspace[field] = {}
+        
+        return jsonify({
+            'success': True,
+            'workspace': workspace
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/workspaces', methods=['POST'])
+def create_workspace():
+    """
+    Create a new workspace.
+    
+    Request body (JSON):
+    {
+        "mechanism_id": 1,
+        "filters": {...},
+        "selections": {...},
+        "notes": "..."
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "workspace_id": 1
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+        
+        mechanism_id = data.get('mechanism_id')
+        filters = data.get('filters', {})
+        selections = data.get('selections', {})
+        notes = data.get('notes', '')
+        
+        import sqlite3
+        from data_loader import DB_PATH
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO workspaces (mechanism_id, filters, selections, notes)
+            VALUES (?, ?, ?, ?)
+        """, (
+            mechanism_id,
+            json.dumps(filters),
+            json.dumps(selections),
+            notes
+        ))
+        workspace_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'workspace_id': workspace_id
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/workspaces/<int:workspace_id>', methods=['PUT'])
+def update_workspace(workspace_id: int):
+    """
+    Update workspace state.
+    
+    Request body (JSON):
+    {
+        "filters": {...},
+        "selections": {...},
+        "notes": "..."
+    }
+    
+    Response (JSON):
+    {
+        "success": true
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+        
+        import sqlite3
+        from data_loader import DB_PATH
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Build update query dynamically
+        updates = []
+        values = []
+        
+        if 'filters' in data:
+            updates.append("filters = ?")
+            values.append(json.dumps(data['filters']))
+        
+        if 'selections' in data:
+            updates.append("selections = ?")
+            values.append(json.dumps(data['selections']))
+        
+        if 'notes' in data:
+            updates.append("notes = ?")
+            values.append(data['notes'])
+        
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(workspace_id)
+        
+        cursor.execute(f"""
+            UPDATE workspaces 
+            SET {', '.join(updates)}
+            WHERE id = ?
+        """, values)
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': f'Workspace {workspace_id} not found'
+            }), 404
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/workspaces/<int:workspace_id>', methods=['DELETE'])
+def delete_workspace(workspace_id: int):
+    """
+    Delete a workspace.
+    
+    Response (JSON):
+    {
+        "success": true
+    }
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({
+                'success': False,
+                'error': f'Workspace {workspace_id} not found'
+            }), 404
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/similarity/ligands', methods=['POST'])
+def find_similar_ligands():
+    """
+    Find similar ligands across mechanisms.
+    
+    Request body (JSON):
+    {
+        "ligand_id": 1,
+        "top_k": 10
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "similar_ligands": [...]
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+        
+        ligand_id = data.get('ligand_id')
+        top_k = data.get('top_k', 10)
+        
+        # Use existing similarity search engine
+        engine = get_engine()
+        
+        # Get ligand SMILES
+        import sqlite3
+        from data_loader import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT smiles FROM ligands WHERE id = ?", (ligand_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result or not result[0]:
+            return jsonify({
+                'success': False,
+                'error': f'Ligand {ligand_id} not found or has no SMILES'
+            }), 404
+        
+        # Search for similar molecules
+        results = engine.search_similar(result[0], top_k=top_k)
+        
+        return jsonify({
+            'success': True,
+            'similar_ligands': results,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
 def handle_stdin_request():
     """
     Handle a single JSON request from stdin.
@@ -2047,6 +2755,16 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print("   GET  /drugs/<drug_id> - Get drug by ID")
     print("   GET  /drugs/<drug_id>/molecules - Get active ingredient molecules for a drug")
     print("   GET  /molecule/<index> - Get molecule by index")
+    print("   GET  /cancer-research/mechanisms - List all mechanisms")
+    print("   GET  /cancer-research/mechanisms/<id> - Get mechanism details")
+    print("   GET  /cancer-research/mechanisms/<id>/targets - Get targets for mechanism")
+    print("   GET  /cancer-research/mechanisms/<id>/ligands - Get ligands for mechanism")
+    print("   GET  /cancer-research/mechanisms/<id>/assays - Get assays for mechanism")
+    print("   GET  /cancer-research/mechanisms/<id>/drug-outcomes - Get drug outcomes")
+    print("   GET  /cancer-research/cancers - List cancer types")
+    print("   GET  /cancer-research/workspaces - List workspaces")
+    print("   POST /cancer-research/workspaces - Create workspace")
+    print("   PUT  /cancer-research/workspaces/<id> - Update workspace")
     app.run(host=host, port=port, debug=debug_enabled)
 
 

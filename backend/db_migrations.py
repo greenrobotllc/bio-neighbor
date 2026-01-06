@@ -43,6 +43,14 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None
     ),
+    4: (
+        "Add cancer mechanism research workspace tables (mechanisms, targets, ligands, assays, drug_outcomes, cancer_mechanisms, workspaces)",
+        [
+            # All new tables will be created via initialize_schema() using get_create_table_sql()
+            # This migration is handled by schema initialization
+        ],
+        None
+    ),
 }
 
 
@@ -179,6 +187,32 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         cursor.execute(index_sql)
                     except sqlite3.OperationalError:
                         pass  # Index may already exist
+                conn.commit()
+                set_schema_version(conn, version)
+                print(f"   ✅ Migration {version} applied successfully")
+                continue
+            
+            # Special handling for migration 4: create new cancer research tables
+            if version == 4:
+                new_tables = ['mechanisms', 'targets', 'mechanism_targets', 'ligands', 
+                             'assays', 'drug_outcomes', 'cancer_mechanisms', 'workspaces']
+                for table_name in new_tables:
+                    try:
+                        # Create table
+                        create_sql = get_create_table_sql(table_name)
+                        cursor.execute(create_sql)
+                        # Create indexes
+                        for index_sql in get_create_index_sql(table_name):
+                            try:
+                                cursor.execute(index_sql)
+                            except sqlite3.OperationalError:
+                                pass  # Index may already exist
+                    except sqlite3.OperationalError as e:
+                        error_msg = str(e).lower()
+                        if 'already exists' in error_msg:
+                            print(f"   ⚠️  Table {table_name} already exists, skipping")
+                        else:
+                            raise
                 conn.commit()
                 set_schema_version(conn, version)
                 print(f"   ✅ Migration {version} applied successfully")

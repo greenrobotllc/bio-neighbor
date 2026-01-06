@@ -57,6 +57,13 @@ struct ContentTabView: View {
                 }
                 .tag(4)
                 .accessibilityIdentifier("advancedSearchTab")
+            
+            CancerResearchView()
+                .tabItem {
+                    Label("Cancer Research", systemImage: "flask")
+                }
+                .tag(5)
+                .accessibilityIdentifier("cancerResearchTab")
         }
     }
 }

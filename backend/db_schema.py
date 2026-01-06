@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -108,6 +108,163 @@ SCHEMA: Dict[str, Dict] = {
         ],
         'indexes': [],
         'foreign_keys': []
+    },
+    
+    'mechanisms': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('name', 'TEXT NOT NULL UNIQUE'),
+            ('description', 'TEXT'),
+            ('biological_summary', 'TEXT'),
+            ('tumor_microenvironment_role', 'TEXT'),
+            ('immune_effects', 'TEXT'),
+            ('data_sources', 'TEXT'),  # JSON array
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_mechanism_name ON mechanisms(name)',
+        ],
+        'foreign_keys': []
+    },
+    
+    'targets': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('uniprot_id', 'TEXT'),
+            ('gene_symbol', 'TEXT'),
+            ('protein_name', 'TEXT'),
+            ('function', 'TEXT'),
+            ('cellular_location', 'TEXT'),
+            ('cancer_role', 'TEXT'),
+            ('ligand_types', 'TEXT'),  # JSON array
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_target_uniprot_id ON targets(uniprot_id)',
+            'CREATE INDEX IF NOT EXISTS idx_target_gene_symbol ON targets(gene_symbol)',
+        ],
+        'foreign_keys': []
+    },
+    
+    'mechanism_targets': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('mechanism_id', 'INTEGER NOT NULL'),
+            ('target_id', 'INTEGER NOT NULL'),
+            ('role_in_mechanism', 'TEXT'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_mechanism_targets_mechanism ON mechanism_targets(mechanism_id)',
+            'CREATE INDEX IF NOT EXISTS idx_mechanism_targets_target ON mechanism_targets(target_id)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)',
+            'FOREIGN KEY (target_id) REFERENCES targets(id)',
+        ]
+    },
+    
+    'ligands': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('name', 'TEXT'),
+            ('smiles', 'TEXT'),
+            ('chembl_id', 'TEXT'),
+            ('pubchem_cid', 'TEXT'),
+            ('interaction_type', 'TEXT'),  # agonist/antagonist/inhibitor
+            ('target_id', 'INTEGER'),
+            ('molecule_index', 'INTEGER'),  # FK to molecules
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_ligand_chembl_id ON ligands(chembl_id)',
+            'CREATE INDEX IF NOT EXISTS idx_ligand_pubchem_cid ON ligands(pubchem_cid)',
+            'CREATE INDEX IF NOT EXISTS idx_ligand_target_id ON ligands(target_id)',
+            'CREATE INDEX IF NOT EXISTS idx_ligand_molecule_index ON ligands(molecule_index)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (target_id) REFERENCES targets(id)',
+            'FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)',
+        ]
+    },
+    
+    'assays': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('assay_type', 'TEXT'),
+            ('target_id', 'INTEGER'),
+            ('readout', 'TEXT'),
+            ('limitations', 'TEXT'),
+            ('data_source', 'TEXT'),
+            ('pubchem_assay_id', 'TEXT'),
+            ('chembl_assay_id', 'TEXT'),
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_assay_target_id ON assays(target_id)',
+            'CREATE INDEX IF NOT EXISTS idx_assay_pubchem_id ON assays(pubchem_assay_id)',
+            'CREATE INDEX IF NOT EXISTS idx_assay_chembl_id ON assays(chembl_assay_id)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (target_id) REFERENCES targets(id)',
+        ]
+    },
+    
+    'drug_outcomes': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('drug_id', 'INTEGER'),
+            ('molecule_index', 'INTEGER'),
+            ('outcome_type', 'TEXT'),  # partial_success/failure/mixed
+            ('context', 'TEXT'),
+            ('evidence_level', 'TEXT'),
+            ('notes', 'TEXT'),
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_drug_outcome_drug_id ON drug_outcomes(drug_id)',
+            'CREATE INDEX IF NOT EXISTS idx_drug_outcome_molecule_index ON drug_outcomes(molecule_index)',
+            'CREATE INDEX IF NOT EXISTS idx_drug_outcome_type ON drug_outcomes(outcome_type)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (drug_id) REFERENCES drugs(id)',
+            'FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)',
+        ]
+    },
+    
+    'cancer_mechanisms': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('cancer_type', 'TEXT NOT NULL'),
+            ('mechanism_id', 'INTEGER NOT NULL'),
+            ('activity_level', 'TEXT'),
+            ('evidence_source', 'TEXT'),
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_cancer_mechanisms_cancer ON cancer_mechanisms(cancer_type)',
+            'CREATE INDEX IF NOT EXISTS idx_cancer_mechanisms_mechanism ON cancer_mechanisms(mechanism_id)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)',
+        ]
+    },
+    
+    'workspaces': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('mechanism_id', 'INTEGER'),
+            ('user_id', 'TEXT'),  # Optional for future multi-user support
+            ('filters', 'TEXT'),  # JSON
+            ('selections', 'TEXT'),  # JSON
+            ('notes', 'TEXT'),
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+            ('updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_workspace_mechanism_id ON workspaces(mechanism_id)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)',
+        ]
     }
 }
 
