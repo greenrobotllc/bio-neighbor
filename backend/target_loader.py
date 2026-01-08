@@ -270,7 +270,7 @@ def get_targets_for_mechanism(mechanism_id: int, conn: Optional[sqlite3.Connecti
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT t.*, mt.role_in_mechanism
+            SELECT DISTINCT t.*, mt.role_in_mechanism
             FROM targets t
             JOIN mechanism_targets mt ON t.id = mt.target_id
             WHERE mt.mechanism_id = ?
@@ -292,6 +292,120 @@ def get_targets_for_mechanism(mechanism_id: int, conn: Optional[sqlite3.Connecti
             targets.append(target)
         
         return targets
+    finally:
+        if should_close:
+            conn.close()
+
+
+def load_all_targets_for_mechanism(mechanism_id: int, force_refresh: bool = False,
+                                   conn: Optional[sqlite3.Connection] = None) -> int:
+    """
+    Load all targets for a mechanism from UniProt/IUPHAR.
+    Iterates through mechanism's target definitions and loads each one.
+    
+    Args:
+        mechanism_id: Mechanism ID
+        force_refresh: If True, reload even if target exists
+        conn: Optional database connection
+        
+    Returns:
+        Count of successfully loaded targets
+    """
+    should_close = False
+    if conn is None:
+        if not DB_PATH.exists():
+            raise FileNotFoundError(f"Database not found: {DB_PATH}")
+        conn = sqlite3.connect(DB_PATH)
+        should_close = True
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Get mechanism's target definitions from mechanism_targets table
+        # First, get the target definitions that should be associated with this mechanism
+        cursor.execute("""
+            SELECT t.uniprot_id, mt.role_in_mechanism, t.cancer_role, t.ligand_types
+            FROM mechanism_targets mt
+            JOIN targets t ON mt.target_id = t.id
+            WHERE mt.mechanism_id = ?
+        """, (mechanism_id,))
+        
+        target_definitions = cursor.fetchall()
+        
+        if not target_definitions:
+            print(f"⚠️  No target definitions found for mechanism {mechanism_id}")
+            return 0
+        
+        print(f"📋 Found {len(target_definitions)} target definitions for mechanism {mechanism_id}")
+        
+        loaded_count = 0
+        skipped_count = 0
+        error_count = 0
+        
+        for target_def in target_definitions:
+            uniprot_id = target_def[0]
+            role_in_mechanism = target_def[1]
+            cancer_role = target_def[2]
+            ligand_types_json = target_def[3]
+            
+            if not uniprot_id:
+                print(f"⚠️  Skipping target without UniProt ID")
+                skipped_count += 1
+                continue
+            
+            # Parse ligand_types if present
+            ligand_types = None
+            if ligand_types_json:
+                try:
+                    ligand_types = json.loads(ligand_types_json)
+                except (json.JSONDecodeError, TypeError):
+                    ligand_types = None
+            
+            # Check if target already exists (unless force_refresh)
+            if not force_refresh:
+                cursor.execute("SELECT id FROM targets WHERE uniprot_id = ?", (uniprot_id,))
+                existing = cursor.fetchone()
+                if existing:
+                    print(f"⏭️  Target {uniprot_id} already exists, skipping...")
+                    skipped_count += 1
+                    continue
+            
+            # Load target from UniProt
+            try:
+                target_id = load_target_from_uniprot(
+                    uniprot_id,
+                    cancer_role=cancer_role,
+                    ligand_types=ligand_types,
+                    conn=conn
+                )
+                
+                if target_id:
+                    # Ensure mechanism-target link exists
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO mechanism_targets (mechanism_id, target_id, role_in_mechanism)
+                        VALUES (?, ?, ?)
+                    """, (mechanism_id, target_id, role_in_mechanism))
+                    conn.commit()
+                    loaded_count += 1
+                else:
+                    error_count += 1
+                    print(f"⚠️  Failed to load target {uniprot_id}")
+            except Exception as e:
+                error_count += 1
+                print(f"❌ Error loading target {uniprot_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue with next target
+                continue
+        
+        print(f"✅ Loaded {loaded_count} targets, skipped {skipped_count}, errors {error_count}")
+        return loaded_count
+        
+    except Exception as e:
+        print(f"❌ Error in load_all_targets_for_mechanism: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
     finally:
         if should_close:
             conn.close()

@@ -51,6 +51,23 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None
     ),
+    5: (
+        "Add unique constraint to mechanism_targets table and remove duplicate entries",
+        [
+            # Remove duplicate mechanism_targets entries (keep first occurrence)
+            """
+            DELETE FROM mechanism_targets
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM mechanism_targets
+                GROUP BY mechanism_id, target_id
+            )
+            """,
+            # Add unique index to prevent future duplicates
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_mechanism_targets_unique ON mechanism_targets(mechanism_id, target_id)",
+        ],
+        None  # No rollback - removing duplicates is safe
+    ),
 }
 
 

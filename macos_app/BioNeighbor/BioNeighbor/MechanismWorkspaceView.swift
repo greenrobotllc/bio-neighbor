@@ -36,6 +36,9 @@ struct MechanismWorkspaceView: View {
     let onBackToSelector: (() -> Void)?
     @State private var selectedSection: WorkspaceSection = .overview
     @StateObject private var workspaceState = WorkspaceStateManager.shared
+    @State private var isLoadingData = false
+    @State private var dataLoadMessage: String?
+    @State private var dataLoadError: String?
     
     init(mechanism: Mechanism, onBackToSelector: (() -> Void)? = nil) {
         self.mechanism = mechanism
@@ -54,8 +57,71 @@ struct MechanismWorkspaceView: View {
         } detail: {
             // Main content area
             VStack(spacing: 0) {
-                // Breadcrumb navigation
-                CancerBreadcrumbView(items: breadcrumbItems)
+                // Breadcrumb navigation with Load Data button
+                VStack(spacing: 0) {
+                    HStack {
+                        CancerBreadcrumbView(items: breadcrumbItems)
+                        
+                        Spacer()
+                        
+                        if isLoadingData {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text("Loading data...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Button(action: {
+                                loadData()
+                            }) {
+                                Label("Load Data", systemImage: "arrow.down.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 4)
+                }
+                
+                // Success/Error Messages
+                if let message = dataLoadMessage {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text(message)
+                            .font(.caption)
+                        Spacer()
+                        Button("Dismiss") {
+                            dataLoadMessage = nil
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .background(Color.green.opacity(0.1))
+                }
+                
+                if let error = dataLoadError {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .font(.caption)
+                        Spacer()
+                        Button("Dismiss") {
+                            dataLoadError = nil
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.1))
+                }
                 
                 // Research-only disclaimer banner
                 HStack {
@@ -100,6 +166,94 @@ struct MechanismWorkspaceView: View {
         .onChange(of: selectedSection) { _ in
             workspaceState.saveSection(selectedSection.rawValue, for: mechanism.id)
         }
+    }
+    
+    private func loadData() {
+        isLoadingData = true
+        dataLoadMessage = nil
+        dataLoadError = nil
+        
+        guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/mechanisms/\(mechanism.id)/load-data") else {
+            dataLoadError = "Invalid URL"
+            isLoadingData = false
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Use force_refresh: true to ensure data is actually loaded
+        let body: [String: Any] = ["force_refresh": true]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                isLoadingData = false
+                
+                if let error = error {
+                    dataLoadError = "Network error: \(error.localizedDescription)"
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200,
+                      let data = data else {
+                    dataLoadError = "Failed to load data"
+                    return
+                }
+                
+                do {
+                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    if let success = json?["success"] as? Bool, success {
+                        let targets = json?["targets_loaded"] as? Int ?? 0
+                        let ligands = json?["ligands_loaded"] as? Int ?? 0
+                        let assays = json?["assays_loaded"] as? Int ?? 0
+                        let outcomes = json?["outcomes_loaded"] as? Int ?? 0
+                        let mappings = json?["cancer_mappings_loaded"] as? Int ?? 0
+                        
+                        // Check for warnings/errors
+                        if let warnings = json?["warnings"] as? [String], !warnings.isEmpty {
+                            let warningText = warnings.joined(separator: "; ")
+                            var messageParts: [String] = []
+                            if targets > 0 { messageParts.append("\(targets) targets") }
+                            if ligands > 0 { messageParts.append("\(ligands) ligands") }
+                            if assays > 0 { messageParts.append("\(assays) assays") }
+                            if outcomes > 0 { messageParts.append("\(outcomes) outcomes") }
+                            
+                            if messageParts.isEmpty {
+                                dataLoadError = "No data loaded. Warnings: \(warningText)"
+                            } else {
+                                dataLoadMessage = "Loaded: " + messageParts.joined(separator: ", ")
+                                dataLoadError = "Warnings: \(warningText)"
+                            }
+                        } else {
+                            var messageParts: [String] = []
+                            if targets > 0 { messageParts.append("\(targets) targets") }
+                            if ligands > 0 { messageParts.append("\(ligands) ligands") }
+                            if assays > 0 { messageParts.append("\(assays) assays") }
+                            if outcomes > 0 { messageParts.append("\(outcomes) outcomes") }
+                            if mappings > 0 { messageParts.append("\(mappings) cancer mappings") }
+                            
+                            if messageParts.isEmpty {
+                                dataLoadError = "No data loaded. Check server logs - ChEMBL/PubChem APIs may be unavailable."
+                            } else {
+                                dataLoadMessage = "Loaded: " + messageParts.joined(separator: ", ")
+                            }
+                        }
+                        
+                        // Auto-dismiss success message after 5 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                            dataLoadMessage = nil
+                        }
+                    } else {
+                        dataLoadError = json?["error"] as? String ?? "Failed to load data"
+                    }
+                } catch {
+                    dataLoadError = "Failed to decode response: \(error.localizedDescription)"
+                }
+            }
+        }.resume()
     }
     
     private var breadcrumbItems: [CancerBreadcrumbItem] {

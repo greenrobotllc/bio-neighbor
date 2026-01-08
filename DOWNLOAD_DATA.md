@@ -97,6 +97,25 @@ PubChem provides bulk downloads via FTP:
 3. Convert to SMILES using RDKit
 4. Place in `data/downloads/` directory
 
+### PubChem Download Sizes
+
+**File Size Information:**
+- Each PubChem SDF file is typically **300-500 MB** (compressed)
+- Each file contains approximately **500,000 compounds**
+- Files are compressed in `.sdf.gz` format
+
+**Estimated Download Sizes:**
+- **10,000 molecules**: ~300-500 MB (1 file)
+- **50,000 molecules**: ~600 MB - 1 GB (2 files)
+- **100,000+ molecules**: Multiple GB (multiple files)
+
+**Disk Space Recommendations:**
+- Ensure you have at least **2-3 GB free space** for downloads and processing
+- Temporary files during conversion may require additional space
+- Processed SMILES files are much smaller (~10-50 MB for 10,000 molecules)
+
+**Note:** The system will automatically download files incrementally until it reaches your target molecule count. You can stop the download at any time and use the molecules already downloaded.
+
 ## Expected Results
 
 - **ZINC download**: Should get 10,000+ molecules in 5-10 minutes

@@ -362,6 +362,7 @@ struct TargetResponse: Codable {
 struct LigandsResponse: Codable {
     let success: Bool
     let ligands: [Ligand]?
+    let count: Int?
     let disclaimer: String?
     let error: String?
 }
@@ -369,6 +370,7 @@ struct LigandsResponse: Codable {
 struct AssaysResponse: Codable {
     let success: Bool
     let assays: [Assay]?
+    let count: Int?
     let disclaimer: String?
     let error: String?
 }
@@ -376,6 +378,7 @@ struct AssaysResponse: Codable {
 struct DrugOutcomesResponse: Codable {
     let success: Bool
     let outcomes: [DrugOutcome]?
+    let count: Int?
     let disclaimer: String?
     let error: String?
 }

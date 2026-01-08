@@ -1932,12 +1932,12 @@ def list_mechanisms():
         
         # Auto-initialize default mechanisms if database is empty
         if not mechanisms:
-            print("📥 No mechanisms found - initializing default mechanisms...")
+            print("📥 No mechanisms found - initializing default mechanisms with ETL...")
             try:
                 from cancer_mechanism_loader import load_all_default_mechanisms
-                mechanism_ids = load_all_default_mechanisms()
+                mechanism_ids = load_all_default_mechanisms(load_data=True)
                 if mechanism_ids:
-                    print(f"✅ Initialized {len(mechanism_ids)} mechanisms")
+                    print(f"✅ Initialized {len(mechanism_ids)} mechanisms with data")
                     mechanisms = get_all_mechanisms()
                 else:
                     print("⚠️  Failed to initialize mechanisms")
@@ -1964,40 +1964,116 @@ def list_mechanisms():
 def initialize_mechanisms():
     """
     Initialize all default mechanisms (adenosine and PD-1/PD-L1) and related data.
+    Automatically triggers ETL to load targets, ligands, assays, and outcomes.
     
     Response (JSON):
     {
         "success": true,
         "message": "Mechanisms initialized",
-        "mechanism_ids": [1, 2]
+        "mechanism_ids": [1, 2],
+        "data_loaded": {
+            "mechanism_1": {
+                "targets_loaded": 4,
+                "ligands_loaded": 45,
+                "assays_loaded": 12,
+                "outcomes_loaded": 5,
+                "cancer_mappings_loaded": 6
+            }
+        }
     }
     """
     try:
         from cancer_mechanism_loader import load_all_default_mechanisms
         from target_loader import get_targets_for_mechanism
-        from cancer_mapping_loader import load_adenosine_cancer_mappings
+        from ligand_loader import get_ligands_for_mechanism
+        from assay_loader import get_assays_for_mechanism
+        from drug_outcome_loader import get_drug_outcomes_for_mechanism
+        from cancer_mapping_loader import get_cancers_for_mechanism
         
-        # Load all default mechanisms
-        mechanism_ids = load_all_default_mechanisms()
+        # Load all default mechanisms with ETL (ETL is triggered automatically)
+        mechanism_ids = load_all_default_mechanisms(load_data=True)
         if not mechanism_ids:
             return jsonify({
                 'success': False,
                 'error': 'Failed to load mechanisms'
             }), 500
         
-        # Cancer mappings are loaded automatically by the mechanism loaders
-        
-        # Get target counts
-        total_targets = 0
+        # Collect detailed data counts for each mechanism
+        data_loaded = {}
         for mechanism_id in mechanism_ids:
-            targets = get_targets_for_mechanism(mechanism_id)
-            total_targets += len(targets)
+            try:
+                # Get counts of loaded data
+                targets = get_targets_for_mechanism(mechanism_id)
+                ligands = get_ligands_for_mechanism(mechanism_id)
+                assays = get_assays_for_mechanism(mechanism_id)
+                outcomes = get_drug_outcomes_for_mechanism(mechanism_id)
+                cancer_mappings = get_cancers_for_mechanism(mechanism_id)
+                
+                data_loaded[f'mechanism_{mechanism_id}'] = {
+                    'targets_loaded': len(targets),
+                    'ligands_loaded': len(ligands),
+                    'assays_loaded': len(assays),
+                    'outcomes_loaded': len(outcomes),
+                    'cancer_mappings_loaded': len(cancer_mappings)
+                }
+            except Exception as e:
+                data_loaded[f'mechanism_{mechanism_id}'] = {
+                    'error': str(e)
+                }
         
         return jsonify({
             'success': True,
             'message': f'Initialized {len(mechanism_ids)} mechanisms successfully',
             'mechanism_ids': mechanism_ids,
-            'targets_loaded': total_targets
+            'data_loaded': data_loaded
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>/load-data', methods=['POST'])
+def load_mechanism_data_endpoint(mechanism_id: int):
+    """
+    Manually trigger ETL to load/refresh all data for a mechanism.
+    
+    Request body (JSON, optional):
+    {
+        "force_refresh": false
+    }
+    
+    Response (JSON):
+    {
+        "success": true,
+        "mechanism_id": 1,
+        "targets_loaded": 4,
+        "ligands_loaded": 45,
+        "assays_loaded": 12,
+        "outcomes_loaded": 5,
+        "cancer_mappings_loaded": 6,
+        "errors": [],
+        "warnings": []
+    }
+    """
+    try:
+        from cancer_research_etl import load_mechanism_data
+        
+        # Get force_refresh from request body
+        force_refresh = False
+        if request.is_json:
+            data = request.get_json()
+            force_refresh = data.get('force_refresh', False)
+        
+        # Run ETL
+        result = load_mechanism_data(mechanism_id, force_refresh=force_refresh)
+        
+        return jsonify({
+            'success': True,
+            **result
         })
     except Exception as e:
         import traceback
@@ -2151,13 +2227,22 @@ def get_mechanism_ligands(mechanism_id: int):
         from ligand_loader import get_ligands_for_mechanism
         ligands = get_ligands_for_mechanism(mechanism_id)
         
+        # Log the actual count for debugging
+        ligand_count = len(ligands) if ligands else 0
+        print(f"📊 API: get_mechanism_ligands({mechanism_id}) returned {ligand_count} ligands")
+        
+        if ligand_count == 0:
+            print(f"⚠️  Warning: No ligands found for mechanism {mechanism_id}")
+        
         return jsonify({
             'success': True,
-            'ligands': ligands,
+            'ligands': ligands or [],
+            'count': ligand_count,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
         import traceback
+        print(f"❌ Error in get_mechanism_ligands({mechanism_id}): {e}")
         traceback.print_exc()
         return jsonify({
             'success': False,
@@ -2180,13 +2265,22 @@ def get_mechanism_drug_outcomes(mechanism_id: int):
         from drug_outcome_loader import get_drug_outcomes_for_mechanism
         outcomes = get_drug_outcomes_for_mechanism(mechanism_id)
         
+        # Log the actual count for debugging
+        outcome_count = len(outcomes) if outcomes else 0
+        print(f"📊 API: get_mechanism_drug_outcomes({mechanism_id}) returned {outcome_count} outcomes")
+        
+        if outcome_count == 0:
+            print(f"⚠️  Warning: No outcomes found for mechanism {mechanism_id}")
+        
         return jsonify({
             'success': True,
-            'outcomes': outcomes,
+            'outcomes': outcomes or [],
+            'count': outcome_count,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
         import traceback
+        print(f"❌ Error in get_mechanism_drug_outcomes({mechanism_id}): {e}")
         traceback.print_exc()
         return jsonify({
             'success': False,
@@ -2209,10 +2303,127 @@ def get_mechanism_assays(mechanism_id: int):
         from assay_loader import get_assays_for_mechanism
         assays = get_assays_for_mechanism(mechanism_id)
         
+        # Log the actual count for debugging
+        assay_count = len(assays) if assays else 0
+        print(f"📊 API: get_mechanism_assays({mechanism_id}) returned {assay_count} assays")
+        
+        if assay_count == 0:
+            print(f"⚠️  Warning: No assays found for mechanism {mechanism_id}")
+        
         return jsonify({
             'success': True,
-            'assays': assays,
+            'assays': assays or [],
+            'count': assay_count,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        print(f"❌ Error in get_mechanism_assays({mechanism_id}): {e}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/debug/mechanisms/<int:mechanism_id>/counts', methods=['GET'])
+def get_mechanism_data_counts(mechanism_id: int):
+    """
+    Debug endpoint to check actual data counts in database.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "mechanism_id": 1,
+        "targets_count": 4,
+        "ligands_count": 45,
+        "assays_count": 12,
+        "outcomes_count": 8,
+        "raw_queries": {
+            "targets": "SELECT COUNT(*) FROM targets t JOIN mechanism_targets mt...",
+            "ligands": "SELECT COUNT(*) FROM ligands l JOIN targets t...",
+            "assays": "SELECT COUNT(*) FROM assays a JOIN targets t...",
+            "outcomes": "SELECT COUNT(*) FROM drug_outcomes do..."
+        }
+    }
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+        
+        if not DB_PATH.exists():
+            return jsonify({
+                'success': False,
+                'error': 'Database not found'
+            }), 404
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Count targets
+        cursor.execute("""
+            SELECT COUNT(DISTINCT t.id)
+            FROM targets t
+            JOIN mechanism_targets mt ON t.id = mt.target_id
+            WHERE mt.mechanism_id = ?
+        """, (mechanism_id,))
+        targets_count = cursor.fetchone()[0]
+        
+        # Count ligands (through targets)
+        cursor.execute("""
+            SELECT COUNT(DISTINCT l.id)
+            FROM ligands l
+            JOIN targets t ON l.target_id = t.id
+            JOIN mechanism_targets mt ON t.id = mt.target_id
+            WHERE mt.mechanism_id = ?
+        """, (mechanism_id,))
+        ligands_count = cursor.fetchone()[0]
+        
+        # Count assays (through targets)
+        cursor.execute("""
+            SELECT COUNT(DISTINCT a.id)
+            FROM assays a
+            JOIN targets t ON a.target_id = t.id
+            JOIN mechanism_targets mt ON t.id = mt.target_id
+            WHERE mt.mechanism_id = ?
+        """, (mechanism_id,))
+        assays_count = cursor.fetchone()[0]
+        
+        # Count outcomes (through ligands -> targets)
+        cursor.execute("""
+            SELECT COUNT(DISTINCT do.id)
+            FROM drug_outcomes do
+            LEFT JOIN ligands l ON do.molecule_index = l.molecule_index
+            LEFT JOIN targets t ON l.target_id = t.id
+            LEFT JOIN mechanism_targets mt ON t.id = mt.target_id
+            WHERE mt.mechanism_id = ?
+        """, (mechanism_id,))
+        outcomes_count = cursor.fetchone()[0]
+        
+        # Also check total counts in tables (for debugging)
+        cursor.execute("SELECT COUNT(*) FROM ligands")
+        total_ligands = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM assays")
+        total_assays = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM drug_outcomes")
+        total_outcomes = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'mechanism_id': mechanism_id,
+            'targets_count': targets_count,
+            'ligands_count': ligands_count,
+            'assays_count': assays_count,
+            'outcomes_count': outcomes_count,
+            'debug': {
+                'total_ligands_in_db': total_ligands,
+                'total_assays_in_db': total_assays,
+                'total_outcomes_in_db': total_outcomes
+            }
         })
     except Exception as e:
         import traceback
@@ -2221,6 +2432,98 @@ def get_mechanism_assays(mechanism_id: int):
             'success': False,
             'error': f'Internal error: {str(e)}'
         }), 500
+
+
+@app.route('/cancer-research/health/data-sources', methods=['GET'])
+def check_data_sources():
+    """
+    Check availability of external data sources.
+    
+    Response (JSON):
+    {
+        "chembl": {"available": true/false, "response_time_ms": 123},
+        "pubchem": {"available": true/false, "response_time_ms": 456},
+        "bindingdb": {"available": true/false},
+        "iuphar": {"available": true/false}
+    }
+    """
+    import time
+    import requests
+    
+    results = {}
+    
+    # Test ChEMBL
+    try:
+        from ligand_loader import test_chembl_connectivity, CHEMBL_AVAILABLE
+        if CHEMBL_AVAILABLE:
+            start_time = time.time()
+            available = test_chembl_connectivity()
+            response_time = (time.time() - start_time) * 1000
+            results['chembl'] = {
+                'available': available,
+                'response_time_ms': round(response_time, 0) if available else None
+            }
+        else:
+            results['chembl'] = {'available': False, 'error': 'Package not installed'}
+    except Exception as e:
+        results['chembl'] = {'available': False, 'error': str(e)}
+    
+    # Test PubChem
+    try:
+        from ligand_loader import PUBCHEM_AVAILABLE
+        if PUBCHEM_AVAILABLE:
+            start_time = time.time()
+            try:
+                import pubchempy as pcp
+                # Try a simple query
+                compound = pcp.get_compounds('aspirin', 'name', as_dataframe=True)
+                response_time = (time.time() - start_time) * 1000
+                results['pubchem'] = {
+                    'available': compound is not None and len(compound) > 0,
+                    'response_time_ms': round(response_time, 0)
+                }
+            except Exception as e:
+                results['pubchem'] = {'available': False, 'error': str(e)}
+        else:
+            results['pubchem'] = {'available': False, 'error': 'Package not installed'}
+    except Exception as e:
+        results['pubchem'] = {'available': False, 'error': str(e)}
+    
+    # Test BindingDB
+    try:
+        start_time = time.time()
+        response = requests.get('https://bindingdb.org/api/v1/targets?uniprot=P21589', timeout=5)
+        response_time = (time.time() - start_time) * 1000
+        results['bindingdb'] = {
+            'available': response.status_code == 200,
+            'response_time_ms': round(response_time, 0) if response.status_code == 200 else None,
+            'status_code': response.status_code
+        }
+    except requests.exceptions.RequestException as e:
+        results['bindingdb'] = {'available': False, 'error': str(e)}
+    except Exception as e:
+        results['bindingdb'] = {'available': False, 'error': str(e)}
+    
+    # Test IUPHAR
+    try:
+        start_time = time.time()
+        response = requests.get('https://www.guidetopharmacology.org/services/targets.json', timeout=10)
+        response_time = (time.time() - start_time) * 1000
+        results['iuphar'] = {
+            'available': response.status_code == 200,
+            'response_time_ms': round(response_time, 0) if response.status_code == 200 else None,
+            'status_code': response.status_code
+        }
+    except requests.exceptions.RequestException as e:
+        results['iuphar'] = {'available': False, 'error': str(e)}
+    except Exception as e:
+        results['iuphar'] = {'available': False, 'error': str(e)}
+    
+    return jsonify({
+        'success': True,
+        'data_sources': results,
+        'timestamp': time.time()
+    })
 
 
 @app.route('/cancer-research/cancers', methods=['GET'])
@@ -2271,6 +2574,36 @@ def get_cancer_mechanisms(cancer_type: str):
             'success': True,
             'cancer_type': cancer_type,
             'mechanisms': mechanisms,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}'
+        }), 500
+
+
+@app.route('/cancer-research/mechanisms/<int:mechanism_id>/cancers', methods=['GET'])
+def get_mechanism_cancers(mechanism_id: int):
+    """
+    Get cancer types associated with a mechanism.
+    
+    Response (JSON):
+    {
+        "success": true,
+        "cancers": [...]
+    }
+    """
+    try:
+        from cancer_mapping_loader import get_cancers_for_mechanism
+        mappings = get_cancers_for_mechanism(mechanism_id)
+        
+        return jsonify({
+            'success': True,
+            'mechanism_id': mechanism_id,
+            'cancers': mappings,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:

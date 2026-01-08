@@ -257,12 +257,14 @@ def get_all_mechanisms(conn: Optional[sqlite3.Connection] = None) -> List[Dict]:
             conn.close()
 
 
-def load_all_default_mechanisms(conn: Optional[sqlite3.Connection] = None) -> List[int]:
+def load_all_default_mechanisms(conn: Optional[sqlite3.Connection] = None, 
+                                 load_data: bool = True) -> List[int]:
     """
     Load all default mechanisms (adenosine and PD-1/PD-L1).
     
     Args:
         conn: Optional database connection
+        load_data: If True, trigger ETL to load all data for mechanisms
         
     Returns:
         List of mechanism IDs loaded
@@ -273,6 +275,16 @@ def load_all_default_mechanisms(conn: Optional[sqlite3.Connection] = None) -> Li
     adenosine_id = load_adenosine_mechanism(conn)
     if adenosine_id:
         mechanism_ids.append(adenosine_id)
+        # Trigger ETL if requested
+        if load_data:
+            try:
+                from cancer_research_etl import load_mechanism_data
+                print(f"\n🔄 Loading data for adenosine mechanism (ID: {adenosine_id})...")
+                load_mechanism_data(adenosine_id, force_refresh=False, conn=conn)
+            except Exception as e:
+                print(f"⚠️  Error loading data for adenosine mechanism: {e}")
+                import traceback
+                traceback.print_exc()
     
     # Load PD-1/PD-L1 mechanism
     try:
@@ -281,6 +293,16 @@ def load_all_default_mechanisms(conn: Optional[sqlite3.Connection] = None) -> Li
         if pd1_id:
             mechanism_ids.append(pd1_id)
             print(f"✅ Loaded PD-1/PD-L1 mechanism (ID: {pd1_id})")
+            # Trigger ETL if requested
+            if load_data:
+                try:
+                    from cancer_research_etl import load_mechanism_data
+                    print(f"\n🔄 Loading data for PD-1/PD-L1 mechanism (ID: {pd1_id})...")
+                    load_mechanism_data(pd1_id, force_refresh=False, conn=conn)
+                except Exception as e:
+                    print(f"⚠️  Error loading data for PD-1/PD-L1 mechanism: {e}")
+                    import traceback
+                    traceback.print_exc()
         else:
             print("⚠️  PD-1/PD-L1 mechanism loader returned None")
     except ImportError as e:

@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -156,6 +156,7 @@ SCHEMA: Dict[str, Dict] = {
         'indexes': [
             'CREATE INDEX IF NOT EXISTS idx_mechanism_targets_mechanism ON mechanism_targets(mechanism_id)',
             'CREATE INDEX IF NOT EXISTS idx_mechanism_targets_target ON mechanism_targets(target_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_mechanism_targets_unique ON mechanism_targets(mechanism_id, target_id)',
         ],
         'foreign_keys': [
             'FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)',

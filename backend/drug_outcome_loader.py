@@ -49,6 +49,52 @@ ADENOSINE_DRUG_OUTCOMES = [
     },
 ]
 
+# Curated drug outcomes for PD-1/PD-L1 mechanism
+PD1_PDL1_DRUG_OUTCOMES = [
+    {
+        'drug_name': 'Pembrolizumab',
+        'outcome_type': 'success',
+        'context': 'Approved for multiple cancer types. Anti-PD-1 monoclonal antibody showing significant efficacy in melanoma, NSCLC, and other cancers.',
+        'evidence_level': 'Approved drug',
+        'notes': 'First PD-1 inhibitor approved by FDA. High response rates in selected patient populations.'
+    },
+    {
+        'drug_name': 'Nivolumab',
+        'outcome_type': 'success',
+        'context': 'Approved for multiple cancer types. Anti-PD-1 monoclonal antibody with demonstrated efficacy.',
+        'evidence_level': 'Approved drug',
+        'notes': 'Widely used checkpoint inhibitor with proven efficacy'
+    },
+    {
+        'drug_name': 'Atezolizumab',
+        'outcome_type': 'success',
+        'context': 'Approved for multiple cancer types. Anti-PD-L1 monoclonal antibody.',
+        'evidence_level': 'Approved drug',
+        'notes': 'PD-L1 targeting antibody'
+    },
+    {
+        'drug_name': 'Durvalumab',
+        'outcome_type': 'success',
+        'context': 'Approved for NSCLC and bladder cancer. Anti-PD-L1 monoclonal antibody.',
+        'evidence_level': 'Approved drug',
+        'notes': 'PD-L1 inhibitor with specific indications'
+    },
+    {
+        'drug_name': 'Avelumab',
+        'outcome_type': 'partial_success',
+        'context': 'Approved for Merkel cell carcinoma and bladder cancer. Anti-PD-L1 monoclonal antibody with limited indications.',
+        'evidence_level': 'Approved drug',
+        'notes': 'Narrower approval compared to other checkpoint inhibitors'
+    },
+    {
+        'drug_name': 'Cemiplimab',
+        'outcome_type': 'success',
+        'context': 'Approved for cutaneous squamous cell carcinoma and NSCLC. Anti-PD-1 monoclonal antibody.',
+        'evidence_level': 'Approved drug',
+        'notes': 'More recent approval, expanding indications'
+    },
+]
+
 
 def find_drug_by_name(drug_name: str, conn: sqlite3.Connection) -> Optional[int]:
     """
@@ -217,6 +263,97 @@ def load_adenosine_drug_outcomes(conn: Optional[sqlite3.Connection] = None) -> i
             conn.close()
 
 
+def load_pd1_pdl1_drug_outcomes(conn: Optional[sqlite3.Connection] = None) -> int:
+    """
+    Load curated drug outcomes for PD-1/PD-L1 mechanism.
+    
+    Args:
+        conn: Optional database connection
+        
+    Returns:
+        Number of outcomes loaded
+    """
+    should_close = False
+    if conn is None:
+        if not DB_PATH.exists():
+            raise FileNotFoundError(f"Database not found: {DB_PATH}")
+        conn = sqlite3.connect(DB_PATH)
+        should_close = True
+    
+    try:
+        count = 0
+        for outcome_data in PD1_PDL1_DRUG_OUTCOMES:
+            drug_name = outcome_data['drug_name']
+            drug_id = find_drug_by_name(drug_name, conn)
+            molecule_index = None
+            
+            if drug_id:
+                molecule_index = find_molecule_by_drug(drug_id, conn)
+            
+            outcome_id = load_drug_outcome(
+                drug_id=drug_id,
+                molecule_index=molecule_index,
+                outcome_type=outcome_data['outcome_type'],
+                context=outcome_data['context'],
+                evidence_level=outcome_data['evidence_level'],
+                notes=outcome_data.get('notes'),
+                conn=conn
+            )
+            
+            if outcome_id:
+                count += 1
+        
+        print(f"✅ Loaded {count} drug outcomes for PD-1/PD-L1 mechanism")
+        return count
+        
+    finally:
+        if should_close:
+            conn.close()
+
+
+def load_drug_outcomes_for_mechanism(mechanism_id: int, conn: Optional[sqlite3.Connection] = None) -> int:
+    """
+    Load drug outcomes for a mechanism (determines which curated set to use).
+    
+    Args:
+        mechanism_id: Mechanism ID
+        conn: Optional database connection
+        
+    Returns:
+        Number of outcomes loaded
+    """
+    should_close = False
+    if conn is None:
+        if not DB_PATH.exists():
+            raise FileNotFoundError(f"Database not found: {DB_PATH}")
+        conn = sqlite3.connect(DB_PATH)
+        should_close = True
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM mechanisms WHERE id = ?", (mechanism_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            print(f"⚠️  Mechanism {mechanism_id} not found")
+            return 0
+        
+        mechanism_name = result[0]
+        
+        # Determine which curated outcomes to load based on mechanism name
+        if 'Adenosine' in mechanism_name or 'adenosine' in mechanism_name.lower():
+            return load_adenosine_drug_outcomes(conn)
+        elif 'PD-1' in mechanism_name or 'PD-L1' in mechanism_name or 'PD1' in mechanism_name.upper():
+            return load_pd1_pdl1_drug_outcomes(conn)
+        else:
+            print(f"⚠️  No curated outcomes available for mechanism: {mechanism_name}")
+            return 0
+        
+    finally:
+        if should_close:
+            conn.close()
+
+
 def get_drug_outcomes_for_mechanism(mechanism_id: int, conn: Optional[sqlite3.Connection] = None) -> List[Dict]:
     """
     Get drug outcomes for a mechanism.
@@ -237,22 +374,93 @@ def get_drug_outcomes_for_mechanism(mechanism_id: int, conn: Optional[sqlite3.Co
     
     try:
         cursor = conn.cursor()
-        # Get outcomes for drugs/molecules associated with mechanism targets
+        
+        # Get mechanism name to determine which outcomes to return
+        cursor.execute("SELECT name FROM mechanisms WHERE id = ?", (mechanism_id,))
+        mechanism_result = cursor.fetchone()
+        if not mechanism_result:
+            return []
+        
+        mechanism_name = mechanism_result[0]
+        
+        # Determine which drug outcomes belong to this mechanism based on drug names
+        # This is a fallback when molecule_index/drug_id links don't exist
+        mechanism_drug_names = []
+        if 'Adenosine' in mechanism_name or 'adenosine' in mechanism_name.lower():
+            mechanism_drug_names = [outcome['drug_name'] for outcome in ADENOSINE_DRUG_OUTCOMES]
+        elif 'PD-1' in mechanism_name or 'PD-L1' in mechanism_name or 'PD1' in mechanism_name.upper():
+            mechanism_drug_names = [outcome['drug_name'] for outcome in PD1_PDL1_DRUG_OUTCOMES]
+        
+        all_outcomes = []
+        seen_ids = set()
+        columns = None
+        
+        # First, try to get outcomes linked through ligands -> targets -> mechanisms
         cursor.execute("""
             SELECT DISTINCT do.*
             FROM drug_outcomes do
-            LEFT JOIN ligands l ON do.molecule_index = l.molecule_index
-            LEFT JOIN targets t ON l.target_id = t.id
-            LEFT JOIN mechanism_targets mt ON t.id = mt.target_id
-            WHERE mt.mechanism_id = ?
-            ORDER BY do.outcome_type, do.evidence_level
+            INNER JOIN ligands l ON do.molecule_index = l.molecule_index
+            INNER JOIN targets t ON l.target_id = t.id
+            INNER JOIN mechanism_targets mt ON t.id = mt.target_id
+            WHERE mt.mechanism_id = ? AND do.molecule_index IS NOT NULL
         """, (mechanism_id,))
-        rows = cursor.fetchall()
+        rows1 = cursor.fetchall()
+        if cursor.description:
+            columns = [d[0] for d in cursor.description]
         
-        columns = [d[0] for d in cursor.description]
-        outcomes = [dict(zip(columns, row)) for row in rows]
+        for row in rows1:
+            row_id = row[0]
+            if row_id not in seen_ids:
+                seen_ids.add(row_id)
+                all_outcomes.append(dict(zip(columns, row)) if columns else {})
         
-        return outcomes
+        # Also get outcomes that might be linked through drug_id -> drugs -> molecules -> ligands
+        cursor.execute("""
+            SELECT DISTINCT do.*
+            FROM drug_outcomes do
+            INNER JOIN drugs d ON do.drug_id = d.id
+            INNER JOIN molecules m ON d.pubchem_cid = m.pubchem_cid
+            INNER JOIN ligands l ON m.rowid = l.molecule_index
+            INNER JOIN targets t ON l.target_id = t.id
+            INNER JOIN mechanism_targets mt ON t.id = mt.target_id
+            WHERE mt.mechanism_id = ? AND do.molecule_index IS NULL
+        """, (mechanism_id,))
+        rows2 = cursor.fetchall()
+        
+        for row in rows2:
+            row_id = row[0]
+            if row_id not in seen_ids:
+                seen_ids.add(row_id)
+                all_outcomes.append(dict(zip(columns, row)) if columns else {})
+        
+        # Fallback: If no outcomes found through JOINs, try to match by drug names
+        # This handles cases where outcomes exist but aren't linked to molecules/ligands
+        if not all_outcomes and mechanism_drug_names:
+            # Get all outcomes and try to match by context/notes containing drug names
+            cursor.execute("SELECT * FROM drug_outcomes")
+            all_outcome_rows = cursor.fetchall()
+            outcome_columns = [d[0] for d in cursor.description] if cursor.description else []
+            
+            for row in all_outcome_rows:
+                row_id = row[0]
+                if row_id in seen_ids:
+                    continue
+                
+                outcome_dict = dict(zip(outcome_columns, row)) if outcome_columns else {}
+                context = outcome_dict.get('context', '') or ''
+                notes = outcome_dict.get('notes', '') or ''
+                
+                # Check if any mechanism drug name appears in context or notes
+                for drug_name in mechanism_drug_names:
+                    if drug_name.lower() in context.lower() or drug_name.lower() in notes.lower():
+                        seen_ids.add(row_id)
+                        all_outcomes.append(outcome_dict)
+                        break
+        
+        # Sort by outcome type and evidence level
+        all_outcomes.sort(key=lambda x: (x.get('outcome_type', ''), x.get('evidence_level', '')))
+        
+        return all_outcomes
     finally:
         if should_close:
             conn.close()
