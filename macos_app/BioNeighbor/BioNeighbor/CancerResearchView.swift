@@ -206,7 +206,7 @@ struct CancerResearchView: View {
                     .padding(.vertical, 8)
                 }
                 .navigationTitle("Cancer Research")
-                .frame(minWidth: 200)
+                .frame(minWidth: 200, maxWidth: 300)
             }
         } detail: {
             // Main workspace
@@ -214,6 +214,7 @@ struct CancerResearchView: View {
                 MechanismWorkspaceView(mechanism: mechanism, onBackToSelector: {
                     selectedMechanism = nil
                 })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack {
                     Image(systemName: "flask")

@@ -53,7 +53,7 @@ struct MechanismWorkspaceView: View {
                     .tag(section)
             }
             .navigationTitle(mechanism.name)
-            .frame(minWidth: 200)
+            .frame(minWidth: 200, maxWidth: 250)
         } detail: {
             // Main content area
             VStack(spacing: 0) {
@@ -158,8 +158,11 @@ struct MechanismWorkspaceView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             workspaceState.loadWorkspace(for: mechanism.id)
         }

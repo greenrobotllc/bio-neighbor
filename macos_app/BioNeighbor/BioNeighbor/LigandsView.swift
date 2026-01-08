@@ -126,7 +126,8 @@ struct LigandsView: View {
                 .padding()
             } else {
                 List(filteredLigands) { ligand in
-                    NavigationLink(destination: LigandDetailView(ligand: ligand)) {
+                    NavigationLink(destination: LigandDetailView(ligand: ligand)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)) {
                         LigandRow(ligand: ligand)
                     }
                     .buttonStyle(.plain)

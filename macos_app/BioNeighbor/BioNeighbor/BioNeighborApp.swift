@@ -15,6 +15,9 @@ struct BioNeighborApp: App {
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 1200, height: 800)
+        .commands {
+            CommandGroup(replacing: .windowSize) {}
+        }
     }
 }
 

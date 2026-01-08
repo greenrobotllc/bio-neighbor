@@ -110,10 +110,27 @@ def load_mechanism_data(mechanism_id: int, force_refresh: bool = False,
                 result['ligands_loaded'] = updated_count  # Return total count for reference
             else:
                 print(f"❌ No ligands found after loading attempt")
-                warning_msg = "No ligands loaded - ChEMBL/PubChem/BindingDB/IUPHAR APIs may be unavailable or targets not found. Check /cancer-research/health/data-sources for API status."
-                result['warnings'].append(warning_msg)
-                result['progress'].append("Step 2/5: ❌ No ligands found (APIs may be unavailable)")
-                result['ligands_loaded'] = 0
+                print(f"   🔄 Trying curated ligand lists as fallback...")
+                try:
+                    from curated_ligand_loader import load_curated_ligands_for_mechanism
+                    curated_loaded = load_curated_ligands_for_mechanism(mechanism_id, conn)
+                    if curated_loaded > 0:
+                        updated_ligands = get_ligands_for_mechanism(mechanism_id, conn)
+                        updated_count = len(updated_ligands)
+                        print(f"✅ Loaded {curated_loaded} curated ligands (total: {updated_count})")
+                        result['progress'].append(f"Step 2/5: ✅ Loaded {curated_loaded} curated ligands (total: {updated_count})")
+                        result['ligands_loaded'] = curated_loaded
+                    else:
+                        warning_msg = "No ligands loaded - APIs unavailable and no curated ligands found. Check /cancer-research/health/data-sources for API status."
+                        result['warnings'].append(warning_msg)
+                        result['progress'].append("Step 2/5: ❌ No ligands found (APIs unavailable, no curated data)")
+                        result['ligands_loaded'] = 0
+                except Exception as e:
+                    print(f"   ⚠️  Error loading curated ligands: {e}")
+                    warning_msg = "No ligands loaded - ChEMBL/PubChem/BindingDB/IUPHAR APIs may be unavailable or targets not found. Check /cancer-research/health/data-sources for API status."
+                    result['warnings'].append(warning_msg)
+                    result['progress'].append("Step 2/5: ❌ No ligands found (APIs may be unavailable)")
+                    result['ligands_loaded'] = 0
         except Exception as e:
             error_msg = f"Error loading ligands: {str(e)}"
             result['errors'].append(error_msg)

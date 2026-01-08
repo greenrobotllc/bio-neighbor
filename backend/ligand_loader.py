@@ -961,10 +961,33 @@ def load_ligands_for_mechanism_targets(mechanism_id: int, force_refresh: bool = 
                 except Exception as e:
                     print(f"   ⚠️  Error with IUPHAR: {e}")
             
+            # Final fallback: Try curated ligands if no other source worked
+            if ligands_loaded_from_source is None:
+                print(f"   🔄 Trying curated ligand lists...")
+                try:
+                    from curated_ligand_loader import load_curated_ligands_for_target
+                    from target_loader import get_targets_for_mechanism
+                    
+                    # Get mechanism name for curated list selection
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name FROM mechanisms WHERE id = ?", (mechanism_id,))
+                    mechanism_result = cursor.fetchone()
+                    mechanism_name = mechanism_result[0] if mechanism_result else ""
+                    
+                    curated_result = load_curated_ligands_for_target(
+                        target_id, gene_symbol, mechanism_name, conn
+                    )
+                    if curated_result and curated_result > 0:
+                        total_loaded += curated_result
+                        ligands_loaded_from_source = "Curated"
+                        print(f"   ✅ Loaded {curated_result} curated ligands for target {target_id}")
+                except Exception as e:
+                    print(f"   ⚠️  Error loading curated ligands: {e}")
+            
             # Final message if no ligands loaded
             if ligands_loaded_from_source is None:
                 print(f"   ⚠️  No ligands loaded from any data source for target {target_id}")
-                print(f"   ℹ️  All data sources (ChEMBL, PubChem, BindingDB, IUPHAR) unavailable or returned no results")
+                print(f"   ℹ️  All data sources (ChEMBL, PubChem, BindingDB, IUPHAR, Curated) unavailable or returned no results")
         
         print(f"\n✅ Total ligands loaded: {total_loaded}")
         return total_loaded

@@ -14,6 +14,7 @@ struct LigandDetailView: View {
     @State private var isLoadingImage = false
     @State private var showSimilarityAnalysis = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         ScrollView {
@@ -29,8 +30,10 @@ struct LigandDetailView: View {
                             
                             Button("Done") {
                                 dismiss()
+                                presentationMode.wrappedValue.dismiss()
                             }
                             .buttonStyle(.bordered)
+                            .keyboardShortcut(.escape, modifiers: [])
                         }
                         
                         if let chemblId = ligand.chemblId {
@@ -204,7 +207,7 @@ struct LigandDetailView: View {
                 }
         }
         .navigationTitle("Ligand Details")
-        .frame(minWidth: 600, minHeight: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             if let smiles = ligand.smiles {
                 loadMoleculeImage(smiles: smiles)
