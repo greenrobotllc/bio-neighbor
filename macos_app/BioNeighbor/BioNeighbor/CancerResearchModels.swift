@@ -230,7 +230,6 @@ struct Workspace: Codable, Identifiable, Hashable {
 }
 
 // Helper for decoding Any type
-// Helper for decoding Any type
 struct AnyCodable: Codable, Hashable {
     let value: Any
     
@@ -316,6 +315,19 @@ struct AnyCodable: Codable, Hashable {
             hasher.combine(double)
         } else if let bool = value as? Bool {
             hasher.combine(bool)
+        } else if let array = value as? [Any] {
+            hasher.combine(array.count)
+            for item in array {
+                AnyCodable(item).hash(into: &hasher)
+            }
+        } else if let dict = value as? [String: Any] {
+            hasher.combine(dict.count)
+            for key in dict.keys.sorted() {
+                hasher.combine(key)
+                if let val = dict[key] {
+                    AnyCodable(val).hash(into: &hasher)
+                }
+            }
         }
     }
 }

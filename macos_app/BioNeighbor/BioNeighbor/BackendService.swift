@@ -1454,7 +1454,7 @@ class BackendService: ObservableObject {
     
     func fetchMechanisms() async throws -> [Mechanism] {
         guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
         
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1474,7 +1474,7 @@ class BackendService: ObservableObject {
 
     func fetchMechanism(id: Int) async throws -> Mechanism {
         guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(id)") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1494,7 +1494,7 @@ class BackendService: ObservableObject {
 
     func fetchTargets(for mechanismId: Int) async throws -> [Target] {
         guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/targets") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1514,7 +1514,7 @@ class BackendService: ObservableObject {
 
     func fetchLigands(for mechanismId: Int) async throws -> [Ligand] {
         guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/ligands") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1534,7 +1534,7 @@ class BackendService: ObservableObject {
 
     func fetchDrugOutcomes(for mechanismId: Int) async throws -> [DrugOutcome] {
         guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/drug-outcomes") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1554,7 +1554,7 @@ class BackendService: ObservableObject {
 
     func fetchAssays(for mechanismId: Int) async throws -> [Assay] {
         guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/assays") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -1574,60 +1574,66 @@ class BackendService: ObservableObject {
     
     func fetchCancers() async throws -> [String] {
         guard let url = URL(string: "\(baseURL)/cancer-research/cancers") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
-        
+
         let (data, response) = try await URLSession.shared.data(from: url)
-        
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw BackendError.networkError("Failed to fetch cancers")
         }
-        
+
         let cancersResponse = try JSONDecoder().decode(CancersResponse.self, from: data)
         guard cancersResponse.success, let cancers = cancersResponse.cancers else {
-            throw BackendError.invalidResponse
+            throw BackendError.unknownError(cancersResponse.error ?? "Failed to fetch cancers")
         }
-        
+
         return cancers
     }
     
     func createWorkspace(mechanismId: Int, filters: [String: Any] = [:], selections: [String: Any] = [:], notes: String = "") async throws -> Int {
         guard let url = URL(string: "\(baseURL)/cancer-research/workspaces") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
         let body: [String: Any] = [
             "mechanism_id": mechanismId,
             "filters": filters,
             "selections": selections,
             "notes": notes
         ]
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
+
+        let bodyData: Data
+        do {
+            bodyData = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw BackendError.unknownError("Failed to encode workspace data")
+        }
+        request.httpBody = bodyData
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw BackendError.networkError("Failed to create workspace")
         }
-        
+
         let workspaceResponse = try JSONDecoder().decode(WorkspaceCreateResponse.self, from: data)
         guard workspaceResponse.success, let workspaceId = workspaceResponse.workspaceId else {
-            throw BackendError.invalidResponse
+            throw BackendError.unknownError(workspaceResponse.error ?? "Failed to create workspace")
         }
-        
+
         return workspaceId
     }
     
     func updateWorkspace(id: Int, filters: [String: Any]? = nil, selections: [String: Any]? = nil, notes: String? = nil) async throws {
         guard let url = URL(string: "\(baseURL)/cancer-research/workspaces/\(id)") else {
-            throw BackendError.invalidResponse
+            throw BackendError.backendNotAvailable
         }
         
         var request = URLRequest(url: url)

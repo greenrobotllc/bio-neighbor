@@ -221,7 +221,8 @@ struct TargetDetailView: View {
                             }
 
                             if let geneSymbol = target.geneSymbol,
-                               let url = URL(string: "https://www.guidetopharmacology.org/GRAC/ObjectDisplayForward?objectId=\(geneSymbol)") {
+                               let encodedSymbol = geneSymbol.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                               let url = URL(string: "https://www.guidetopharmacology.org/GRAC/DatabaseSearchForward?searchString=\(encodedSymbol)&searchCategories=target") {
                                 Link(destination: url) {
                                     Label("IUPHAR", systemImage: "link")
                                 }
@@ -290,24 +291,33 @@ struct TargetDetailView: View {
     
     private func loadLigands() {
         isLoadingLigands = true
-        
+
         guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/targets/\(targetId)/ligands") else {
             isLoadingLigands = false
             return
         }
-        
+
         URLSession.shared.dataTask(with: url) { data, response, error in
             DispatchQueue.main.async {
                 isLoadingLigands = false
-                
-                guard let data = data,
-                      let response = try? JSONDecoder().decode(LigandsResponse.self, from: data),
-                      response.success,
-                      let ligands = response.ligands else {
+
+                if let error = error {
+                    print("Failed to load ligands: \(error.localizedDescription)")
                     return
                 }
-                
-                self.ligands = ligands
+
+                guard let data = data else { return }
+
+                do {
+                    let response = try JSONDecoder().decode(LigandsResponse.self, from: data)
+                    if response.success, let ligands = response.ligands {
+                        self.ligands = ligands
+                    } else if let errorMsg = response.error {
+                        print("Failed to load ligands: \(errorMsg)")
+                    }
+                } catch {
+                    print("Failed to decode ligands response: \(error.localizedDescription)")
+                }
             }
         }.resume()
     }

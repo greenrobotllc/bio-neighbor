@@ -2053,7 +2053,8 @@ def load_mechanism_data_endpoint(mechanism_id: int):
         force_refresh = False
         if request.is_json:
             data = request.get_json()
-            force_refresh = data.get('force_refresh', False)
+            if data is not None:
+                force_refresh = data.get('force_refresh', False)
         
         # Run ETL
         result = load_mechanism_data(mechanism_id, force_refresh=force_refresh)
@@ -2334,60 +2335,61 @@ def get_mechanism_data_counts(mechanism_id: int):
             }), 404
         
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Count targets
-        cursor.execute("""
-            SELECT COUNT(DISTINCT t.id)
-            FROM targets t
-            JOIN mechanism_targets mt ON t.id = mt.target_id
-            WHERE mt.mechanism_id = ?
-        """, (mechanism_id,))
-        targets_count = cursor.fetchone()[0]
-        
-        # Count ligands (through targets)
-        cursor.execute("""
-            SELECT COUNT(DISTINCT l.id)
-            FROM ligands l
-            JOIN targets t ON l.target_id = t.id
-            JOIN mechanism_targets mt ON t.id = mt.target_id
-            WHERE mt.mechanism_id = ?
-        """, (mechanism_id,))
-        ligands_count = cursor.fetchone()[0]
-        
-        # Count assays (through targets)
-        cursor.execute("""
-            SELECT COUNT(DISTINCT a.id)
-            FROM assays a
-            JOIN targets t ON a.target_id = t.id
-            JOIN mechanism_targets mt ON t.id = mt.target_id
-            WHERE mt.mechanism_id = ?
-        """, (mechanism_id,))
-        assays_count = cursor.fetchone()[0]
-        
-        # Count outcomes (through ligands -> targets)
-        cursor.execute("""
-            SELECT COUNT(DISTINCT do.id)
-            FROM drug_outcomes do
-            LEFT JOIN ligands l ON do.molecule_index = l.molecule_index
-            LEFT JOIN targets t ON l.target_id = t.id
-            LEFT JOIN mechanism_targets mt ON t.id = mt.target_id
-            WHERE mt.mechanism_id = ?
-        """, (mechanism_id,))
-        outcomes_count = cursor.fetchone()[0]
-        
-        # Also check total counts in tables (for debugging)
-        cursor.execute("SELECT COUNT(*) FROM ligands")
-        total_ligands = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM assays")
-        total_assays = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM drug_outcomes")
-        total_outcomes = cursor.fetchone()[0]
-        
-        conn.close()
-        
+        try:
+            cursor = conn.cursor()
+
+            # Count targets
+            cursor.execute("""
+                SELECT COUNT(DISTINCT t.id)
+                FROM targets t
+                JOIN mechanism_targets mt ON t.id = mt.target_id
+                WHERE mt.mechanism_id = ?
+            """, (mechanism_id,))
+            targets_count = cursor.fetchone()[0]
+
+            # Count ligands (through targets)
+            cursor.execute("""
+                SELECT COUNT(DISTINCT l.id)
+                FROM ligands l
+                JOIN targets t ON l.target_id = t.id
+                JOIN mechanism_targets mt ON t.id = mt.target_id
+                WHERE mt.mechanism_id = ?
+            """, (mechanism_id,))
+            ligands_count = cursor.fetchone()[0]
+
+            # Count assays (through targets)
+            cursor.execute("""
+                SELECT COUNT(DISTINCT a.id)
+                FROM assays a
+                JOIN targets t ON a.target_id = t.id
+                JOIN mechanism_targets mt ON t.id = mt.target_id
+                WHERE mt.mechanism_id = ?
+            """, (mechanism_id,))
+            assays_count = cursor.fetchone()[0]
+
+            # Count outcomes (through ligands -> targets)
+            cursor.execute("""
+                SELECT COUNT(DISTINCT do.id)
+                FROM drug_outcomes do
+                LEFT JOIN ligands l ON do.molecule_index = l.molecule_index
+                LEFT JOIN targets t ON l.target_id = t.id
+                LEFT JOIN mechanism_targets mt ON t.id = mt.target_id
+                WHERE mt.mechanism_id = ?
+            """, (mechanism_id,))
+            outcomes_count = cursor.fetchone()[0]
+
+            # Also check total counts in tables (for debugging)
+            cursor.execute("SELECT COUNT(*) FROM ligands")
+            total_ligands = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM assays")
+            total_assays = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM drug_outcomes")
+            total_outcomes = cursor.fetchone()[0]
+        finally:
+            conn.close()
+
         return jsonify({
             'success': True,
             'mechanism_id': mechanism_id,
@@ -2441,8 +2443,9 @@ def check_data_sources():
         else:
             results['chembl'] = {'available': False, 'error': 'Package not installed'}
     except Exception as e:
-        results['chembl'] = {'available': False, 'error': str(e)}
-    
+        logger.exception("Error checking ChEMBL availability")
+        results['chembl'] = {'available': False, 'error': 'Check failed'}
+
     # Test PubChem
     try:
         from ligand_loader import PUBCHEM_AVAILABLE
@@ -2458,11 +2461,13 @@ def check_data_sources():
                     'response_time_ms': round(response_time, 0)
                 }
             except Exception as e:
-                results['pubchem'] = {'available': False, 'error': str(e)}
+                logger.exception("Error checking PubChem availability")
+                results['pubchem'] = {'available': False, 'error': 'Check failed'}
         else:
             results['pubchem'] = {'available': False, 'error': 'Package not installed'}
     except Exception as e:
-        results['pubchem'] = {'available': False, 'error': str(e)}
+        logger.exception("Error checking PubChem availability")
+        results['pubchem'] = {'available': False, 'error': 'Check failed'}
     
     # Test BindingDB
     try:
@@ -2475,10 +2480,12 @@ def check_data_sources():
             'status_code': response.status_code
         }
     except requests.exceptions.RequestException as e:
-        results['bindingdb'] = {'available': False, 'error': str(e)}
+        logger.exception("Error checking BindingDB availability")
+        results['bindingdb'] = {'available': False, 'error': 'Check failed'}
     except Exception as e:
-        results['bindingdb'] = {'available': False, 'error': str(e)}
-    
+        logger.exception("Error checking BindingDB availability")
+        results['bindingdb'] = {'available': False, 'error': 'Check failed'}
+
     # Test IUPHAR
     try:
         start_time = time.time()
@@ -2490,9 +2497,11 @@ def check_data_sources():
             'status_code': response.status_code
         }
     except requests.exceptions.RequestException as e:
-        results['iuphar'] = {'available': False, 'error': str(e)}
+        logger.exception("Error checking IUPHAR availability")
+        results['iuphar'] = {'available': False, 'error': 'Check failed'}
     except Exception as e:
-        results['iuphar'] = {'available': False, 'error': str(e)}
+        logger.exception("Error checking IUPHAR availability")
+        results['iuphar'] = {'available': False, 'error': 'Check failed'}
     
     return jsonify({
         'success': True,

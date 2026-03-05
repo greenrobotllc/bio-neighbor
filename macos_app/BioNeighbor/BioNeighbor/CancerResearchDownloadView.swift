@@ -395,9 +395,50 @@ struct CancerResearchDownloadView: View {
     }
     
     private func loadAllData() {
-        for mechanism in mechanisms {
-            loadDataForMechanism(mechanism.id)
+        // Load mechanisms sequentially to avoid flooding the server
+        let mechanismIds = mechanisms.map { $0.id }
+        guard let firstId = mechanismIds.first else { return }
+
+        func loadNext(index: Int) {
+            guard index < mechanismIds.count else { return }
+            let mechanismId = mechanismIds[index]
+            loadingMechanismIds.insert(mechanismId)
+            errorMessage = nil
+
+            guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/mechanisms/\(mechanismId)/load-data") else {
+                errorMessage = "Invalid URL"
+                loadingMechanismIds.remove(mechanismId)
+                loadNext(index: index + 1)
+                return
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let body: [String: Any] = ["force_refresh": true]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                DispatchQueue.main.async {
+                    loadingMechanismIds.remove(mechanismId)
+
+                    if let error = error {
+                        errorMessage = "Network error: \(error.localizedDescription)"
+                    } else if let data = data,
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let success = json["success"] as? Bool, success {
+                        loadDataStatus(for: mechanismId)
+                    } else {
+                        errorMessage = "Failed to load data for mechanism \(mechanismId)"
+                    }
+
+                    // Load next mechanism
+                    loadNext(index: index + 1)
+                }
+            }.resume()
         }
+
+        loadNext(index: 0)
     }
 }
 

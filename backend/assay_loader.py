@@ -358,17 +358,17 @@ def load_assays_for_mechanism_targets(mechanism_id: int, force_refresh: bool = F
                             targets_chembl = new_client.target.filter(target_components__target_component_synonym__synonym=uniprot_id).only(['target_chembl_id'])
                             if targets_chembl:
                                 chembl_target_id = targets_chembl[0]['target_chembl_id']
-                        except Exception:
-                            pass
-                    
+                        except Exception as e:
+                            print(f"   ⚠️  ChEMBL UniProt lookup failed for {uniprot_id}: {e}")
+
                     # If not found by UniProt, try gene symbol
                     if not chembl_target_id and gene_symbol:
                         try:
                             targets_chembl = new_client.target.filter(pref_name__icontains=gene_symbol).only(['target_chembl_id'])
                             if targets_chembl:
                                 chembl_target_id = targets_chembl[0]['target_chembl_id']
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"   ⚠️  ChEMBL gene symbol lookup failed for {gene_symbol}: {e}")
                     
                     if chembl_target_id:
                         print(f"   Found ChEMBL target ID: {chembl_target_id}")

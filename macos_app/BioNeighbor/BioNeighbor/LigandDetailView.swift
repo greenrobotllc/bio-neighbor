@@ -217,17 +217,26 @@ struct LigandDetailView: View {
         guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/targets/\(targetId)") else {
             return
         }
-        
+
         let task = URLSession.shared.dataTask(with: url) { (data: Data?, response: URLResponse?, error: Error?) -> Void in
             DispatchQueue.main.async {
-                guard let data = data,
-                      let response = try? JSONDecoder().decode(TargetResponse.self, from: data),
-                      response.success,
-                      let target = response.target else {
+                if let error = error {
+                    print("Failed to load target: \(error.localizedDescription)")
                     return
                 }
-                
-                self.target = target
+
+                guard let data = data else { return }
+
+                do {
+                    let response = try JSONDecoder().decode(TargetResponse.self, from: data)
+                    if response.success, let target = response.target {
+                        self.target = target
+                    } else if let errorMsg = response.error {
+                        print("Failed to load target: \(errorMsg)")
+                    }
+                } catch {
+                    print("Failed to decode target response: \(error.localizedDescription)")
+                }
             }
         }
         task.resume()

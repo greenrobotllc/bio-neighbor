@@ -225,9 +225,10 @@ def load_curated_ligands_for_target(target_id: int, gene_symbol: str, mechanism_
     """
     # Determine which curated list to use
     curated_ligands = None
-    if 'Adenosine' in mechanism_name or 'adenosine' in mechanism_name.lower():
+    mechanism_lower = mechanism_name.lower()
+    if 'adenosine' in mechanism_lower:
         curated_ligands = ADENOSINE_CURATED_LIGANDS.get(gene_symbol, [])
-    elif 'PD-1' in mechanism_name or 'PD-L1' in mechanism_name or 'PD1' in mechanism_name.upper():
+    elif 'pd-1' in mechanism_lower or 'pd-l1' in mechanism_lower or 'pd1' in mechanism_lower:
         curated_ligands = PD1_PDL1_CURATED_LIGANDS.get(gene_symbol, [])
     
     if not curated_ligands:

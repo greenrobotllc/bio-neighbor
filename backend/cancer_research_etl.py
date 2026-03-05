@@ -107,7 +107,7 @@ def load_mechanism_data(mechanism_id: int, force_refresh: bool = False,
                 print(f"⚠️  Ligands already exist: {updated_count} total ligands found")
                 result['warnings'].append(f"Ligands already exist: {updated_count} total (no new data loaded)")
                 result['progress'].append(f"Step 2/5: ⚠️  {updated_count} ligands exist (no new data)")
-                result['ligands_loaded'] = updated_count  # Return total count for reference
+                result['ligands_loaded'] = 0
             else:
                 print(f"❌ No ligands found after loading attempt")
                 print(f"   🔄 Trying curated ligand lists as fallback...")
@@ -172,7 +172,7 @@ def load_mechanism_data(mechanism_id: int, force_refresh: bool = False,
                 print(f"⚠️  Assays already exist: {updated_count} total assays found")
                 result['warnings'].append(f"Assays already exist: {updated_count} total (no new data loaded)")
                 result['progress'].append(f"Step 3/5: ⚠️  {updated_count} assays exist (no new data)")
-                result['assays_loaded'] = updated_count  # Return total count for reference
+                result['assays_loaded'] = 0
             else:
                 print(f"❌ No assays found after loading attempt")
                 warning_msg = "No assays loaded - ChEMBL/PubChem APIs may be unavailable or targets not found. Check /cancer-research/health/data-sources for API status."

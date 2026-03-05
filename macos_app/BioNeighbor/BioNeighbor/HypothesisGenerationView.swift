@@ -68,8 +68,12 @@ struct HypothesisGenerationView: View {
         // Fetch targets
         group.enter()
         if let url = URL(string: "\(baseURL)/targets") {
-            URLSession.shared.dataTask(with: url) { data, _, _ in
+            URLSession.shared.dataTask(with: url) { data, _, error in
                 defer { group.leave() }
+                if let error = error {
+                    print("Failed to fetch targets for hypotheses: \(error.localizedDescription)")
+                    return
+                }
                 if let data = data,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let items = json["targets"] as? [[String: Any]] {
@@ -81,8 +85,12 @@ struct HypothesisGenerationView: View {
         // Fetch ligands
         group.enter()
         if let url = URL(string: "\(baseURL)/ligands") {
-            URLSession.shared.dataTask(with: url) { data, _, _ in
+            URLSession.shared.dataTask(with: url) { data, _, error in
                 defer { group.leave() }
+                if let error = error {
+                    print("Failed to fetch ligands for hypotheses: \(error.localizedDescription)")
+                    return
+                }
                 if let data = data,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let items = json["ligands"] as? [[String: Any]] {
@@ -94,8 +102,12 @@ struct HypothesisGenerationView: View {
         // Fetch cancers
         group.enter()
         if let url = URL(string: "\(baseURL)/cancers") {
-            URLSession.shared.dataTask(with: url) { data, _, _ in
+            URLSession.shared.dataTask(with: url) { data, _, error in
                 defer { group.leave() }
+                if let error = error {
+                    print("Failed to fetch cancers for hypotheses: \(error.localizedDescription)")
+                    return
+                }
                 if let data = data,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let items = json["cancers"] as? [[String: Any]] {

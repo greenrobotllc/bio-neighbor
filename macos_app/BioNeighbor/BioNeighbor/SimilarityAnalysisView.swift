@@ -16,7 +16,7 @@ struct SimilarityAnalysisView: View {
     @State private var isLoadingLigands = false
     @State private var isLoadingSimilar = false
     @State private var errorMessage: String?
-    @State private var topK: Int = 10
+    private let topK: Int = 10
     
     init(mechanism: Mechanism, selectedLigandId: Int? = nil) {
         self.mechanism = mechanism
@@ -208,20 +208,32 @@ struct SimilarityAnalysisView: View {
         URLSession.shared.dataTask(with: url) { data, response, error in
             DispatchQueue.main.async {
                 isLoadingLigands = false
-                
-                guard let data = data,
-                      let response = try? JSONDecoder().decode(LigandsResponse.self, from: data),
-                      response.success,
-                      let ligands = response.ligands else {
+
+                if let error = error {
+                    errorMessage = "Failed to load ligands: \(error.localizedDescription)"
                     return
                 }
-                
-                self.availableLigands = ligands
-                
-                // Auto-select if selectedLigandId was provided
-                if let selectedId = selectedLigandId,
-                   let ligand = ligands.first(where: { $0.id == selectedId }) {
-                    selectedLigand = ligand
+
+                guard let data = data else {
+                    errorMessage = "No data received"
+                    return
+                }
+
+                do {
+                    let response = try JSONDecoder().decode(LigandsResponse.self, from: data)
+                    if response.success, let ligands = response.ligands {
+                        self.availableLigands = ligands
+
+                        // Auto-select if selectedLigandId was provided
+                        if let selectedId = selectedLigandId,
+                           let ligand = ligands.first(where: { $0.id == selectedId }) {
+                            selectedLigand = ligand
+                        }
+                    } else {
+                        errorMessage = response.error ?? "Failed to load ligands"
+                    }
+                } catch {
+                    errorMessage = "Failed to decode ligands: \(error.localizedDescription)"
                 }
             }
         }.resume()

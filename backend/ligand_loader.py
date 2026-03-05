@@ -769,14 +769,17 @@ def load_ligands_for_mechanism_targets(mechanism_id: int, force_refresh: bool = 
         
         total_loaded = 0
         
+        # Test ChEMBL connectivity once before the loop
+        chembl_available = test_chembl_connectivity() if CHEMBL_AVAILABLE else False
+
         for target in targets:
             target_id = target['id']
             uniprot_id = target.get('uniprot_id')
             gene_symbol = target.get('gene_symbol')
-            
+
             if not target_id:
                 continue
-            
+
             # Check if we should skip (ligands already exist)
             if not force_refresh:
                 cursor = conn.cursor()
@@ -785,9 +788,9 @@ def load_ligands_for_mechanism_targets(mechanism_id: int, force_refresh: bool = 
                 if existing_count > 0:
                     print(f"⏭️  Target {target_id} ({gene_symbol or uniprot_id}) already has {existing_count} ligands, skipping...")
                     continue
-            
+
             print(f"\n🔍 Loading ligands for target {target_id} ({gene_symbol or uniprot_id})...")
-            
+
             # Determine interaction type from ligand_types (needed for all data sources)
             ligand_types = target.get('ligand_types', [])
             interaction_type = 'inhibitor'  # default
@@ -802,9 +805,6 @@ def load_ligands_for_mechanism_targets(mechanism_id: int, force_refresh: bool = 
                     interaction_type = 'antagonist'
                 elif 'agonist' in ligand_types:
                     interaction_type = 'agonist'
-            
-            # Test ChEMBL connectivity first
-            chembl_available = test_chembl_connectivity()
             
             # Try ChEMBL first (if available and accessible)
             if CHEMBL_AVAILABLE and chembl_available:
@@ -845,9 +845,9 @@ def load_ligands_for_mechanism_targets(mechanism_id: int, force_refresh: bool = 
                             total_loaded += newly_loaded
                             if newly_loaded > 0:
                                 print(f"   ✅ Loaded {newly_loaded} new ligands from ChEMBL for target {target_id}")
+                                continue  # Success with ChEMBL, skip fallbacks
                             else:
-                                print(f"   ℹ️  No new ligands loaded for target {target_id} (may already exist)")
-                            continue  # Success with ChEMBL, skip PubChem
+                                print(f"   ℹ️  No new ligands loaded for target {target_id} from ChEMBL, trying fallbacks...")
                         else:
                             print(f"   ⚠️  Failed to load ligands from ChEMBL for target {target_id}")
                     else:
