@@ -219,9 +219,9 @@ struct TargetDetailView: View {
                                     Label("UniProt", systemImage: "link")
                                 }
                             }
-                            
-                            if let uniprotId = target.uniprotId,
-                               let url = URL(string: "https://www.guidetopharmacology.org/targets.jsp?target_id=\(uniprotId)") {
+
+                            if let geneSymbol = target.geneSymbol,
+                               let url = URL(string: "https://www.guidetopharmacology.org/GRAC/ObjectDisplayForward?objectId=\(geneSymbol)") {
                                 Link(destination: url) {
                                     Label("IUPHAR", systemImage: "link")
                                 }

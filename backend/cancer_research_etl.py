@@ -7,12 +7,12 @@ for cancer research mechanisms from external APIs.
 import sqlite3
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from data_loader import DB_PATH
 
 
-def load_mechanism_data(mechanism_id: int, force_refresh: bool = False, 
-                       conn: Optional[sqlite3.Connection] = None) -> Dict[str, any]:
+def load_mechanism_data(mechanism_id: int, force_refresh: bool = False,
+                       conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
     """
     Main ETL orchestrator - loads all data types for a mechanism.
     

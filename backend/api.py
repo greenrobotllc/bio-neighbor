@@ -1916,37 +1916,25 @@ def download_diseases():
 def list_mechanisms():
     """
     List all mechanisms.
-    Auto-initializes adenosine mechanism if no mechanisms exist.
-    
+
     Response (JSON):
     {
         "success": true,
         "mechanisms": [...]
     }
+
+    If no mechanisms exist, returns an empty list. Use POST /cancer-research/mechanisms/initialize
+    to initialize default mechanisms.
     """
     try:
         # Ensure database schema is up to date
         from db_migrations import migrate_database
         migrate_database()
-        
-        from cancer_mechanism_loader import get_all_mechanisms, load_adenosine_mechanism
-        
+
+        from cancer_mechanism_loader import get_all_mechanisms
+
         mechanisms = get_all_mechanisms()
-        
-        # Auto-initialize default mechanisms if database is empty
-        if not mechanisms:
-            print("📥 No mechanisms found - initializing default mechanisms with ETL...")
-            try:
-                from cancer_mechanism_loader import load_all_default_mechanisms
-                mechanism_ids = load_all_default_mechanisms(load_data=True)
-                if mechanism_ids:
-                    print(f"✅ Initialized {len(mechanism_ids)} mechanisms with data")
-                    mechanisms = get_all_mechanisms()
-                else:
-                    print("⚠️  Failed to initialize mechanisms")
-            except Exception as init_error:
-                logger.exception("Error initializing mechanisms")
-        
+
         return jsonify({
             'success': True,
             'mechanisms': mechanisms,
@@ -2782,30 +2770,31 @@ def update_workspace(workspace_id: int):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Build update query dynamically
-        updates = []
+        # Build update query with parameterized fields
+        fields_to_update = []
         values = []
-        
+
         if 'filters' in data:
-            updates.append("filters = ?")
+            fields_to_update.append("filters = ?")
             values.append(json.dumps(data['filters']))
-        
+
         if 'selections' in data:
-            updates.append("selections = ?")
+            fields_to_update.append("selections = ?")
             values.append(json.dumps(data['selections']))
-        
+
         if 'notes' in data:
-            updates.append("notes = ?")
+            fields_to_update.append("notes = ?")
             values.append(data['notes'])
-        
-        updates.append("updated_at = CURRENT_TIMESTAMP")
+
+        if not fields_to_update:
+            conn.close()
+            return jsonify({'success': False, 'error': 'No fields to update'}), 400
+
+        fields_to_update.append("updated_at = CURRENT_TIMESTAMP")
         values.append(workspace_id)
-        
-        cursor.execute(f"""
-            UPDATE workspaces 
-            SET {', '.join(updates)}
-            WHERE id = ?
-        """, values)
+
+        sql = "UPDATE workspaces SET " + ", ".join(fields_to_update) + " WHERE id = ?"
+        cursor.execute(sql, values)
         
         if cursor.rowcount == 0:
             conn.close()

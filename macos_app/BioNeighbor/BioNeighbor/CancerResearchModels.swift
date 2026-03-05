@@ -280,7 +280,6 @@ struct AnyCodable: Codable, Hashable {
     }
     
     static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
-        // Simple equality check - for complex types, this may not be perfect
         if let lhsString = lhs.value as? String, let rhsString = rhs.value as? String {
             return lhsString == rhsString
         }
@@ -292,6 +291,18 @@ struct AnyCodable: Codable, Hashable {
         }
         if let lhsBool = lhs.value as? Bool, let rhsBool = rhs.value as? Bool {
             return lhsBool == rhsBool
+        }
+        if let lhsArray = lhs.value as? [Any], let rhsArray = rhs.value as? [Any] {
+            guard lhsArray.count == rhsArray.count else { return false }
+            return zip(lhsArray.map { AnyCodable($0) }, rhsArray.map { AnyCodable($0) })
+                .allSatisfy { $0 == $1 }
+        }
+        if let lhsDict = lhs.value as? [String: Any], let rhsDict = rhs.value as? [String: Any] {
+            guard lhsDict.count == rhsDict.count else { return false }
+            return lhsDict.keys.allSatisfy { key in
+                guard let lhsVal = lhsDict[key], let rhsVal = rhsDict[key] else { return false }
+                return AnyCodable(lhsVal) == AnyCodable(rhsVal)
+            }
         }
         return false
     }

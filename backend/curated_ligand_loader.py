@@ -62,20 +62,7 @@ PD1_PDL1_CURATED_LIGANDS = {
 }
 
 
-def find_molecule_by_pubchem_cid(pubchem_cid: str, conn: sqlite3.Connection) -> Optional[int]:
-    """Find molecule index by PubChem CID."""
-    cursor = conn.cursor()
-    cursor.execute("SELECT rowid FROM molecules WHERE pubchem_cid = ?", (pubchem_cid,))
-    result = cursor.fetchone()
-    return result[0] if result else None
-
-
-def find_molecule_by_smiles(smiles: str, conn: sqlite3.Connection) -> Optional[int]:
-    """Find molecule index by SMILES."""
-    cursor = conn.cursor()
-    cursor.execute("SELECT rowid FROM molecules WHERE smiles = ?", (smiles,))
-    result = cursor.fetchone()
-    return result[0] if result else None
+from molecule_utils import find_molecule_by_pubchem_cid, find_molecule_by_smiles
 
 
 def load_ligand_from_pubchem_cid(pubchem_cid: str, target_id: int, 

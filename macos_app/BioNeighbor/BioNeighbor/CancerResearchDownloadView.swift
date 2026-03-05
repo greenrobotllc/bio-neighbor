@@ -21,7 +21,7 @@ struct CancerResearchDownloadView: View {
     @State private var mechanisms: [Mechanism] = []
     @State private var dataStatus: [Int: MechanismDataStatus] = [:]
     @State private var isLoading = false
-    @State private var loadingMechanismId: Int?
+    @State private var loadingMechanismIds: Set<Int> = []
     @State private var errorMessage: String?
     @State private var successMessage: String?
     
@@ -129,7 +129,7 @@ struct CancerResearchDownloadView: View {
                             MechanismDataCard(
                                 mechanism: mechanism,
                                 dataStatus: dataStatus[mechanism.id],
-                                isLoading: loadingMechanismId == mechanism.id,
+                                isLoading: loadingMechanismIds.contains(mechanism.id),
                                 onLoadData: {
                                     loadDataForMechanism(mechanism.id)
                                 }
@@ -317,13 +317,13 @@ struct CancerResearchDownloadView: View {
     }
     
     private func loadDataForMechanism(_ mechanismId: Int) {
-        loadingMechanismId = mechanismId
+        loadingMechanismIds.insert(mechanismId)
         errorMessage = nil
         successMessage = nil
-        
+
         guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/mechanisms/\(mechanismId)/load-data") else {
             errorMessage = "Invalid URL"
-            loadingMechanismId = nil
+            loadingMechanismIds.remove(mechanismId)
             return
         }
         
@@ -338,7 +338,7 @@ struct CancerResearchDownloadView: View {
         
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
-                loadingMechanismId = nil
+                loadingMechanismIds.remove(mechanismId)
                 
                 if let error = error {
                     errorMessage = "Network error: \(error.localizedDescription)"

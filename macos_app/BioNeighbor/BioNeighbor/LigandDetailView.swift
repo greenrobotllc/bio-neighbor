@@ -14,7 +14,6 @@ struct LigandDetailView: View {
     @State private var isLoadingImage = false
     @State private var showSimilarityAnalysis = false
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         ScrollView {
@@ -30,7 +29,6 @@ struct LigandDetailView: View {
                             
                             Button("Done") {
                                 dismiss()
-                                presentationMode.wrappedValue.dismiss()
                             }
                             .buttonStyle(.bordered)
                             .keyboardShortcut(.escape, modifiers: [])
@@ -171,11 +169,8 @@ struct LigandDetailView: View {
                             }
                         }
                         .padding()
-                        .onAppear {
-                            loadTarget(targetId: targetId)
-                        }
                     }
-                    
+
                     // SMILES
                     if let smiles = ligand.smiles {
                         VStack(alignment: .leading, spacing: 12) {

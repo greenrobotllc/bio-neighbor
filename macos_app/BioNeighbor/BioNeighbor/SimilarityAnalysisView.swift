@@ -194,12 +194,6 @@ struct SimilarityAnalysisView: View {
         }
         .onAppear {
             loadAvailableLigands()
-            if let selectedId = selectedLigandId {
-                // Find and select the ligand if provided
-                if let ligand = availableLigands.first(where: { $0.id == selectedId }) {
-                    selectedLigand = ligand
-                }
-            }
         }
     }
     

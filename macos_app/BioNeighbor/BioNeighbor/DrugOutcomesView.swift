@@ -234,6 +234,7 @@ struct DrugOutcomeRow: View {
     
     var outcomeColor: Color {
         switch outcome.outcomeType {
+        case "success": return .green
         case "partial_success": return .yellow
         case "failure": return .red
         case "mixed": return .orange

@@ -26,14 +26,14 @@ def load_assay_from_chembl(target_id: int, chembl_target_id: str,
                            conn: Optional[sqlite3.Connection] = None) -> Optional[int]:
     """
     Load assays from ChEMBL for a target.
-    
+
     Args:
         target_id: Target ID in database
         chembl_target_id: ChEMBL target ID
         conn: Optional database connection
-        
+
     Returns:
-        Assay ID if successful, None otherwise
+        Count of newly inserted assays (int), or None on failure
     """
     if not CHEMBL_AVAILABLE:
         print("⚠️  ChEMBL client not available")
