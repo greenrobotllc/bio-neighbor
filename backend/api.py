@@ -1956,7 +1956,7 @@ def list_mechanisms():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2018,7 +2018,7 @@ def initialize_mechanisms():
                 }
             except Exception as e:
                 data_loaded[f'mechanism_{mechanism_id}'] = {
-                    'error': str(e)
+                    'error': 'Failed to load data counts'
                 }
         
         return jsonify({
@@ -2032,7 +2032,7 @@ def initialize_mechanisms():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2080,7 +2080,7 @@ def load_mechanism_data_endpoint(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2115,7 +2115,7 @@ def get_mechanism(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2144,7 +2144,7 @@ def get_mechanism_targets(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2179,7 +2179,7 @@ def get_target(target_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2208,7 +2208,7 @@ def get_target_ligands(target_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2246,7 +2246,7 @@ def get_mechanism_ligands(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2284,7 +2284,7 @@ def get_mechanism_drug_outcomes(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2322,7 +2322,7 @@ def get_mechanism_assays(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2430,7 +2430,7 @@ def get_mechanism_data_counts(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2551,7 +2551,7 @@ def list_cancers():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2581,7 +2581,7 @@ def get_cancer_mechanisms(cancer_type: str):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2611,7 +2611,7 @@ def get_mechanism_cancers(mechanism_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2658,7 +2658,7 @@ def list_workspaces():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2709,7 +2709,7 @@ def get_workspace(workspace_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2769,7 +2769,7 @@ def create_workspace():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2844,7 +2844,7 @@ def update_workspace(workspace_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2884,7 +2884,7 @@ def delete_workspace(workspace_id: int):
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
@@ -2944,7 +2944,7 @@ def find_similar_ligands():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Internal error: {str(e)}'
+            'error': 'An internal error occurred'
         }), 500
 
 
