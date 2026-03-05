@@ -397,7 +397,7 @@ struct CancerResearchDownloadView: View {
     private func loadAllData() {
         // Load mechanisms sequentially to avoid flooding the server
         let mechanismIds = mechanisms.map { $0.id }
-        guard let firstId = mechanismIds.first else { return }
+        guard !mechanismIds.isEmpty else { return }
 
         func loadNext(index: Int) {
             guard index < mechanismIds.count else { return }

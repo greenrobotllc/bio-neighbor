@@ -163,8 +163,8 @@ struct MechanismWorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            workspaceState.loadWorkspace(for: mechanism.id)
+        .task {
+            await workspaceState.loadWorkspace(for: mechanism.id)
         }
         .onChange(of: selectedSection) { _ in
             workspaceState.saveSection(selectedSection.rawValue, for: mechanism.id)

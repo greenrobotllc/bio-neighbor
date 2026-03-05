@@ -141,7 +141,7 @@ SCHEMA: Dict[str, Dict] = {
             ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
         ],
         'indexes': [
-            'CREATE INDEX IF NOT EXISTS idx_target_uniprot_id ON targets(uniprot_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_target_uniprot_id ON targets(uniprot_id)',
             'CREATE INDEX IF NOT EXISTS idx_target_gene_symbol ON targets(gene_symbol)',
         ],
         'foreign_keys': []

@@ -229,8 +229,11 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         for index_sql in get_create_index_sql(table_name):
                             try:
                                 cursor.execute(index_sql)
-                            except sqlite3.OperationalError:
-                                pass  # Index may already exist
+                            except sqlite3.OperationalError as e:
+                                if 'already exists' in str(e).lower():
+                                    pass
+                                else:
+                                    raise
                     except sqlite3.OperationalError as e:
                         error_msg = str(e).lower()
                         if 'already exists' in error_msg:

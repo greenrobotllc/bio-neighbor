@@ -40,19 +40,28 @@ def test_chembl_connectivity(timeout: int = 5) -> bool:
         return False
     
     try:
-        import time
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
         start_time = time.time()
-        # Try a simple query that should always work - query for a well-known target
-        test_target = new_client.target.filter(target_chembl_id='CHEMBL25').only(['target_chembl_id'])
-        result = list(test_target)[:1]  # Force evaluation, limit to 1 result
+
+        def _query_chembl():
+            test_target = new_client.target.filter(target_chembl_id='CHEMBL25').only(['target_chembl_id'])
+            return list(test_target)[:1]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_query_chembl)
+            result = future.result(timeout=timeout)
+
         elapsed = (time.time() - start_time) * 1000  # Convert to milliseconds
-        
+
         if result:
             print(f"✅ ChEMBL API connectivity test passed ({elapsed:.0f}ms)")
             return True
         else:
             print("⚠️  ChEMBL API returned empty result")
             return False
+    except FuturesTimeoutError:
+        print(f"⚠️  ChEMBL API connectivity test timed out after {timeout}s")
+        return False
     except Exception as e:
         print(f"⚠️  ChEMBL API connectivity test failed: {e}")
         return False

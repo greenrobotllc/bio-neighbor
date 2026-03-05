@@ -1592,6 +1592,26 @@ class BackendService: ObservableObject {
         return cancers
     }
     
+    func listWorkspaces() async throws -> [Workspace] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/workspaces") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to list workspaces")
+        }
+
+        let workspacesResponse = try JSONDecoder().decode(WorkspacesResponse.self, from: data)
+        guard workspacesResponse.success else {
+            throw BackendError.unknownError(workspacesResponse.error ?? "Failed to list workspaces")
+        }
+
+        return workspacesResponse.workspaces ?? []
+    }
+
     func createWorkspace(mechanismId: Int, filters: [String: Any] = [:], selections: [String: Any] = [:], notes: String = "") async throws -> Int {
         guard let url = URL(string: "\(baseURL)/cancer-research/workspaces") else {
             throw BackendError.backendNotAvailable
@@ -1644,8 +1664,14 @@ class BackendService: ObservableObject {
         if let filters = filters { body["filters"] = filters }
         if let selections = selections { body["selections"] = selections }
         if let notes = notes { body["notes"] = notes }
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let bodyData: Data
+        do {
+            bodyData = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw BackendError.unknownError("Failed to encode workspace update data")
+        }
+        request.httpBody = bodyData
         
         let (_, response) = try await URLSession.shared.data(for: request)
         

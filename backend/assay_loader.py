@@ -79,8 +79,7 @@ def load_assay_from_chembl(target_id: int, chembl_target_id: str,
                     continue
                 
                 assay_type = assay.get('assay_type', 'Unknown')
-                assay_description = assay.get('assay_description', '')
-                
+
                 # Extract readout information
                 readout = assay.get('assay_organism') or assay.get('assay_cell_type') or 'Not specified'
                 
@@ -246,7 +245,7 @@ def get_assays_for_target(target_id: int, conn: Optional[sqlite3.Connection] = N
         rows = cursor.fetchall()
         
         columns = [d[0] for d in cursor.description]
-        assays = [dict(zip(columns, row)) for row in rows]
+        assays = [dict(zip(columns, row, strict=True)) for row in rows]
         
         return assays
     finally:
@@ -285,7 +284,7 @@ def get_assays_for_mechanism(mechanism_id: int, conn: Optional[sqlite3.Connectio
         rows = cursor.fetchall()
         
         columns = [d[0] for d in cursor.description]
-        assays = [dict(zip(columns, row)) for row in rows]
+        assays = [dict(zip(columns, row, strict=True)) for row in rows]
         
         return assays
     finally:
@@ -372,11 +371,7 @@ def load_assays_for_mechanism_targets(mechanism_id: int, force_refresh: bool = F
                     
                     if chembl_target_id:
                         print(f"   Found ChEMBL target ID: {chembl_target_id}")
-                        # Get count before loading
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT COUNT(*) FROM assays WHERE target_id = ?", (target_id,))
-                        count_before = cursor.fetchone()[0]
-                        
+
                         # Load assays from ChEMBL
                         result = load_assay_from_chembl(target_id, chembl_target_id, conn)
                         if result is not None:
@@ -392,10 +387,10 @@ def load_assays_for_mechanism_targets(mechanism_id: int, force_refresh: bool = F
                             print(f"   ⚠️  Failed to load assays from ChEMBL for target {target_id}")
                     else:
                         print(f"   ⚠️  Could not find ChEMBL target ID for {gene_symbol or uniprot_id}")
-                        print(f"   🔄 ChEMBL target lookup failed, trying alternative data sources...")
+                        print("   🔄 ChEMBL target lookup failed, trying alternative data sources...")
                 except Exception as e:
                     print(f"   ⚠️  Error loading from ChEMBL: {e}")
-                    print(f"   🔄 ChEMBL API error, trying alternative data sources...")
+                    print("   🔄 ChEMBL API error, trying alternative data sources...")
                     # Continue to try PubChem
             
             # Note: PubChem BioAssay loading would require specific assay IDs

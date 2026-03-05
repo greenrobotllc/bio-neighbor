@@ -1927,10 +1927,6 @@ def list_mechanisms():
     to initialize default mechanisms.
     """
     try:
-        # Ensure database schema is up to date
-        from db_migrations import migrate_database
-        migrate_database()
-
         from cancer_mechanism_loader import get_all_mechanisms
 
         mechanisms = get_all_mechanisms()
@@ -2612,13 +2608,16 @@ def list_workspaces():
         from data_loader import DB_PATH
         
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM workspaces ORDER BY updated_at DESC")
-        rows = cursor.fetchall()
-        
-        columns = [d[0] for d in cursor.description]
-        workspaces = [dict(zip(columns, row)) for row in rows]
-        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM workspaces ORDER BY updated_at DESC")
+            rows = cursor.fetchall()
+
+            columns = [d[0] for d in cursor.description]
+            workspaces = [dict(zip(columns, row)) for row in rows]
+        finally:
+            conn.close()
+
         # Parse JSON fields
         for workspace in workspaces:
             for field in ['filters', 'selections']:
@@ -2627,9 +2626,7 @@ def list_workspaces():
                         workspace[field] = json.loads(workspace[field])
                     except (json.JSONDecodeError, TypeError):
                         workspace[field] = {}
-        
-        conn.close()
-        
+
         return jsonify({
             'success': True,
             'workspaces': workspaces
@@ -2658,18 +2655,20 @@ def get_workspace(workspace_id: int):
         from data_loader import DB_PATH
         
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,))
-        row = cursor.fetchone()
-        conn.close()
-        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,))
+            row = cursor.fetchone()
+            columns = [d[0] for d in cursor.description]
+        finally:
+            conn.close()
+
         if not row:
             return jsonify({
                 'success': False,
                 'error': f'Workspace {workspace_id} not found'
             }), 404
-        
-        columns = [d[0] for d in cursor.description]
+
         workspace = dict(zip(columns, row))
         
         # Parse JSON fields
@@ -2725,20 +2724,22 @@ def create_workspace():
         from data_loader import DB_PATH
         
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO workspaces (mechanism_id, filters, selections, notes)
-            VALUES (?, ?, ?, ?)
-        """, (
-            mechanism_id,
-            json.dumps(filters),
-            json.dumps(selections),
-            notes
-        ))
-        workspace_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO workspaces (mechanism_id, filters, selections, notes)
+                VALUES (?, ?, ?, ?)
+            """, (
+                mechanism_id,
+                json.dumps(filters),
+                json.dumps(selections),
+                notes
+            ))
+            workspace_id = cursor.lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
         return jsonify({
             'success': True,
             'workspace_id': workspace_id
@@ -2888,7 +2889,7 @@ def find_similar_ligands():
             return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
         
         ligand_id = data.get('ligand_id')
-        top_k = data.get('top_k', 10)
+        top_k = min(max(int(data.get('top_k', 10)), 1), 100)
         
         # Use existing similarity search engine
         engine = get_engine()
@@ -2897,10 +2898,12 @@ def find_similar_ligands():
         import sqlite3
         from data_loader import DB_PATH
         conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT smiles FROM ligands WHERE id = ?", (ligand_id,))
-        result = cursor.fetchone()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT smiles FROM ligands WHERE id = ?", (ligand_id,))
+            result = cursor.fetchone()
+        finally:
+            conn.close()
         
         if not result or not result[0]:
             return jsonify({

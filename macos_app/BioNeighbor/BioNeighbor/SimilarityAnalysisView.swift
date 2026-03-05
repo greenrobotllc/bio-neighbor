@@ -288,21 +288,11 @@ struct SimilarityAnalysisView: View {
                 }
                 
                 do {
-                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    
-                    if let success = json?["success"] as? Bool, success,
-                       let similar = json?["similar_ligands"] as? [[String: Any]] {
-                        // Parse similar ligands
-                        var ligands: [Ligand] = []
-                        for item in similar {
-                            if let jsonData = try? JSONSerialization.data(withJSONObject: item),
-                               let ligand = try? JSONDecoder().decode(Ligand.self, from: jsonData) {
-                                ligands.append(ligand)
-                            }
-                        }
+                    let response = try JSONDecoder().decode(SimilarLigandsResponse.self, from: data)
+                    if response.success, let ligands = response.similarLigands {
                         self.similarLigands = ligands
                     } else {
-                        errorMessage = json?["error"] as? String ?? "Failed to find similar ligands"
+                        errorMessage = response.error ?? "Failed to find similar ligands"
                     }
                 } catch {
                     errorMessage = "Failed to decode response: \(error.localizedDescription)"

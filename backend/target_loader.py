@@ -133,18 +133,20 @@ def fetch_iuphar_target(uniprot_id: str) -> Optional[Dict]:
         return None
 
 
-def load_target_from_uniprot(uniprot_id: str, cancer_role: Optional[str] = None, 
+def load_target_from_uniprot(uniprot_id: str, cancer_role: Optional[str] = None,
                              ligand_types: Optional[List[str]] = None,
-                             conn: Optional[sqlite3.Connection] = None) -> Optional[int]:
+                             conn: Optional[sqlite3.Connection] = None,
+                             force_refresh: bool = False) -> Optional[int]:
     """
     Load target from UniProt API into database.
-    
+
     Args:
         uniprot_id: UniProt accession ID
         cancer_role: Optional description of role in cancer
         ligand_types: Optional list of ligand interaction types
         conn: Optional database connection
-        
+        force_refresh: If True, update existing target data from APIs
+
     Returns:
         Target ID if successful, None otherwise
     """
@@ -161,7 +163,7 @@ def load_target_from_uniprot(uniprot_id: str, cancer_role: Optional[str] = None,
         # Check if target already exists
         cursor.execute("SELECT id FROM targets WHERE uniprot_id = ?", (uniprot_id,))
         existing = cursor.fetchone()
-        if existing:
+        if existing and not force_refresh:
             print(f"✅ Target {uniprot_id} already exists (ID: {existing[0]})")
             return existing[0]
         
@@ -183,26 +185,45 @@ def load_target_from_uniprot(uniprot_id: str, cancer_role: Optional[str] = None,
                 else:
                     ligand_types = iuphar_data['ligand_types']
 
-        # Insert target
-        cursor.execute("""
-            INSERT INTO targets (uniprot_id, gene_symbol, protein_name, function,
-                               cellular_location, cancer_role, ligand_types, iuphar_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            uniprot_data['uniprot_id'],
-            uniprot_data.get('gene_symbol'),
-            uniprot_data.get('protein_name'),
-            uniprot_data.get('function'),
-            uniprot_data.get('cellular_location'),
-            cancer_role,
-            json.dumps(ligand_types) if ligand_types else None,
-            iuphar_id
-        ))
-        
-        target_id = cursor.lastrowid
-        conn.commit()
-        print(f"✅ Loaded target {uniprot_id} (ID: {target_id})")
-        return target_id
+        # Insert or update target
+        if existing and force_refresh:
+            target_id = existing[0]
+            cursor.execute("""
+                UPDATE targets SET gene_symbol = ?, protein_name = ?, function = ?,
+                    cellular_location = ?, cancer_role = ?, ligand_types = ?, iuphar_id = ?
+                WHERE id = ?
+            """, (
+                uniprot_data.get('gene_symbol'),
+                uniprot_data.get('protein_name'),
+                uniprot_data.get('function'),
+                uniprot_data.get('cellular_location'),
+                cancer_role,
+                json.dumps(ligand_types) if ligand_types else None,
+                iuphar_id,
+                target_id
+            ))
+            conn.commit()
+            print(f"🔄 Refreshed target {uniprot_id} (ID: {target_id})")
+            return target_id
+        else:
+            cursor.execute("""
+                INSERT INTO targets (uniprot_id, gene_symbol, protein_name, function,
+                                   cellular_location, cancer_role, ligand_types, iuphar_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                uniprot_data['uniprot_id'],
+                uniprot_data.get('gene_symbol'),
+                uniprot_data.get('protein_name'),
+                uniprot_data.get('function'),
+                uniprot_data.get('cellular_location'),
+                cancer_role,
+                json.dumps(ligand_types) if ligand_types else None,
+                iuphar_id
+            ))
+            target_id = cursor.lastrowid
+            conn.commit()
+            print(f"✅ Loaded target {uniprot_id} (ID: {target_id})")
+            return target_id
         
     except Exception as e:
         conn.rollback()
@@ -384,7 +405,8 @@ def load_all_targets_for_mechanism(mechanism_id: int, force_refresh: bool = Fals
                     uniprot_id,
                     cancer_role=cancer_role,
                     ligand_types=ligand_types,
-                    conn=conn
+                    conn=conn,
+                    force_refresh=force_refresh
                 )
                 
                 if target_id:

@@ -260,15 +260,21 @@ struct LigandDetailView: View {
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 isLoadingImage = false
-                
+
+                if let error = error {
+                    print("Failed to load molecule image: \(error.localizedDescription)")
+                    return
+                }
+
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let imageBase64 = json["image"] as? String,
                       let imageData = Data(base64Encoded: imageBase64),
                       let image = NSImage(data: imageData) else {
+                    print("Failed to decode molecule image response")
                     return
                 }
-                
+
                 self.moleculeImage = image
             }
         }.resume()
