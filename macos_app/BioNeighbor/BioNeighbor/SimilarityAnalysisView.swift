@@ -199,12 +199,13 @@ struct SimilarityAnalysisView: View {
     
     private func loadAvailableLigands() {
         isLoadingLigands = true
-        
+        errorMessage = nil
+
         guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/mechanisms/\(mechanism.id)/ligands") else {
             isLoadingLigands = false
             return
         }
-        
+
         URLSession.shared.dataTask(with: url) { data, response, error in
             DispatchQueue.main.async {
                 isLoadingLigands = false
@@ -214,14 +215,22 @@ struct SimilarityAnalysisView: View {
                     return
                 }
 
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    errorMessage = "Server error: HTTP \(statusCode)"
+                    return
+                }
+
                 guard let data = data else {
                     errorMessage = "No data received"
                     return
                 }
 
                 do {
-                    let response = try JSONDecoder().decode(LigandsResponse.self, from: data)
-                    if response.success, let ligands = response.ligands {
+                    let decoded = try JSONDecoder().decode(LigandsResponse.self, from: data)
+                    if decoded.success, let ligands = decoded.ligands {
+                        errorMessage = nil
                         self.availableLigands = ligands
 
                         // Auto-select if selectedLigandId was provided
@@ -230,7 +239,7 @@ struct SimilarityAnalysisView: View {
                             selectedLigand = ligand
                         }
                     } else {
-                        errorMessage = response.error ?? "Failed to load ligands"
+                        errorMessage = decoded.error ?? "Failed to load ligands"
                     }
                 } catch {
                     errorMessage = "Failed to decode ligands: \(error.localizedDescription)"
@@ -260,8 +269,14 @@ struct SimilarityAnalysisView: View {
             "ligand_id": selected.id,
             "top_k": topK
         ]
-        
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            errorMessage = "Failed to encode request"
+            isLoadingSimilar = false
+            return
+        }
         
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {

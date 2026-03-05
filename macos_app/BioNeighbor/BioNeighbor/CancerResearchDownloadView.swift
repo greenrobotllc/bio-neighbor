@@ -179,6 +179,8 @@ struct CancerResearchDownloadView: View {
                         for mechanism in mechanisms {
                             loadDataStatus(for: mechanism.id)
                         }
+                    } else {
+                        errorMessage = response.error ?? "Failed to load mechanisms"
                     }
                 } catch {
                     errorMessage = "Failed to decode response: \(error.localizedDescription)"
@@ -395,12 +397,17 @@ struct CancerResearchDownloadView: View {
     }
     
     private func loadAllData() {
+        guard !isLoading else { return }
         // Load mechanisms sequentially to avoid flooding the server
         let mechanismIds = mechanisms.map { $0.id }
         guard !mechanismIds.isEmpty else { return }
+        isLoading = true
 
         func loadNext(index: Int) {
-            guard index < mechanismIds.count else { return }
+            guard index < mechanismIds.count else {
+                isLoading = false
+                return
+            }
             let mechanismId = mechanismIds[index]
             loadingMechanismIds.insert(mechanismId)
             errorMessage = nil

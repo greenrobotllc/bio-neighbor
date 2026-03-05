@@ -1936,7 +1936,7 @@ def list_mechanisms():
             'mechanisms': mechanisms,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2000,7 +2000,7 @@ def initialize_mechanisms():
                     'outcomes_loaded': len(outcomes),
                     'cancer_mappings_loaded': len(cancer_mappings)
                 }
-            except Exception as e:
+            except Exception:
                 data_loaded[f'mechanism_{mechanism_id}'] = {
                     'error': 'Failed to load data counts'
                 }
@@ -2011,7 +2011,7 @@ def initialize_mechanisms():
             'mechanism_ids': mechanism_ids,
             'data_loaded': data_loaded
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2059,7 +2059,7 @@ def load_mechanism_data_endpoint(mechanism_id: int):
             'success': True,
             **result
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2093,7 +2093,7 @@ def get_mechanism(mechanism_id: int):
             'mechanism': mechanism,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2121,7 +2121,7 @@ def get_mechanism_targets(mechanism_id: int):
             'targets': targets,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2155,7 +2155,7 @@ def get_target(target_id: int):
             'target': target,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2183,7 +2183,7 @@ def get_target_ligands(target_id: int):
             'ligands': ligands,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2219,7 +2219,7 @@ def get_mechanism_ligands(mechanism_id: int):
             'count': ligand_count,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2255,7 +2255,7 @@ def get_mechanism_drug_outcomes(mechanism_id: int):
             'count': outcome_count,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2291,7 +2291,7 @@ def get_mechanism_assays(mechanism_id: int):
             'count': assay_count,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2399,7 +2399,7 @@ def get_mechanism_data_counts(mechanism_id: int):
                 'total_outcomes_in_db': total_outcomes
             }
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2438,7 +2438,7 @@ def check_data_sources():
             }
         else:
             results['chembl'] = {'available': False, 'error': 'Package not installed'}
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking ChEMBL availability")
         results['chembl'] = {'available': False, 'error': 'Check failed'}
 
@@ -2456,12 +2456,12 @@ def check_data_sources():
                     'available': compound is not None and len(compound) > 0,
                     'response_time_ms': round(response_time, 0)
                 }
-            except Exception as e:
+            except Exception:
                 logger.exception("Error checking PubChem availability")
                 results['pubchem'] = {'available': False, 'error': 'Check failed'}
         else:
             results['pubchem'] = {'available': False, 'error': 'Package not installed'}
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking PubChem availability")
         results['pubchem'] = {'available': False, 'error': 'Check failed'}
     
@@ -2478,7 +2478,7 @@ def check_data_sources():
     except requests.exceptions.RequestException as e:
         logger.exception("Error checking BindingDB availability")
         results['bindingdb'] = {'available': False, 'error': 'Check failed'}
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking BindingDB availability")
         results['bindingdb'] = {'available': False, 'error': 'Check failed'}
 
@@ -2495,7 +2495,7 @@ def check_data_sources():
     except requests.exceptions.RequestException as e:
         logger.exception("Error checking IUPHAR availability")
         results['iuphar'] = {'available': False, 'error': 'Check failed'}
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking IUPHAR availability")
         results['iuphar'] = {'available': False, 'error': 'Check failed'}
     
@@ -2526,7 +2526,7 @@ def list_cancers():
             'cancers': cancers,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2555,7 +2555,7 @@ def get_cancer_mechanisms(cancer_type: str):
             'mechanisms': mechanisms,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2584,7 +2584,7 @@ def get_mechanism_cancers(mechanism_id: int):
             'cancers': mappings,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2631,7 +2631,7 @@ def list_workspaces():
             'success': True,
             'workspaces': workspaces
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2683,7 +2683,7 @@ def get_workspace(workspace_id: int):
             'success': True,
             'workspace': workspace
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2744,7 +2744,7 @@ def create_workspace():
             'success': True,
             'workspace_id': workspace_id
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2819,7 +2819,7 @@ def update_workspace(workspace_id: int):
         return jsonify({
             'success': True
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2858,7 +2858,7 @@ def delete_workspace(workspace_id: int):
         return jsonify({
             'success': True
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
@@ -2919,7 +2919,7 @@ def find_similar_ligands():
             'similar_ligands': results,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
-    except Exception as e:
+    except Exception:
         logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,

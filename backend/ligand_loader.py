@@ -808,7 +808,7 @@ def load_ligands_for_mechanism_targets(mechanism_id: int, force_refresh: bool = 
                     import json
                     try:
                         ligand_types = json.loads(ligand_types)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         ligand_types = []
                 if 'antagonist' in ligand_types:
                     interaction_type = 'antagonist'

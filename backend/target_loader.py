@@ -94,18 +94,22 @@ def fetch_iuphar_target(uniprot_id: str) -> Optional[Dict]:
         Dictionary with IUPHAR data or None
     """
     try:
-        # IUPHAR API endpoint for targets by UniProt ID
+        # IUPHAR API doesn't support query params; fetch all targets and filter
         url = f"{IUPHAR_API_BASE}/targets.json"
-        params = {'uniprot': uniprot_id}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        
+
         if not data or len(data) == 0:
             return None
-        
-        # Get first matching target
-        target_data = data[0]
+
+        # Find target matching requested UniProt ID
+        target_data = next(
+            (t for t in data if (t.get('uniprot') or t.get('uniprotId')) == uniprot_id),
+            None
+        )
+        if not target_data:
+            return None
         
         iuphar_info = {
             'ligand_types': [],
