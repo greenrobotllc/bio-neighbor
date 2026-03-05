@@ -111,34 +111,22 @@ struct TargetsView: View {
     private func loadTargets() {
         isLoading = true
         errorMessage = nil
-        
-        guard let url = URL(string: "http://127.0.0.1:5000/cancer-research/mechanisms/\(mechanism.id)/targets") else {
-            errorMessage = "Invalid URL"
-            isLoading = false
-            return
-        }
-        
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            DispatchQueue.main.async {
-                isLoading = false
-                
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                    return
+
+        Task {
+            do {
+                let fetchedTargets = try await BackendService.shared.fetchTargets(for: mechanism.id)
+                await MainActor.run {
+                    self.targets = fetchedTargets
+                    self.filteredTargets = fetchedTargets
+                    self.isLoading = false
                 }
-                
-                guard let data = data,
-                      let response = try? JSONDecoder().decode(TargetsResponse.self, from: data),
-                      response.success,
-                      let targets = response.targets else {
-                    errorMessage = "Failed to decode response"
-                    return
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
                 }
-                
-                self.targets = targets
-                self.filteredTargets = targets
             }
-        }.resume()
+        }
     }
 }
 

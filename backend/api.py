@@ -4,12 +4,15 @@ Provides JSON-based API via HTTP (Flask) or stdin/stdout.
 """
 
 import json
+import logging
 import sys
 import os
 import re
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
+logger = logging.getLogger(__name__)
 
 from search_engine import SearchEngine, get_search_engine
 from molecule_renderer import render_molecule_to_base64, generate_3d_coordinates
@@ -1942,9 +1945,7 @@ def list_mechanisms():
                 else:
                     print("⚠️  Failed to initialize mechanisms")
             except Exception as init_error:
-                print(f"⚠️  Error initializing mechanisms: {init_error}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("Error initializing mechanisms")
         
         return jsonify({
             'success': True,
@@ -1952,8 +1953,7 @@ def list_mechanisms():
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2028,8 +2028,7 @@ def initialize_mechanisms():
             'data_loaded': data_loaded
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2076,8 +2075,7 @@ def load_mechanism_data_endpoint(mechanism_id: int):
             **result
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2111,8 +2109,7 @@ def get_mechanism(mechanism_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2140,8 +2137,7 @@ def get_mechanism_targets(mechanism_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2175,8 +2171,7 @@ def get_target(target_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2204,8 +2199,7 @@ def get_target_ligands(target_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2241,9 +2235,7 @@ def get_mechanism_ligands(mechanism_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        print(f"❌ Error in get_mechanism_ligands({mechanism_id}): {e}")
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2279,9 +2271,7 @@ def get_mechanism_drug_outcomes(mechanism_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        print(f"❌ Error in get_mechanism_drug_outcomes({mechanism_id}): {e}")
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2317,9 +2307,7 @@ def get_mechanism_assays(mechanism_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        print(f"❌ Error in get_mechanism_assays({mechanism_id}): {e}")
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2426,8 +2414,7 @@ def get_mechanism_data_counts(mechanism_id: int):
             }
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2547,8 +2534,7 @@ def list_cancers():
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2577,8 +2563,7 @@ def get_cancer_mechanisms(cancer_type: str):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2607,8 +2592,7 @@ def get_mechanism_cancers(mechanism_id: int):
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2654,8 +2638,7 @@ def list_workspaces():
             'workspaces': workspaces
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2705,8 +2688,7 @@ def get_workspace(workspace_id: int):
             'workspace': workspace
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2765,8 +2747,7 @@ def create_workspace():
             'workspace_id': workspace_id
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2840,8 +2821,7 @@ def update_workspace(workspace_id: int):
             'success': True
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2880,8 +2860,7 @@ def delete_workspace(workspace_id: int):
             'success': True
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
@@ -2940,8 +2919,7 @@ def find_similar_ligands():
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment'
         })
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Cancer research endpoint error")
         return jsonify({
             'success': False,
             'error': 'An internal error occurred'
