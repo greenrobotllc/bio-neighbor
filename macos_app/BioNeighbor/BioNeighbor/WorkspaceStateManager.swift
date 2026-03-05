@@ -52,32 +52,14 @@ class WorkspaceStateManager: ObservableObject {
     
     @MainActor
     func createWorkspace(for mechanismId: Int) async {
-        guard let url = URL(string: baseURL) else { return }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Convert filters and selections to JSON-serializable format
-        let filtersJSON = filters.mapValues { $0 as Any }
-        let selectionsJSON = selections.mapValues { $0 as Any }
-        
-        let body: [String: Any] = [
-            "mechanism_id": mechanismId,
-            "filters": filtersJSON,
-            "selections": selectionsJSON,
-            "notes": notes
-        ]
-        
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
-            let response = try JSONDecoder().decode(WorkspaceCreateResponse.self, from: data)
-            
-            if response.success, let workspaceId = response.workspaceId {
-                currentWorkspaceId = workspaceId
-            }
+            let workspaceId = try await BackendService.shared.createWorkspace(
+                mechanismId: mechanismId,
+                filters: filters,
+                selections: selections,
+                notes: notes
+            )
+            currentWorkspaceId = workspaceId
         } catch {
             print("Error creating workspace: \(error)")
         }
@@ -97,24 +79,15 @@ class WorkspaceStateManager: ObservableObject {
     
     @MainActor
     func saveWorkspace(workspaceId: Int) async {
-        guard let url = URL(string: "\(baseURL)/\(workspaceId)") else { return }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Convert filters and selections to JSON-serializable format
-        let filtersJSON = filters.mapValues { $0 as Any }
-        let selectionsJSON = selections.mapValues { $0 as Any }
-        
-        let body: [String: Any] = [
-            "filters": filtersJSON,
-            "selections": selectionsJSON,
-            "notes": notes
-        ]
-        
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        _ = try? await URLSession.shared.data(for: request)
+        do {
+            try await BackendService.shared.updateWorkspace(
+                id: workspaceId,
+                filters: filters,
+                selections: selections,
+                notes: notes
+            )
+        } catch {
+            print("Error saving workspace: \(error)")
+        }
     }
 }
