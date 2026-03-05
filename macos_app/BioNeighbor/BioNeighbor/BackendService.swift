@@ -1449,5 +1449,236 @@ class BackendService: ObservableObject {
         
         return nil
     }
+    
+    // MARK: - Cancer Research API Methods
+    
+    func fetchMechanisms() async throws -> [Mechanism] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch mechanisms")
+        }
+        
+        let mechanismsResponse = try JSONDecoder().decode(MechanismsResponse.self, from: data)
+        guard mechanismsResponse.success, let mechanisms = mechanismsResponse.mechanisms else {
+            throw BackendError.unknownError(mechanismsResponse.error ?? "Failed to fetch mechanisms")
+        }
+
+        return mechanisms
+    }
+
+    func fetchMechanism(id: Int) async throws -> Mechanism {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(id)") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch mechanism")
+        }
+
+        let mechanismResponse = try JSONDecoder().decode(MechanismResponse.self, from: data)
+        guard mechanismResponse.success, let mechanism = mechanismResponse.mechanism else {
+            throw BackendError.unknownError(mechanismResponse.error ?? "Failed to fetch mechanism")
+        }
+
+        return mechanism
+    }
+
+    func fetchTargets(for mechanismId: Int) async throws -> [Target] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/targets") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch targets")
+        }
+
+        let targetsResponse = try JSONDecoder().decode(TargetsResponse.self, from: data)
+        guard targetsResponse.success, let targets = targetsResponse.targets else {
+            throw BackendError.unknownError(targetsResponse.error ?? "Failed to fetch targets")
+        }
+
+        return targets
+    }
+
+    func fetchLigands(for mechanismId: Int) async throws -> [Ligand] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/ligands") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch ligands")
+        }
+
+        let ligandsResponse = try JSONDecoder().decode(LigandsResponse.self, from: data)
+        guard ligandsResponse.success, let ligands = ligandsResponse.ligands else {
+            throw BackendError.unknownError(ligandsResponse.error ?? "Failed to fetch ligands")
+        }
+
+        return ligands
+    }
+
+    func fetchDrugOutcomes(for mechanismId: Int) async throws -> [DrugOutcome] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/drug-outcomes") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch drug outcomes")
+        }
+
+        let outcomesResponse = try JSONDecoder().decode(DrugOutcomesResponse.self, from: data)
+        guard outcomesResponse.success, let outcomes = outcomesResponse.outcomes else {
+            throw BackendError.unknownError(outcomesResponse.error ?? "Failed to fetch drug outcomes")
+        }
+
+        return outcomes
+    }
+
+    func fetchAssays(for mechanismId: Int) async throws -> [Assay] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/mechanisms/\(mechanismId)/assays") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch assays")
+        }
+
+        let assaysResponse = try JSONDecoder().decode(AssaysResponse.self, from: data)
+        guard assaysResponse.success, let assays = assaysResponse.assays else {
+            throw BackendError.unknownError(assaysResponse.error ?? "Failed to fetch assays")
+        }
+
+        return assays
+    }
+    
+    func fetchCancers() async throws -> [String] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/cancers") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch cancers")
+        }
+
+        let cancersResponse = try JSONDecoder().decode(CancersResponse.self, from: data)
+        guard cancersResponse.success, let cancers = cancersResponse.cancers else {
+            throw BackendError.unknownError(cancersResponse.error ?? "Failed to fetch cancers")
+        }
+
+        return cancers
+    }
+    
+    func listWorkspaces() async throws -> [Workspace] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/workspaces") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to list workspaces")
+        }
+
+        let workspacesResponse = try JSONDecoder().decode(WorkspacesResponse.self, from: data)
+        guard workspacesResponse.success else {
+            throw BackendError.unknownError(workspacesResponse.error ?? "Failed to list workspaces")
+        }
+
+        return workspacesResponse.workspaces ?? []
+    }
+
+    func createWorkspace(mechanismId: Int, filters: [String: Any] = [:], selections: [String: Any] = [:], notes: String = "") async throws -> Int {
+        guard let url = URL(string: "\(baseURL)/cancer-research/workspaces") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "mechanism_id": mechanismId,
+            "filters": filters,
+            "selections": selections,
+            "notes": notes
+        ]
+
+        let bodyData: Data
+        do {
+            bodyData = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw BackendError.unknownError("Failed to encode workspace data")
+        }
+        request.httpBody = bodyData
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to create workspace")
+        }
+
+        let workspaceResponse = try JSONDecoder().decode(WorkspaceCreateResponse.self, from: data)
+        guard workspaceResponse.success, let workspaceId = workspaceResponse.workspaceId else {
+            throw BackendError.unknownError(workspaceResponse.error ?? "Failed to create workspace")
+        }
+
+        return workspaceId
+    }
+    
+    func updateWorkspace(id: Int, filters: [String: Any]? = nil, selections: [String: Any]? = nil, notes: String? = nil) async throws {
+        guard let url = URL(string: "\(baseURL)/cancer-research/workspaces/\(id)") else {
+            throw BackendError.backendNotAvailable
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        var body: [String: Any] = [:]
+        if let filters = filters { body["filters"] = filters }
+        if let selections = selections { body["selections"] = selections }
+        if let notes = notes { body["notes"] = notes }
+
+        let bodyData: Data
+        do {
+            bodyData = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw BackendError.unknownError("Failed to encode workspace update data")
+        }
+        request.httpBody = bodyData
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to update workspace")
+        }
+    }
 }
 

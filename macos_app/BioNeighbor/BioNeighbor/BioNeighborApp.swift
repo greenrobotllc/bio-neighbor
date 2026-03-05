@@ -15,6 +15,9 @@ struct BioNeighborApp: App {
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 1200, height: 800)
+        .commands {
+            CommandGroup(replacing: .windowSize) {}
+        }
     }
 }
 
@@ -57,6 +60,13 @@ struct ContentTabView: View {
                 }
                 .tag(4)
                 .accessibilityIdentifier("advancedSearchTab")
+            
+            CancerResearchView()
+                .tabItem {
+                    Label("Cancer Research", systemImage: "flask")
+                }
+                .tag(5)
+                .accessibilityIdentifier("cancerResearchTab")
         }
     }
 }

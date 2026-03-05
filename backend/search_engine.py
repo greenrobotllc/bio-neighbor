@@ -1157,6 +1157,146 @@ class SearchEngine:
             return []
         finally:
             conn.close()
+    
+    def find_similar_ligands(self, ligand_smiles: str, mechanism_id: Optional[int] = None, 
+                            top_k: int = 10) -> List[Dict]:
+        """
+        Find similar ligands, optionally filtered by mechanism.
+        
+        Args:
+            ligand_smiles: SMILES string of the query ligand
+            mechanism_id: Optional mechanism ID to filter results
+            top_k: Number of results to return
+            
+        Returns:
+            List of similar ligand dictionaries
+        """
+        # First find similar molecules using existing search
+        similar_molecules = self.search_similar(ligand_smiles, top_k=top_k * 2)  # Get more to filter
+        
+        if not mechanism_id:
+            return similar_molecules[:top_k]
+        
+        # Filter by mechanism - find ligands associated with mechanism targets
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Get molecule indices from similar molecules
+            molecule_indices = [mol['index'] for mol in similar_molecules]
+            
+            if not molecule_indices:
+                return []
+            
+            # Find ligands in this mechanism that match these molecules
+            placeholders = ','.join(['?'] * len(molecule_indices))
+            cursor.execute(f"""
+                SELECT DISTINCT l.*, t.gene_symbol, t.protein_name
+                FROM ligands l
+                JOIN targets t ON l.target_id = t.id
+                JOIN mechanism_targets mt ON t.id = mt.target_id
+                WHERE mt.mechanism_id = ? AND l.molecule_index IN ({placeholders})
+                LIMIT ?
+            """, [mechanism_id] + molecule_indices + [top_k])
+            
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description]
+            
+            results = []
+            for row in rows:
+                ligand = dict(zip(columns, row))
+                # Find similarity score from original search
+                for mol in similar_molecules:
+                    if mol['index'] == ligand.get('molecule_index'):
+                        ligand['similarity'] = mol.get('similarity', 0.0)
+                        ligand['similarity_score'] = mol.get('similarity_score', 0.0)
+                        break
+                results.append(ligand)
+            
+            return results
+            
+        except sqlite3.OperationalError:
+            # Table might not exist yet
+            return similar_molecules[:top_k]
+        finally:
+            conn.close()
+    
+    def find_similar_targets(self, target_id: int, top_k: int = 10) -> List[Dict]:
+        """
+        Find similar targets based on shared ligands.
+        
+        Args:
+            target_id: Target ID
+            top_k: Number of results to return
+            
+        Returns:
+            List of similar target dictionaries with shared ligand count
+        """
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Find targets that share ligands with the query target
+            cursor.execute("""
+                SELECT t2.id, t2.gene_symbol, t2.protein_name, COUNT(DISTINCT l1.molecule_index) as shared_ligands
+                FROM ligands l1
+                JOIN ligands l2 ON l1.molecule_index = l2.molecule_index
+                JOIN targets t1 ON l1.target_id = t1.id
+                JOIN targets t2 ON l2.target_id = t2.id
+                WHERE t1.id = ? AND t2.id != ?
+                GROUP BY t2.id, t2.gene_symbol, t2.protein_name
+                ORDER BY shared_ligands DESC
+                LIMIT ?
+            """, (target_id, target_id, top_k))
+            
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description]
+            
+            results = [dict(zip(columns, row)) for row in rows]
+            return results
+            
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+    
+    def find_similar_mechanisms(self, mechanism_id: int, top_k: int = 5) -> List[Dict]:
+        """
+        Find similar mechanisms based on shared targets and ligands.
+        
+        Args:
+            mechanism_id: Mechanism ID
+            top_k: Number of results to return
+            
+        Returns:
+            List of similar mechanism dictionaries
+        """
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Find mechanisms that share targets
+            cursor.execute("""
+                SELECT m2.id, m2.name, COUNT(DISTINCT mt2.target_id) as shared_targets
+                FROM mechanism_targets mt1
+                JOIN mechanism_targets mt2 ON mt1.target_id = mt2.target_id
+                JOIN mechanisms m2 ON mt2.mechanism_id = m2.id
+                WHERE mt1.mechanism_id = ? AND m2.id != ?
+                GROUP BY m2.id, m2.name
+                ORDER BY shared_targets DESC
+                LIMIT ?
+            """, (mechanism_id, mechanism_id, top_k))
+            
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description]
+            
+            results = [dict(zip(columns, row)) for row in rows]
+            return results
+            
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
 
 
 # Global search engine instance (lazy loading)

@@ -43,6 +43,38 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None
     ),
+    4: (
+        "Add cancer mechanism research workspace tables (mechanisms, targets, ligands, assays, drug_outcomes, cancer_mechanisms, workspaces)",
+        [
+            # All new tables will be created via initialize_schema() using get_create_table_sql()
+            # This migration is handled by schema initialization
+        ],
+        None
+    ),
+    5: (
+        "Add unique constraint to mechanism_targets table and remove duplicate entries",
+        [
+            # Remove duplicate mechanism_targets entries (keep first occurrence)
+            """
+            DELETE FROM mechanism_targets
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM mechanism_targets
+                GROUP BY mechanism_id, target_id
+            )
+            """,
+            # Add unique index to prevent future duplicates
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_mechanism_targets_unique ON mechanism_targets(mechanism_id, target_id)",
+        ],
+        None  # No rollback - removing duplicates is safe
+    ),
+    6: (
+        "Add iuphar_id column to targets table",
+        [
+            "ALTER TABLE targets ADD COLUMN iuphar_id INTEGER",
+        ],
+        None
+    ),
 }
 
 
@@ -179,6 +211,133 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         cursor.execute(index_sql)
                     except sqlite3.OperationalError:
                         pass  # Index may already exist
+                conn.commit()
+                set_schema_version(conn, version)
+                print(f"   ✅ Migration {version} applied successfully")
+                continue
+            
+            # Special handling for migration 4: create new cancer research tables
+            # Uses frozen DDL so the migration is deterministic and independent of
+            # the current db_schema.py definitions.
+            if version == 4:
+                migration_4_ddl = [
+                    """CREATE TABLE IF NOT EXISTS mechanisms (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        description TEXT,
+                        biological_summary TEXT,
+                        tumor_microenvironment_role TEXT,
+                        immune_effects TEXT,
+                        data_sources TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS targets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        uniprot_id TEXT,
+                        gene_symbol TEXT,
+                        protein_name TEXT,
+                        function TEXT,
+                        cellular_location TEXT,
+                        cancer_role TEXT,
+                        ligand_types TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS mechanism_targets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mechanism_id INTEGER NOT NULL,
+                        target_id INTEGER NOT NULL,
+                        role_in_mechanism TEXT,
+                        FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id),
+                        FOREIGN KEY (target_id) REFERENCES targets(id)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS ligands (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT,
+                        smiles TEXT,
+                        chembl_id TEXT,
+                        pubchem_cid TEXT,
+                        interaction_type TEXT,
+                        target_id INTEGER,
+                        molecule_index INTEGER,
+                        FOREIGN KEY (target_id) REFERENCES targets(id),
+                        FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS assays (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        assay_type TEXT,
+                        target_id INTEGER,
+                        readout TEXT,
+                        limitations TEXT,
+                        data_source TEXT,
+                        pubchem_assay_id TEXT,
+                        chembl_assay_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (target_id) REFERENCES targets(id)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS drug_outcomes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        drug_id INTEGER,
+                        molecule_index INTEGER,
+                        outcome_type TEXT NOT NULL,
+                        context TEXT,
+                        evidence_level TEXT,
+                        notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS cancer_mechanisms (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cancer_type TEXT NOT NULL,
+                        mechanism_id INTEGER NOT NULL,
+                        activity_level TEXT,
+                        evidence_source TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS workspaces (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mechanism_id INTEGER,
+                        user_id TEXT,
+                        filters TEXT,
+                        selections TEXT,
+                        notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)
+                    )""",
+                ]
+                migration_4_indexes = [
+                    "CREATE INDEX IF NOT EXISTS idx_mechanism_name ON mechanisms(name)",
+                    "CREATE INDEX IF NOT EXISTS idx_target_uniprot_id ON targets(uniprot_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_target_gene_symbol ON targets(gene_symbol)",
+                    "CREATE INDEX IF NOT EXISTS idx_mechanism_targets_mechanism ON mechanism_targets(mechanism_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_mechanism_targets_target ON mechanism_targets(target_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_ligand_chembl_id ON ligands(chembl_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_ligand_pubchem_cid ON ligands(pubchem_cid)",
+                    "CREATE INDEX IF NOT EXISTS idx_ligand_target_id ON ligands(target_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_ligand_molecule_index ON ligands(molecule_index)",
+                    "CREATE INDEX IF NOT EXISTS idx_assay_target_id ON assays(target_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_drug_outcome_molecule ON drug_outcomes(molecule_index)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_mechanism_type ON cancer_mechanisms(cancer_type)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_mechanism_id ON cancer_mechanisms(mechanism_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_workspace_mechanism ON workspaces(mechanism_id)",
+                ]
+                for ddl in migration_4_ddl:
+                    try:
+                        cursor.execute(ddl)
+                    except sqlite3.OperationalError as e:
+                        if 'already exists' in str(e).lower():
+                            print(f"   ⚠️  Table already exists, skipping")
+                        else:
+                            raise
+                for index_sql in migration_4_indexes:
+                    try:
+                        cursor.execute(index_sql)
+                    except sqlite3.OperationalError as e:
+                        if 'already exists' in str(e).lower():
+                            pass
+                        else:
+                            raise
                 conn.commit()
                 set_schema_version(conn, version)
                 print(f"   ✅ Migration {version} applied successfully")

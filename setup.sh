@@ -8,7 +8,7 @@ echo "🚀 Setting up BioNeighbor..."
 
 # Check Python version
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed. Please install Python 3.9+ first."
+    echo "❌ Python 3 is not installed. Please install Python 3.10+ first."
     exit 1
 fi
 

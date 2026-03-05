@@ -272,6 +272,9 @@ def download_pubchem_compounds(max_molecules: Optional[int] = None, output_file:
         
         print(f"✅ Found {len(sdf_files)} SDF files")
         print(f"   Note: Each file contains thousands of compounds")
+        print(f"   ⚠️  File Size: Each SDF file is 300-500 MB (compressed)")
+        print(f"   ⚠️  Compounds per file: ~500,000 compounds per file")
+        print(f"   💾 Disk Space: Ensure you have 2-3 GB free space available")
         print(f"   We'll download files until we have {max_molecules} molecules")
         
         # Determine download strategy
@@ -281,7 +284,9 @@ def download_pubchem_compounds(max_molecules: Optional[int] = None, output_file:
             print(f"\n📊 Download plan:")
             print(f"   - Will download 1 complete SDF file")
             print(f"   - All molecules from the file will be imported")
-            print(f"   - Each SDF file is typically 300-500 MB and contains ~500,000 compounds")
+            print(f"   - File size: 300-500 MB (compressed)")
+            print(f"   - Compounds: ~500,000 compounds per file")
+            print(f"   - Disk space needed: ~1 GB for download + processing")
             print(f"   ⚠️  Downloads happen in chunks - one large file at a time")
         else:
             # Calculate how many files we need (estimate: ~5000 compounds per file)
@@ -294,7 +299,9 @@ def download_pubchem_compounds(max_molecules: Optional[int] = None, output_file:
             
             print(f"\n📊 Download plan:")
             print(f"   - Will download up to {files_to_download} SDF file(s)")
+            print(f"   - File size per file: 300-500 MB (compressed)")
             print(f"   - Estimated compounds per file: ~{estimated_compounds_per_file}")
+            print(f"   - Total disk space needed: ~{files_to_download * 500} MB - {files_to_download * 1000} MB")
             if max_molecules:
                 print(f"   - Target: {max_molecules} molecules")
             else:

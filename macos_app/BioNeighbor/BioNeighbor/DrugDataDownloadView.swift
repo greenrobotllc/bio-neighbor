@@ -12,6 +12,7 @@ enum DownloadSection: String, CaseIterable {
     case molecules = "Molecules"
     case drugs = "Drugs"
     case diseases = "Diseases"
+    case cancerResearch = "Cancer Research"
     case history = "History"
     
     var icon: String {
@@ -20,6 +21,7 @@ enum DownloadSection: String, CaseIterable {
         case .molecules: return "molecule"
         case .drugs: return "pills"
         case .diseases: return "cross.case"
+        case .cancerResearch: return "flask"
         case .history: return "clock"
         }
     }
@@ -64,6 +66,8 @@ struct DrugDataDownloadView: View {
                     DrugsDownloadViewRx()
                 case .diseases:
                     DiseasesDownloadViewRx()
+                case .cancerResearch:
+                    CancerResearchDownloadView()
                 case .history:
                     DownloadHistoryView(history: $downloadHistory)
                 }
