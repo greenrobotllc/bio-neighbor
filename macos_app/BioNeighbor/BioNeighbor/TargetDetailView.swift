@@ -220,9 +220,8 @@ struct TargetDetailView: View {
                                 }
                             }
 
-                            if let geneSymbol = target.geneSymbol,
-                               let encodedSymbol = geneSymbol.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                               let url = URL(string: "https://www.guidetopharmacology.org/GRAC/DatabaseSearchForward?searchString=\(encodedSymbol)&searchCategories=target") {
+                            if let iupharId = target.iupharId,
+                               let url = URL(string: "https://www.guidetopharmacology.org/GRAC/ObjectDisplayForward?objectId=\(iupharId)") {
                                 Link(destination: url) {
                                     Label("IUPHAR", systemImage: "link")
                                 }

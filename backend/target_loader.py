@@ -110,7 +110,11 @@ def fetch_iuphar_target(uniprot_id: str) -> Optional[Dict]:
         iuphar_info = {
             'ligand_types': [],
         }
-        
+
+        # Extract IUPHAR target ID
+        if 'targetId' in target_data:
+            iuphar_info['iuphar_id'] = target_data['targetId']
+
         # Extract ligand types if available
         if 'ligands' in target_data:
             ligand_types = set()
@@ -118,7 +122,7 @@ def fetch_iuphar_target(uniprot_id: str) -> Optional[Dict]:
                 if 'type' in ligand:
                     ligand_types.add(ligand['type'].lower())
             iuphar_info['ligand_types'] = list(ligand_types)
-        
+
         return iuphar_info
         
     except requests.exceptions.RequestException as e:
@@ -169,18 +173,21 @@ def load_target_from_uniprot(uniprot_id: str, cancer_role: Optional[str] = None,
             return None
         
         # Fetch from IUPHAR if available
+        iuphar_id = None
         iuphar_data = fetch_iuphar_target(uniprot_id)
-        if iuphar_data and iuphar_data.get('ligand_types'):
-            if ligand_types:
-                ligand_types = list(set(ligand_types + iuphar_data['ligand_types']))
-            else:
-                ligand_types = iuphar_data['ligand_types']
-        
+        if iuphar_data:
+            iuphar_id = iuphar_data.get('iuphar_id')
+            if iuphar_data.get('ligand_types'):
+                if ligand_types:
+                    ligand_types = list(set(ligand_types + iuphar_data['ligand_types']))
+                else:
+                    ligand_types = iuphar_data['ligand_types']
+
         # Insert target
         cursor.execute("""
             INSERT INTO targets (uniprot_id, gene_symbol, protein_name, function,
-                               cellular_location, cancer_role, ligand_types)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                               cellular_location, cancer_role, ligand_types, iuphar_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             uniprot_data['uniprot_id'],
             uniprot_data.get('gene_symbol'),
@@ -188,7 +195,8 @@ def load_target_from_uniprot(uniprot_id: str, cancer_role: Optional[str] = None,
             uniprot_data.get('function'),
             uniprot_data.get('cellular_location'),
             cancer_role,
-            json.dumps(ligand_types) if ligand_types else None
+            json.dumps(ligand_types) if ligand_types else None,
+            iuphar_id
         ))
         
         target_id = cursor.lastrowid

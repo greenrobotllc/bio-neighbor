@@ -42,8 +42,9 @@ struct Target: Codable, Identifiable, Hashable {
     let cellularLocation: String?
     let cancerRole: String?
     let ligandTypes: [String]?
+    let iupharId: Int?
     let roleInMechanism: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case uniprotId = "uniprot_id"
@@ -53,6 +54,7 @@ struct Target: Codable, Identifiable, Hashable {
         case cellularLocation = "cellular_location"
         case cancerRole = "cancer_role"
         case ligandTypes = "ligand_types"
+        case iupharId = "iuphar_id"
         case roleInMechanism = "role_in_mechanism"
     }
 }

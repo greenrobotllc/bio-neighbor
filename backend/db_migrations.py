@@ -68,6 +68,13 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None  # No rollback - removing duplicates is safe
     ),
+    6: (
+        "Add iuphar_id column to targets table",
+        [
+            "ALTER TABLE targets ADD COLUMN iuphar_id INTEGER",
+        ],
+        None
+    ),
 }
 
 

@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -137,6 +137,7 @@ SCHEMA: Dict[str, Dict] = {
             ('cellular_location', 'TEXT'),
             ('cancer_role', 'TEXT'),
             ('ligand_types', 'TEXT'),  # JSON array
+            ('iuphar_id', 'INTEGER'),  # IUPHAR Guide to Pharmacology target ID
             ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
         ],
         'indexes': [
