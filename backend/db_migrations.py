@@ -75,6 +75,14 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None
     ),
+    7: (
+        "Add cancer_types, cancer_subtypes, cancer_subtype_drugs tables and seed taxonomy",
+        [
+            # Handled by frozen DDL block in apply_migration() so the migration
+            # remains deterministic regardless of future db_schema.py edits.
+        ],
+        None
+    ),
 }
 
 
@@ -342,7 +350,98 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                 set_schema_version(conn, version)
                 print(f"   ✅ Migration {version} applied successfully")
                 continue
-            
+
+            # Special handling for migration 7: cancer-type taxonomy + per-subtype
+            # drug cache. Frozen DDL keeps the migration deterministic.
+            if version == 7:
+                migration_7_ddl = [
+                    """CREATE TABLE IF NOT EXISTS cancer_types (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        display_name TEXT,
+                        category TEXT,
+                        description TEXT,
+                        mesh_id TEXT,
+                        icon TEXT,
+                        sort_order INTEGER DEFAULT 100,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS cancer_subtypes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cancer_type_id INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        short_name TEXT,
+                        description TEXT,
+                        mesh_id TEXT,
+                        efo_id TEXT,
+                        chembl_indication_terms TEXT,
+                        markers TEXT,
+                        prevalence_note TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (cancer_type_id) REFERENCES cancer_types(id)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS cancer_subtype_drugs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        subtype_id INTEGER NOT NULL,
+                        drug_id INTEGER,
+                        ligand_id INTEGER,
+                        molecule_index INTEGER,
+                        chembl_id TEXT,
+                        drug_name TEXT,
+                        max_phase INTEGER,
+                        source TEXT,
+                        source_count INTEGER DEFAULT 1,
+                        trial_count INTEGER,
+                        rank_score REAL,
+                        evidence TEXT,
+                        cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (subtype_id) REFERENCES cancer_subtypes(id),
+                        FOREIGN KEY (drug_id) REFERENCES drugs(id),
+                        FOREIGN KEY (ligand_id) REFERENCES ligands(id),
+                        FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)
+                    )""",
+                ]
+                migration_7_indexes = [
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_type_name ON cancer_types(name)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_type_sort ON cancer_types(sort_order)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_type ON cancer_subtypes(cancer_type_id)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cancer_subtype_unique ON cancer_subtypes(cancer_type_id, name)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_subtype ON cancer_subtype_drugs(subtype_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_chembl ON cancer_subtype_drugs(chembl_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_score ON cancer_subtype_drugs(subtype_id, rank_score)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_unique ON cancer_subtype_drugs(subtype_id, chembl_id)",
+                ]
+                for ddl in migration_7_ddl:
+                    try:
+                        cursor.execute(ddl)
+                    except sqlite3.OperationalError as e:
+                        if 'already exists' in str(e).lower():
+                            print(f"   ⚠️  Table already exists, skipping")
+                        else:
+                            raise
+                for index_sql in migration_7_indexes:
+                    try:
+                        cursor.execute(index_sql)
+                    except sqlite3.OperationalError as e:
+                        if 'already exists' in str(e).lower():
+                            pass
+                        else:
+                            raise
+                conn.commit()
+
+                # Seed the curated cancer taxonomy. Import lazily so a missing
+                # seed module does not break older migrations.
+                try:
+                    from cancer_taxonomy_seed import seed_cancer_taxonomy
+                    seeded = seed_cancer_taxonomy(conn)
+                    print(f"   🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
+                except Exception as seed_err:
+                    print(f"   ⚠️  Taxonomy seed skipped: {seed_err}")
+
+                set_schema_version(conn, version)
+                print(f"   ✅ Migration {version} applied successfully")
+                continue
+
             for sql in migration_sql:
                 if sql.strip():  # Skip empty statements
                     try:
@@ -432,7 +531,16 @@ def initialize_schema(conn: sqlite3.Connection, force_recreate: bool = False) ->
         # Set schema version
         set_schema_version(conn, SCHEMA_VERSION)
         conn.commit()
-        
+
+        # Seed curated cancer taxonomy on a fresh DB so the v2 Cancer Research
+        # browse has data immediately. Idempotent — safe to re-run.
+        try:
+            from cancer_taxonomy_seed import seed_cancer_taxonomy
+            seeded = seed_cancer_taxonomy(conn)
+            print(f"🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
+        except Exception as seed_err:
+            print(f"⚠️  Taxonomy seed skipped: {seed_err}")
+
         print(f"✅ Schema initialized (version {SCHEMA_VERSION})")
         return True
         

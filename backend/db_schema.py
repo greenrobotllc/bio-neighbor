@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -266,6 +266,79 @@ SCHEMA: Dict[str, Dict] = {
         ],
         'foreign_keys': [
             'FOREIGN KEY (mechanism_id) REFERENCES mechanisms(id)',
+        ]
+    },
+
+    'cancer_types': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('name', 'TEXT NOT NULL UNIQUE'),
+            ('display_name', 'TEXT'),
+            ('category', 'TEXT'),
+            ('description', 'TEXT'),
+            ('mesh_id', 'TEXT'),
+            ('icon', 'TEXT'),
+            ('sort_order', 'INTEGER DEFAULT 100'),
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_cancer_type_name ON cancer_types(name)',
+            'CREATE INDEX IF NOT EXISTS idx_cancer_type_sort ON cancer_types(sort_order)',
+        ],
+        'foreign_keys': []
+    },
+
+    'cancer_subtypes': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('cancer_type_id', 'INTEGER NOT NULL'),
+            ('name', 'TEXT NOT NULL'),
+            ('short_name', 'TEXT'),
+            ('description', 'TEXT'),
+            ('mesh_id', 'TEXT'),
+            ('efo_id', 'TEXT'),
+            ('chembl_indication_terms', 'TEXT'),  # JSON array of search terms
+            ('markers', 'TEXT'),  # JSON array, e.g. ["HER2+","BRCA1/2"]
+            ('prevalence_note', 'TEXT'),
+            ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_cancer_subtype_type ON cancer_subtypes(cancer_type_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_cancer_subtype_unique ON cancer_subtypes(cancer_type_id, name)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (cancer_type_id) REFERENCES cancer_types(id)',
+        ]
+    },
+
+    'cancer_subtype_drugs': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('subtype_id', 'INTEGER NOT NULL'),
+            ('drug_id', 'INTEGER'),
+            ('ligand_id', 'INTEGER'),
+            ('molecule_index', 'INTEGER'),
+            ('chembl_id', 'TEXT'),
+            ('drug_name', 'TEXT'),
+            ('max_phase', 'INTEGER'),  # 0..4 from ChEMBL drug_indication
+            ('source', 'TEXT'),  # 'chembl_indication'|'cancer_mechanism'|'multi_api'
+            ('source_count', 'INTEGER DEFAULT 1'),
+            ('trial_count', 'INTEGER'),
+            ('rank_score', 'REAL'),
+            ('evidence', 'TEXT'),  # JSON
+            ('cached_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_subtype ON cancer_subtype_drugs(subtype_id)',
+            'CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_chembl ON cancer_subtype_drugs(chembl_id)',
+            'CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_score ON cancer_subtype_drugs(subtype_id, rank_score)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_unique ON cancer_subtype_drugs(subtype_id, chembl_id)',
+        ],
+        'foreign_keys': [
+            'FOREIGN KEY (subtype_id) REFERENCES cancer_subtypes(id)',
+            'FOREIGN KEY (drug_id) REFERENCES drugs(id)',
+            'FOREIGN KEY (ligand_id) REFERENCES ligands(id)',
+            'FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)',
         ]
     }
 }

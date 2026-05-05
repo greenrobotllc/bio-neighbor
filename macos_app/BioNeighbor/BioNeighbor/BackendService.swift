@@ -1674,11 +1674,70 @@ class BackendService: ObservableObject {
         request.httpBody = bodyData
         
         let (_, response) = try await URLSession.shared.data(for: request)
-        
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw BackendError.networkError("Failed to update workspace")
         }
+    }
+
+    // MARK: - Cancer Research v2 (disease-first browse)
+
+    func fetchCancerTypes() async throws -> [CancerType] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/cancer-types") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch cancer types")
+        }
+
+        let decoded = try JSONDecoder().decode(CancerTypesResponse.self, from: data)
+        guard decoded.success, let types = decoded.cancerTypes else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch cancer types")
+        }
+        return types
+    }
+
+    func fetchSubtypes(forCancerTypeId typeId: Int) async throws -> [CancerSubtype] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/cancer-types/\(typeId)/subtypes") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch subtypes")
+        }
+
+        let decoded = try JSONDecoder().decode(SubtypesResponse.self, from: data)
+        guard decoded.success, let subtypes = decoded.subtypes else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch subtypes")
+        }
+        return subtypes
+    }
+
+    func fetchSubtypeDetail(id subtypeId: Int) async throws -> CancerSubtype {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch subtype")
+        }
+
+        let decoded = try JSONDecoder().decode(SubtypeDetailResponse.self, from: data)
+        guard decoded.success, let subtype = decoded.subtype else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch subtype")
+        }
+        return subtype
     }
 }
 

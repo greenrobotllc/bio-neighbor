@@ -460,11 +460,102 @@ struct SimilarLigandsResponse: Codable {
     let similarLigands: [Ligand]?
     let disclaimer: String?
     let error: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case success
         case similarLigands = "similar_ligands"
         case disclaimer
         case error
     }
+}
+
+// MARK: - v2 Disease-First Browse (Cancer Type → Subtype → Drugs)
+
+struct CancerType: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let displayName: String?
+    let category: String?
+    let description: String?
+    let meshId: String?
+    let icon: String?
+    let sortOrder: Int?
+    let subtypeCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case displayName = "display_name"
+        case category
+        case description
+        case meshId = "mesh_id"
+        case icon
+        case sortOrder = "sort_order"
+        case subtypeCount = "subtype_count"
+    }
+}
+
+struct CancerSubtype: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let shortName: String?
+    let description: String?
+    let meshId: String?
+    let efoId: String?
+    let markers: [String]?
+    let chemblIndicationTerms: [String]?
+    let prevalenceNote: String?
+    let drugCount: Int?
+    let cancerType: CancerType?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case shortName = "short_name"
+        case description
+        case meshId = "mesh_id"
+        case efoId = "efo_id"
+        case markers
+        case chemblIndicationTerms = "chembl_indication_terms"
+        case prevalenceNote = "prevalence_note"
+        case drugCount = "drug_count"
+        case cancerType = "cancer_type"
+    }
+}
+
+struct CancerTypesResponse: Codable {
+    let success: Bool
+    let cancerTypes: [CancerType]?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case cancerTypes = "cancer_types"
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypesResponse: Codable {
+    let success: Bool
+    let cancerType: CancerType?
+    let subtypes: [CancerSubtype]?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case cancerType = "cancer_type"
+        case subtypes
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypeDetailResponse: Codable {
+    let success: Bool
+    let subtype: CancerSubtype?
+    let disclaimer: String?
+    let error: String?
 }

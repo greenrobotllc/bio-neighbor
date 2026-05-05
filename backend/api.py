@@ -2927,6 +2927,233 @@ def find_similar_ligands():
         }), 500
 
 
+# =============================================================================
+# Cancer Research v2 — disease-first browse (Cancer Type → Subtype → Drugs)
+# Backed by cancer_types / cancer_subtypes / cancer_subtype_drugs tables.
+# =============================================================================
+
+
+def _parse_json_field(raw):
+    """Parse a JSON-encoded TEXT column; return [] on null or invalid."""
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+@app.route('/cancer-research/v2/cancer-types', methods=['GET'])
+def v2_list_cancer_types():
+    """
+    List curated cancer types with subtype counts.
+
+    Response (JSON):
+    {
+        "success": true,
+        "cancer_types": [
+            {"id": 1, "name": "...", "display_name": "...", "category": "...",
+             "mesh_id": "...", "icon": "...", "subtype_count": 5}
+        ]
+    }
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT ct.id, ct.name, ct.display_name, ct.category,
+                       ct.description, ct.mesh_id, ct.icon, ct.sort_order,
+                       (SELECT COUNT(*) FROM cancer_subtypes cs WHERE cs.cancer_type_id = ct.id) AS subtype_count
+                FROM cancer_types ct
+                ORDER BY ct.sort_order, ct.display_name
+                """
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        cancer_types = [
+            {
+                'id': r[0],
+                'name': r[1],
+                'display_name': r[2],
+                'category': r[3],
+                'description': r[4],
+                'mesh_id': r[5],
+                'icon': r[6],
+                'sort_order': r[7],
+                'subtype_count': r[8],
+            }
+            for r in rows
+        ]
+
+        return jsonify({
+            'success': True,
+            'cancer_types': cancer_types,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 list cancer types error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/cancer-types/seed', methods=['POST'])
+def v2_seed_cancer_types():
+    """
+    Idempotently re-seed the curated cancer taxonomy from cancer_taxonomy_seed.
+    Useful after editing the taxonomy without forcing a schema migration.
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+        from cancer_taxonomy_seed import seed_cancer_taxonomy
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            result = seed_cancer_taxonomy(conn)
+        finally:
+            conn.close()
+
+        return jsonify({
+            'success': True,
+            'types_seeded': result['types'],
+            'subtypes_seeded': result['subtypes'],
+        })
+    except Exception:
+        logger.exception("v2 seed cancer taxonomy error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/cancer-types/<int:type_id>/subtypes', methods=['GET'])
+def v2_list_subtypes(type_id: int):
+    """
+    List subtypes for a cancer type. Includes parsed marker chips and a
+    cached-drug count (0 until aggregator has run for that subtype).
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, display_name FROM cancer_types WHERE id = ?", (type_id,))
+            type_row = cursor.fetchone()
+            if not type_row:
+                return jsonify({'success': False, 'error': f'Cancer type {type_id} not found'}), 404
+
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, cs.short_name, cs.description, cs.mesh_id,
+                       cs.efo_id, cs.markers, cs.chembl_indication_terms, cs.prevalence_note,
+                       (SELECT COUNT(*) FROM cancer_subtype_drugs csd WHERE csd.subtype_id = cs.id) AS drug_count
+                FROM cancer_subtypes cs
+                WHERE cs.cancer_type_id = ?
+                ORDER BY cs.id
+                """,
+                (type_id,),
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        subtypes = [
+            {
+                'id': r[0],
+                'name': r[1],
+                'short_name': r[2],
+                'description': r[3],
+                'mesh_id': r[4],
+                'efo_id': r[5],
+                'markers': _parse_json_field(r[6]),
+                'chembl_indication_terms': _parse_json_field(r[7]),
+                'prevalence_note': r[8],
+                'drug_count': r[9],
+            }
+            for r in rows
+        ]
+
+        return jsonify({
+            'success': True,
+            'cancer_type': {'id': type_row[0], 'name': type_row[1], 'display_name': type_row[2]},
+            'subtypes': subtypes,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 list subtypes error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>', methods=['GET'])
+def v2_get_subtype(subtype_id: int):
+    """
+    Get full subtype detail, including parent cancer type and parsed markers.
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, cs.short_name, cs.description, cs.mesh_id,
+                       cs.efo_id, cs.markers, cs.chembl_indication_terms, cs.prevalence_note,
+                       cs.cancer_type_id, ct.name, ct.display_name, ct.mesh_id, ct.category
+                FROM cancer_subtypes cs
+                JOIN cancer_types ct ON ct.id = cs.cancer_type_id
+                WHERE cs.id = ?
+                """,
+                (subtype_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM cancer_subtype_drugs WHERE subtype_id = ?",
+                (subtype_id,),
+            )
+            drug_count = cursor.fetchone()[0]
+        finally:
+            conn.close()
+
+        subtype = {
+            'id': row[0],
+            'name': row[1],
+            'short_name': row[2],
+            'description': row[3],
+            'mesh_id': row[4],
+            'efo_id': row[5],
+            'markers': _parse_json_field(row[6]),
+            'chembl_indication_terms': _parse_json_field(row[7]),
+            'prevalence_note': row[8],
+            'drug_count': drug_count,
+            'cancer_type': {
+                'id': row[9],
+                'name': row[10],
+                'display_name': row[11],
+                'mesh_id': row[12],
+                'category': row[13],
+            },
+        }
+
+        return jsonify({
+            'success': True,
+            'subtype': subtype,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 get subtype error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 def handle_stdin_request():
     """
     Handle a single JSON request from stdin.
@@ -3077,6 +3304,9 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print("   GET  /cancer-research/workspaces - List workspaces")
     print("   POST /cancer-research/workspaces - Create workspace")
     print("   PUT  /cancer-research/workspaces/<id> - Update workspace")
+    print("   GET  /cancer-research/v2/cancer-types - v2 disease-first browse: list cancer types")
+    print("   GET  /cancer-research/v2/cancer-types/<id>/subtypes - v2: list subtypes for a cancer type")
+    print("   GET  /cancer-research/v2/subtypes/<id> - v2: subtype detail with markers")
     app.run(host=host, port=port, debug=debug_enabled)
 
 

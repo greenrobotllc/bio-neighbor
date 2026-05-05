@@ -2,12 +2,62 @@
 //  CancerResearchView.swift
 //  BioNeighbor
 //
-//  Main Cancer Research tab view
+//  Main Cancer Research tab view.
+//
+//  v2 disease-first browse is the default surface (Cancer Type → Subtype →
+//  Drugs → Similar). The original mechanism-first sidebar/workspace is
+//  preserved as `LegacyMechanismBrowseView`, reachable via a toolbar button
+//  so saved workspaces in the `workspaces` table aren't orphaned.
 //
 
 import SwiftUI
 
 struct CancerResearchView: View {
+    @State private var showLegacyMechanisms = false
+
+    var body: some View {
+        NavigationStack {
+            CancerTypePickerView()
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            showLegacyMechanisms = true
+                        } label: {
+                            Label("Browse by Mechanism", systemImage: "atom")
+                        }
+                        .help("Open the original mechanism workspace (Adenosine, PD-1/PD-L1, …)")
+                    }
+                }
+        }
+        .sheet(isPresented: $showLegacyMechanisms) {
+            LegacyMechanismBrowseSheet(isPresented: $showLegacyMechanisms)
+        }
+    }
+}
+
+private struct LegacyMechanismBrowseSheet: View {
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Mechanism Workspace")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            Divider()
+
+            LegacyMechanismBrowseView()
+        }
+        .frame(minWidth: 900, minHeight: 600)
+    }
+}
+
+struct LegacyMechanismBrowseView: View {
     @StateObject private var backendService = BackendService.shared
     @State private var mechanisms: [Mechanism] = []
     @State private var selectedMechanism: Mechanism?
