@@ -3089,6 +3089,199 @@ def v2_list_subtypes(type_id: int):
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/top-drugs', methods=['GET'])
+def v2_subtype_top_drugs(subtype_id: int):
+    """
+    Return cached top drugs for a subtype, ranked by rank_score desc. If no
+    cache exists or the cache is older than 30 days, the aggregator fires
+    automatically. Pass `?refresh=1` to force a ChEMBL re-pull.
+    """
+    try:
+        from cancer_drug_aggregator import aggregate_top_drugs_for_subtype, get_top_drugs_for_subtype
+
+        limit = max(1, min(int(request.args.get('limit', 25)), 100))
+        refresh = request.args.get('refresh', '0') == '1'
+
+        # Cheap path: read cache directly. The aggregator only fires when stale.
+        import sqlite3
+        from data_loader import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM cancer_subtypes WHERE id = ?", (subtype_id,))
+            if not cursor.fetchone():
+                return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+        finally:
+            conn.close()
+
+        if refresh:
+            result = aggregate_top_drugs_for_subtype(subtype_id, limit=limit, refresh=True)
+        else:
+            # Let the aggregator decide whether to refresh; it honors 30-day TTL.
+            result = aggregate_top_drugs_for_subtype(subtype_id, limit=limit, refresh=False)
+
+        if not result.get('success'):
+            return jsonify({'success': False, 'error': result.get('error', 'Aggregation failed')}), 500
+
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'drugs': result.get('drugs', []),
+            'drug_count': result.get('drug_count', 0),
+            'from_cache': result.get('from_cache', False),
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 subtype top-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/refresh-drugs', methods=['POST'])
+def v2_subtype_refresh_drugs(subtype_id: int):
+    """
+    Force a ChEMBL drug_indication re-pull for a subtype, replacing the cache.
+    Synchronous — typical pull is 5-30s. Returns the fresh count and breakdown.
+    """
+    try:
+        from cancer_drug_aggregator import aggregate_top_drugs_for_subtype
+        result = aggregate_top_drugs_for_subtype(subtype_id, limit=100, refresh=True)
+        if not result.get('success'):
+            return jsonify({'success': False, 'error': result.get('error', 'Refresh failed')}), 500
+        # Strip the heavy `drugs` payload from the refresh response — clients
+        # immediately re-fetch via top-drugs anyway.
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'drug_count': result.get('drug_count', 0),
+            'chembl_count': result.get('chembl_count', 0),
+            'mechanism_count': result.get('mechanism_count', 0),
+            'multi_api_count': result.get('multi_api_count', 0),
+        })
+    except Exception:
+        logger.exception("v2 subtype refresh-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/drugs/<chembl_id>/similar', methods=['GET'])
+def v2_drug_similar(chembl_id: str):
+    """
+    Find molecularly-similar drugs for a given ChEMBL ID. Thin wrapper over
+    search_engine.search_by_chembl_id (FAISS + RDKit Morgan fingerprints).
+    Returns 200 with `similar: []` and `not_in_local_index: true` when the
+    drug isn't in the local FAISS index.
+    """
+    try:
+        top_k = max(1, min(int(request.args.get('top_k', 20)), 100))
+        engine = get_engine()
+        try:
+            results = engine.search_by_chembl_id(chembl_id, top_k=top_k)
+        except ValueError:
+            # Drug not in local FAISS index (common for ChEMBL-API-only drugs).
+            return jsonify({
+                'success': True,
+                'chembl_id': chembl_id,
+                'similar': [],
+                'not_in_local_index': True,
+                'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+            })
+
+        return jsonify({
+            'success': True,
+            'chembl_id': chembl_id,
+            'similar': results,
+            'not_in_local_index': False,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 drug similar error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/mechanisms', methods=['GET'])
+def v2_subtype_mechanisms(subtype_id: int):
+    """
+    Return cancer mechanisms relevant to a subtype. The mapping is at the
+    parent cancer type level (cancer_mechanisms.cancer_type free-text matched
+    against cancer_types.name OR display_name, case-insensitive).
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, ct.id, ct.name, ct.display_name
+                FROM cancer_subtypes cs
+                JOIN cancer_types ct ON ct.id = cs.cancer_type_id
+                WHERE cs.id = ?
+                """,
+                (subtype_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+
+            type_name = row[3] or ''
+            type_display = row[4] or ''
+
+            # cancer_mechanisms.cancer_type is free-text (e.g. "Non-small cell
+            # lung cancer") while cancer_types.name is shorter (e.g. "Lung
+            # cancer"). Match exact + bidirectional substring so curated
+            # mechanism mappings flow through to the v2 subtype browse without
+            # requiring an alias table.
+            cursor.execute(
+                """
+                SELECT cm.id, cm.cancer_type, cm.activity_level, cm.evidence_source,
+                       m.id, m.name, m.description, m.biological_summary
+                FROM cancer_mechanisms cm
+                JOIN mechanisms m ON m.id = cm.mechanism_id
+                WHERE LOWER(cm.cancer_type) = LOWER(?)
+                   OR LOWER(cm.cancer_type) = LOWER(?)
+                   OR LOWER(cm.cancer_type) LIKE '%' || LOWER(?) || '%'
+                   OR LOWER(?) LIKE '%' || LOWER(cm.cancer_type) || '%'
+                ORDER BY
+                    CASE LOWER(cm.activity_level)
+                        WHEN 'high' THEN 1
+                        WHEN 'moderate' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END,
+                    m.name
+                """,
+                (type_name, type_display, type_display or type_name, type_name),
+            )
+            mech_rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        mechanisms = [
+            {
+                'mapping_id': r[0],
+                'cancer_type': r[1],
+                'activity_level': r[2],
+                'evidence_source': r[3],
+                'mechanism_id': r[4],
+                'mechanism_name': r[5],
+                'description': r[6],
+                'biological_summary': r[7],
+            }
+            for r in mech_rows
+        ]
+
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'mechanisms': mechanisms,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 subtype mechanisms error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 @app.route('/cancer-research/v2/subtypes/<int:subtype_id>', methods=['GET'])
 def v2_get_subtype(subtype_id: int):
     """
@@ -3307,6 +3500,10 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print("   GET  /cancer-research/v2/cancer-types - v2 disease-first browse: list cancer types")
     print("   GET  /cancer-research/v2/cancer-types/<id>/subtypes - v2: list subtypes for a cancer type")
     print("   GET  /cancer-research/v2/subtypes/<id> - v2: subtype detail with markers")
+    print("   GET  /cancer-research/v2/subtypes/<id>/top-drugs - v2: ranked drugs (ChEMBL+mechanism+multi-API, 30-day cache)")
+    print("   POST /cancer-research/v2/subtypes/<id>/refresh-drugs - v2: force ChEMBL re-pull")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/similar - v2: molecularly similar drugs via FAISS")
+    print("   GET  /cancer-research/v2/subtypes/<id>/mechanisms - v2: mechanisms relevant to subtype")
     app.run(host=host, port=port, debug=debug_enabled)
 
 

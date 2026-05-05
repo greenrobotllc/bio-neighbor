@@ -559,3 +559,159 @@ struct SubtypeDetailResponse: Codable {
     let disclaimer: String?
     let error: String?
 }
+
+struct SubtypeTopDrug: Codable, Identifiable, Hashable {
+    let id: Int
+    let subtypeId: Int
+    let drugId: Int?
+    let ligandId: Int?
+    let moleculeIndex: Int?
+    let chemblId: String?
+    let drugName: String
+    let maxPhase: Int?
+    let source: String?
+    let sourceCount: Int?
+    let trialCount: Int?
+    let rankScore: Double?
+    let cachedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case subtypeId = "subtype_id"
+        case drugId = "drug_id"
+        case ligandId = "ligand_id"
+        case moleculeIndex = "molecule_index"
+        case chemblId = "chembl_id"
+        case drugName = "drug_name"
+        case maxPhase = "max_phase"
+        case source
+        case sourceCount = "source_count"
+        case trialCount = "trial_count"
+        case rankScore = "rank_score"
+        case cachedAt = "cached_at"
+    }
+}
+
+struct SubtypeTopDrugsResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let drugs: [SubtypeTopDrug]?
+    let drugCount: Int?
+    let fromCache: Bool?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case drugs
+        case drugCount = "drug_count"
+        case fromCache = "from_cache"
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypeRefreshResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let drugCount: Int?
+    let chemblCount: Int?
+    let mechanismCount: Int?
+    let multiApiCount: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case drugCount = "drug_count"
+        case chemblCount = "chembl_count"
+        case mechanismCount = "mechanism_count"
+        case multiApiCount = "multi_api_count"
+        case error
+    }
+}
+
+struct SimilarDrugHit: Codable, Identifiable, Hashable {
+    let index: Int?
+    let name: String?
+    let smiles: String?
+    let chemblId: String?
+    let pubchemCid: String?
+    let similarity: Double?
+    let similarityScore: Double?
+
+    var id: String {
+        if let cid = chemblId { return cid }
+        if let idx = index { return "idx-\(idx)" }
+        return name ?? UUID().uuidString
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case index
+        case name
+        case smiles
+        case chemblId = "chembl_id"
+        case pubchemCid = "pubchem_cid"
+        case similarity
+        case similarityScore = "similarity_score"
+    }
+}
+
+struct SimilarDrugsResponse: Codable {
+    let success: Bool
+    let chemblId: String?
+    let similar: [SimilarDrugHit]?
+    let notInLocalIndex: Bool?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case chemblId = "chembl_id"
+        case similar
+        case notInLocalIndex = "not_in_local_index"
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypeMechanism: Codable, Identifiable, Hashable {
+    let mappingId: Int
+    let mechanismId: Int
+    let mechanismName: String
+    let cancerType: String?
+    let activityLevel: String?
+    let evidenceSource: String?
+    let description: String?
+    let biologicalSummary: String?
+
+    var id: Int { mappingId }
+
+    enum CodingKeys: String, CodingKey {
+        case mappingId = "mapping_id"
+        case mechanismId = "mechanism_id"
+        case mechanismName = "mechanism_name"
+        case cancerType = "cancer_type"
+        case activityLevel = "activity_level"
+        case evidenceSource = "evidence_source"
+        case description
+        case biologicalSummary = "biological_summary"
+    }
+}
+
+struct SubtypeMechanismsResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let mechanisms: [SubtypeMechanism]?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case mechanisms
+        case disclaimer
+        case error
+    }
+}

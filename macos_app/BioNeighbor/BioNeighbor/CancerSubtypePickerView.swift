@@ -35,9 +35,10 @@ struct CancerSubtypePickerView: View {
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(subtypes) { subtype in
-                            // Phase 2 will push SubtypeDrugsView here. For now, an
-                            // info-only card so the navigation surface is in place.
-                            SubtypeRow(subtype: subtype)
+                            NavigationLink(value: subtype) {
+                                SubtypeRow(subtype: subtype)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -45,6 +46,9 @@ struct CancerSubtypePickerView: View {
             .padding(20)
         }
         .navigationTitle(cancerType.displayName ?? cancerType.name)
+        .navigationDestination(for: CancerSubtype.self) { subtype in
+            SubtypeDrugsView(subtype: subtype)
+        }
         .task {
             await loadSubtypes()
         }

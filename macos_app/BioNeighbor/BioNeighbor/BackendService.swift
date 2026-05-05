@@ -1739,5 +1739,94 @@ class BackendService: ObservableObject {
         }
         return subtype
     }
+
+    func fetchSubtypeTopDrugs(subtypeId: Int, limit: Int = 25, refresh: Bool = false) async throws -> [SubtypeTopDrug] {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/top-drugs")
+        components?.queryItems = [
+            URLQueryItem(name: "limit", value: "\(limit)"),
+            URLQueryItem(name: "refresh", value: refresh ? "1" : "0"),
+        ]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // ChEMBL pulls can take 30+ seconds when refresh=true.
+        request.timeoutInterval = refresh ? 120.0 : 60.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch top drugs")
+        }
+
+        let decoded = try JSONDecoder().decode(SubtypeTopDrugsResponse.self, from: data)
+        guard decoded.success, let drugs = decoded.drugs else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch top drugs")
+        }
+        return drugs
+    }
+
+    func fetchSimilarDrugs(chemblId: String, topK: Int = 20) async throws -> (drugs: [SimilarDrugHit], notInLocalIndex: Bool) {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/similar")
+        components?.queryItems = [URLQueryItem(name: "top_k", value: "\(topK)")]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch similar drugs")
+        }
+
+        let decoded = try JSONDecoder().decode(SimilarDrugsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch similar drugs")
+        }
+        return (decoded.similar ?? [], decoded.notInLocalIndex ?? false)
+    }
+
+    func fetchSubtypeMechanisms(subtypeId: Int) async throws -> [SubtypeMechanism] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/mechanisms") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch subtype mechanisms")
+        }
+
+        let decoded = try JSONDecoder().decode(SubtypeMechanismsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch subtype mechanisms")
+        }
+        return decoded.mechanisms ?? []
+    }
+
+    @discardableResult
+    func refreshSubtypeDrugs(subtypeId: Int) async throws -> SubtypeRefreshResponse {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/refresh-drugs") else {
+            throw BackendError.backendNotAvailable
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180.0  // ChEMBL refresh can be slow
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to refresh drugs")
+        }
+
+        let decoded = try JSONDecoder().decode(SubtypeRefreshResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Refresh failed")
+        }
+        return decoded
+    }
 }
 
