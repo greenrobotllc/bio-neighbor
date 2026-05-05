@@ -1788,6 +1788,30 @@ class BackendService: ObservableObject {
         return (decoded.similar ?? [], decoded.notInLocalIndex ?? false)
     }
 
+    func searchDrugsInCancerType(typeId: Int, query: String, limitPerSubtype: Int = 5) async throws -> DrugSearchResponse {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/cancer-types/\(typeId)/drug-search")
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "limit", value: "\(limitPerSubtype)"),
+        ]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Drug search failed")
+        }
+
+        let decoded = try JSONDecoder().decode(DrugSearchResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Drug search failed")
+        }
+        return decoded
+    }
+
     func fetchSubtypeMechanisms(subtypeId: Int) async throws -> [SubtypeMechanism] {
         guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/mechanisms") else {
             throw BackendError.backendNotAvailable

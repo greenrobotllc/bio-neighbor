@@ -20,6 +20,8 @@ struct SubtypeDrugsView: View {
     @State private var isLoading = false
     @State private var isRefreshing = false
     @State private var errorMessage: String?
+    @State private var searchQuery = ""
+    @FocusState private var searchFieldFocused: Bool
 
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 12)
@@ -29,6 +31,10 @@ struct SubtypeDrugsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+
+                if !drugs.isEmpty {
+                    searchField
+                }
 
                 if !mechanisms.isEmpty {
                     relatedMechanismsSection
@@ -41,9 +47,11 @@ struct SubtypeDrugsView: View {
                     errorView(error)
                 } else if drugs.isEmpty {
                     emptyView
+                } else if filteredDrugs.isEmpty {
+                    noMatchView
                 } else {
                     LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(drugs) { drug in
+                        ForEach(filteredDrugs) { drug in
                             NavigationLink(value: drug) {
                                 DrugTile(drug: drug)
                             }
@@ -92,6 +100,70 @@ struct SubtypeDrugsView: View {
         .task {
             await loadDrugs()
             await loadMechanisms()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cancerFindDrug)) { _ in
+            searchFieldFocused = true
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+            TextField("Filter drugs by name or ChEMBL ID (⌘F)", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .focused($searchFieldFocused)
+                .onSubmit {
+                    searchFieldFocused = false
+                }
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                    searchFieldFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            if !searchQuery.isEmpty {
+                Text("\(filteredDrugs.count) of \(drugs.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 4)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(searchFieldFocused ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    private var noMatchView: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 24))
+                .foregroundColor(.secondary)
+            Text("No drugs match \u{201C}\(searchQuery)\u{201D}")
+                .font(.subheadline)
+            Button("Clear filter") { searchQuery = "" }
+                .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, minHeight: 120)
+    }
+
+    private var filteredDrugs: [SubtypeTopDrug] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return drugs }
+        return drugs.filter { drug in
+            drug.drugName.lowercased().contains(q) ||
+            (drug.chemblId?.lowercased().contains(q) ?? false)
         }
     }
 

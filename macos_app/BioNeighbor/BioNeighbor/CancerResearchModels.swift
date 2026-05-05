@@ -715,3 +715,55 @@ struct SubtypeMechanismsResponse: Codable {
         case error
     }
 }
+
+// MARK: - Drug Search (reverse lookup: drug → subtypes within a cancer type)
+
+struct DrugSearchMatchedDrug: Codable, Hashable {
+    let drugName: String
+    let chemblId: String?
+    let maxPhase: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case drugName = "drug_name"
+        case chemblId = "chembl_id"
+        case maxPhase = "max_phase"
+    }
+}
+
+struct DrugSearchSubtypeMatch: Codable, Identifiable, Hashable {
+    let subtypeId: Int
+    let subtypeName: String
+    let subtypeShortName: String?
+    let matchedDrugs: [DrugSearchMatchedDrug]
+
+    var id: Int { subtypeId }
+
+    enum CodingKeys: String, CodingKey {
+        case subtypeId = "subtype_id"
+        case subtypeName = "subtype_name"
+        case subtypeShortName = "subtype_short_name"
+        case matchedDrugs = "matched_drugs"
+    }
+}
+
+struct DrugSearchResponse: Codable {
+    let success: Bool
+    let query: String?
+    let cancerTypeId: Int?
+    let subtypeMatches: [DrugSearchSubtypeMatch]?
+    let uncachedSubtypeCount: Int?
+    let note: String?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case query
+        case cancerTypeId = "cancer_type_id"
+        case subtypeMatches = "subtype_matches"
+        case uncachedSubtypeCount = "uncached_subtype_count"
+        case note
+        case disclaimer
+        case error
+    }
+}

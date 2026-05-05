@@ -17,12 +17,24 @@ struct CancerSubtypePickerView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
 
+    // Drug-search (reverse lookup) state
+    @State private var searchQuery = ""
+    @State private var searchResults: [DrugSearchSubtypeMatch] = []
+    @State private var uncachedSubtypeCount: Int = 0
+    @State private var isSearching = false
+    @State private var searchError: String?
+    @FocusState private var searchFieldFocused: Bool
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
 
-                if isLoading {
+                searchField
+
+                if !searchQuery.isEmpty {
+                    drugSearchResults
+                } else if isLoading {
                     ProgressView("Loading subtypes...")
                         .frame(maxWidth: .infinity, minHeight: 200)
                 } else if let error = errorMessage {
@@ -51,6 +63,131 @@ struct CancerSubtypePickerView: View {
         }
         .task {
             await loadSubtypes()
+        }
+        // Debounced search — re-runs whenever the query changes. The 300ms
+        // sleep means rapid typing only triggers one network call.
+        .task(id: searchQuery) {
+            await runDrugSearch()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cancerFindDrug)) { _ in
+            searchFieldFocused = true
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+            TextField("Find a drug across \(cancerType.displayName ?? cancerType.name) subtypes (⌘F)", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .focused($searchFieldFocused)
+            if isSearching {
+                ProgressView().scaleEffect(0.6)
+            }
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                    searchFieldFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(searchFieldFocused ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var drugSearchResults: some View {
+        if let err = searchError {
+            VStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle").foregroundColor(.orange)
+                Text(err).font(.caption).foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 80)
+        } else if searchQuery.count < 2 {
+            Text("Type at least 2 characters.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if searchResults.isEmpty && !isSearching {
+            VStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 24))
+                    .foregroundColor(.secondary)
+                Text("No \(cancerType.displayName ?? cancerType.name) subtype has \u{201C}\(searchQuery)\u{201D} cached.")
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                if uncachedSubtypeCount > 0 {
+                    Text("\(uncachedSubtypeCount) subtype\(uncachedSubtypeCount == 1 ? " has" : "s have") not been indexed yet — visit them to populate the search.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 120)
+            .padding()
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Matched in \(searchResults.count) subtype\(searchResults.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if uncachedSubtypeCount > 0 {
+                        Text("\(uncachedSubtypeCount) not yet indexed")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                LazyVStack(spacing: 12) {
+                    ForEach(searchResults) { match in
+                        if let subtype = subtypes.first(where: { $0.id == match.subtypeId }) {
+                            NavigationLink(value: subtype) {
+                                DrugSearchMatchRow(subtype: subtype, match: match)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func runDrugSearch() async {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Debounce: short sleep at the start of every key change. Task(id:)
+        // cancels prior runs automatically when the id changes again.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        if Task.isCancelled { return }
+        guard q.count >= 2 else {
+            searchResults = []
+            searchError = nil
+            uncachedSubtypeCount = 0
+            return
+        }
+        isSearching = true
+        searchError = nil
+        defer { isSearching = false }
+        do {
+            let response = try await backendService.searchDrugsInCancerType(typeId: cancerType.id, query: q)
+            if Task.isCancelled { return }
+            searchResults = response.subtypeMatches ?? []
+            uncachedSubtypeCount = response.uncachedSubtypeCount ?? 0
+        } catch {
+            searchError = error.localizedDescription
+            searchResults = []
         }
     }
 
@@ -183,5 +320,78 @@ private struct MarkerChipsView: View {
                     .clipShape(Capsule())
             }
         }
+    }
+}
+
+/// Row used in drug-search results — shows the subtype plus the actual drug
+/// names that matched the query, so the user understands why each subtype
+/// appeared in the result set.
+private struct DrugSearchMatchRow: View {
+    let subtype: CancerSubtype
+    let match: DrugSearchSubtypeMatch
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(subtype.name)
+                    .font(.headline)
+                if let short = subtype.shortName, short != subtype.name {
+                    Text(short)
+                        .font(.caption.monospaced())
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            FlowLayout(spacing: 6) {
+                ForEach(match.matchedDrugs, id: \.drugName) { drug in
+                    HStack(spacing: 4) {
+                        Image(systemName: "pills.fill")
+                            .font(.caption2)
+                        Text(drug.drugName)
+                        if let phase = drug.maxPhase, phase == 4 {
+                            Text("Approved")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.green.opacity(0.18))
+                                .foregroundColor(.green)
+                                .clipShape(Capsule())
+                        } else if let phase = drug.maxPhase, phase > 0 {
+                            Text("P\(phase)")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.blue.opacity(0.18))
+                                .foregroundColor(.blue)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.12))
+                    .foregroundColor(.accentColor)
+                    .clipShape(Capsule())
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+        )
     }
 }

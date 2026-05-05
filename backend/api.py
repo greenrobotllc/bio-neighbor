@@ -3162,6 +3162,113 @@ def v2_subtype_refresh_drugs(subtype_id: int):
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 
+@app.route('/cancer-research/v2/cancer-types/<int:type_id>/drug-search', methods=['GET'])
+def v2_cancer_type_drug_search(type_id: int):
+    """
+    Reverse lookup: given a drug name (or ChEMBL ID) substring, return the
+    subtypes within this cancer type whose cached drug list contains a match.
+    Searches the cancer_subtype_drugs cache only — subtypes that the user has
+    not yet visited won't appear unless their cache has been populated.
+
+    Query params:
+        q: search substring (required, minimum 2 chars)
+        limit: max matched drugs per subtype (default 5)
+
+    Response:
+    {
+        "success": true,
+        "query": "palbo",
+        "subtype_matches": [
+            {"subtype_id": 3, "subtype_name": "...",
+             "subtype_short_name": "HR+", "matched_drugs": [
+                {"drug_name": "PALBOCICLIB", "chembl_id": "CHEMBL189963", "max_phase": 4}
+             ]}
+        ],
+        "uncached_subtype_count": 2  // subtypes with no cached drugs yet
+    }
+    """
+    try:
+        query = (request.args.get('q') or '').strip()
+        if len(query) < 2:
+            return jsonify({
+                'success': True,
+                'query': query,
+                'subtype_matches': [],
+                'note': 'Type at least 2 characters to search.',
+            })
+        limit_per_subtype = max(1, min(int(request.args.get('limit', 5)), 25))
+
+        import sqlite3
+        from data_loader import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM cancer_types WHERE id = ?", (type_id,))
+            if not cursor.fetchone():
+                return jsonify({'success': False, 'error': f'Cancer type {type_id} not found'}), 404
+
+            like_pattern = f"%{query.lower()}%"
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, cs.short_name,
+                       csd.drug_name, csd.chembl_id, csd.max_phase, csd.rank_score
+                FROM cancer_subtype_drugs csd
+                JOIN cancer_subtypes cs ON cs.id = csd.subtype_id
+                WHERE cs.cancer_type_id = ?
+                  AND (LOWER(csd.drug_name) LIKE ? OR LOWER(csd.chembl_id) LIKE ?)
+                ORDER BY cs.id, csd.rank_score DESC
+                """,
+                (type_id, like_pattern, like_pattern),
+            )
+            rows = cursor.fetchall()
+
+            # Count subtypes with no cached drugs at all — useful for a
+            # "Some subtypes haven't been indexed yet" hint in the UI.
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM cancer_subtypes cs
+                WHERE cs.cancer_type_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM cancer_subtype_drugs csd WHERE csd.subtype_id = cs.id
+                  )
+                """,
+                (type_id,),
+            )
+            uncached_count = cursor.fetchone()[0]
+        finally:
+            conn.close()
+
+        # Group by subtype, capping per-subtype matches at limit_per_subtype.
+        grouped: Dict[int, Dict] = {}
+        for r in rows:
+            sid = r[0]
+            entry = grouped.setdefault(sid, {
+                'subtype_id': sid,
+                'subtype_name': r[1],
+                'subtype_short_name': r[2],
+                'matched_drugs': [],
+            })
+            if len(entry['matched_drugs']) >= limit_per_subtype:
+                continue
+            entry['matched_drugs'].append({
+                'drug_name': r[3],
+                'chembl_id': r[4],
+                'max_phase': r[5],
+            })
+
+        return jsonify({
+            'success': True,
+            'query': query,
+            'cancer_type_id': type_id,
+            'subtype_matches': list(grouped.values()),
+            'uncached_subtype_count': uncached_count,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 cancer-type drug-search error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 @app.route('/cancer-research/v2/drugs/<chembl_id>/similar', methods=['GET'])
 def v2_drug_similar(chembl_id: str):
     """

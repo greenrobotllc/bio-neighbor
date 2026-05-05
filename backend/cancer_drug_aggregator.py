@@ -158,20 +158,24 @@ def fetch_chembl_drugs_for_subtype(subtype: Dict, per_term_limit: int = 50) -> L
             except Exception as e:
                 print(f"   ⚠️  ChEMBL drug_indication error for '{variant}': {e}")
 
-    # If curated terms yielded nothing, fall back to the parent cancer's MeSH ID.
-    if not seen and subtype.get("type_mesh"):
+    # ALSO pull by parent cancer's MeSH ID (not just as fallback). Many drugs
+    # — including subtype-specific ones like ribociclib for HR+ breast cancer —
+    # are filed under the generic parent MeSH heading rather than a subtype
+    # heading. Drugs that match both curated terms AND parent MeSH get a
+    # higher source_count and naturally rank above parent-only matches.
+    if subtype.get("type_mesh"):
         try:
             results = _chembl_query_with_timeout(
                 lambda: list(
                     new_client.drug_indication.filter(mesh_id__exact=subtype["type_mesh"])
-                    .only(["molecule_chembl_id", "max_phase_for_ind", "mesh_heading", "efo_term", "mesh_id"])[:per_term_limit]
+                    .only(["molecule_chembl_id", "max_phase_for_ind", "mesh_heading", "efo_term", "mesh_id"])[:per_term_limit * 2]
                 )
             )
             absorb(results)
         except FuturesTimeoutError:
-            print(f"   ⚠️  ChEMBL fallback by parent MeSH timed out for {subtype['type_mesh']}")
+            print(f"   ⚠️  ChEMBL parent-MeSH pull timed out for {subtype['type_mesh']}")
         except Exception as e:
-            print(f"   ⚠️  ChEMBL fallback error: {e}")
+            print(f"   ⚠️  ChEMBL parent-MeSH error: {e}")
 
     return list(seen.values())
 

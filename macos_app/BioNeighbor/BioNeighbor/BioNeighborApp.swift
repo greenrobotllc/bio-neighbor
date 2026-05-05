@@ -7,6 +7,12 @@
 
 import SwiftUI
 
+extension Notification.Name {
+    /// Posted when the user invokes Edit ▸ Find Drug… (⌘F). Cancer Research
+    /// views observe this and focus their drug-filter field. Other tabs ignore.
+    static let cancerFindDrug = Notification.Name("BioNeighbor.cancerFindDrug")
+}
+
 @main
 struct BioNeighborApp: App {
     var body: some Scene {
@@ -17,6 +23,15 @@ struct BioNeighborApp: App {
         .defaultSize(width: 1200, height: 800)
         .commands {
             CommandGroup(replacing: .windowSize) {}
+            // Add a Find Drug command alongside Edit ▸ Find so ⌘F focuses the
+            // drug filter on the Cancer Research tab. On other tabs the
+            // keystroke is a no-op (no observer of `.cancerFindDrug`).
+            CommandGroup(after: .textEditing) {
+                Button("Find Drug…") {
+                    NotificationCenter.default.post(name: .cancerFindDrug, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
         }
     }
 }
