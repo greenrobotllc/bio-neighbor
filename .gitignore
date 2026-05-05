@@ -76,6 +76,11 @@ data/progress/tasks.json
 backend/*.index
 backend/*.pkl
 
+# Database backups (created by migrations, never tracked)
+*.bak
+*.db.bak
+data/*.bak
+
 # IDE
 .vscode/
 .idea/
