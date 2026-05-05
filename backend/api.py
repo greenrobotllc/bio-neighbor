@@ -3269,33 +3269,78 @@ def v2_cancer_type_drug_search(type_id: int):
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 
+@app.route('/cancer-research/v2/drugs/<chembl_id>/detail', methods=['GET'])
+def v2_drug_detail(chembl_id: str):
+    """
+    Full ChEMBL drug detail (properties, synonyms, indications, SMILES).
+    Used by the cancer drug detail page to populate the structure image,
+    molecular properties panel, and indications list. See
+    chembl_drug_detail.fetch_drug_detail() for the payload shape.
+    """
+    try:
+        from chembl_drug_detail import fetch_drug_detail
+        payload = fetch_drug_detail(chembl_id)
+        if payload is None:
+            return jsonify({
+                'success': False,
+                'error': f'ChEMBL has no record for {chembl_id} (or ChEMBL is unreachable).',
+            }), 404
+        return jsonify({
+            'success': True,
+            **payload,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 drug detail error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 @app.route('/cancer-research/v2/drugs/<chembl_id>/similar', methods=['GET'])
 def v2_drug_similar(chembl_id: str):
     """
-    Find molecularly-similar drugs for a given ChEMBL ID. Thin wrapper over
-    search_engine.search_by_chembl_id (FAISS + RDKit Morgan fingerprints).
-    Returns 200 with `similar: []` and `not_in_local_index: true` when the
-    drug isn't in the local FAISS index.
+    Find molecularly-similar drugs for a given ChEMBL ID using FAISS + RDKit
+    Morgan fingerprints. If the drug isn't in our local FAISS index, fall
+    back to fetching its SMILES from ChEMBL on-demand and running similarity
+    against that — so the feature works for any ChEMBL drug, not just the
+    pre-ingested subset.
     """
     try:
         top_k = max(1, min(int(request.args.get('top_k', 20)), 100))
         engine = get_engine()
+
+        # Fast path: drug already in local FAISS index.
         try:
             results = engine.search_by_chembl_id(chembl_id, top_k=top_k)
+            return jsonify({
+                'success': True,
+                'chembl_id': chembl_id,
+                'similar': results,
+                'fetched_from_chembl': False,
+                'not_in_local_index': False,
+                'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+            })
         except ValueError:
-            # Drug not in local FAISS index (common for ChEMBL-API-only drugs).
+            pass  # fall through to on-demand ChEMBL fetch
+
+        # Fallback: pull SMILES from ChEMBL, then run search_similar against it.
+        from chembl_drug_detail import fetch_smiles
+        smiles = fetch_smiles(chembl_id)
+        if not smiles:
             return jsonify({
                 'success': True,
                 'chembl_id': chembl_id,
                 'similar': [],
+                'fetched_from_chembl': False,
                 'not_in_local_index': True,
                 'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
             })
 
+        results = engine.search_similar(smiles, top_k=top_k)
         return jsonify({
             'success': True,
             'chembl_id': chembl_id,
             'similar': results,
+            'fetched_from_chembl': True,
             'not_in_local_index': False,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
         })
@@ -3609,7 +3654,8 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print("   GET  /cancer-research/v2/subtypes/<id> - v2: subtype detail with markers")
     print("   GET  /cancer-research/v2/subtypes/<id>/top-drugs - v2: ranked drugs (ChEMBL+mechanism+multi-API, 30-day cache)")
     print("   POST /cancer-research/v2/subtypes/<id>/refresh-drugs - v2: force ChEMBL re-pull")
-    print("   GET  /cancer-research/v2/drugs/<chembl_id>/similar - v2: molecularly similar drugs via FAISS")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/detail - v2: ChEMBL drug detail (properties, synonyms, indications)")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/similar - v2: molecularly similar drugs via FAISS (with ChEMBL SMILES fallback)")
     print("   GET  /cancer-research/v2/subtypes/<id>/mechanisms - v2: mechanisms relevant to subtype")
     app.run(host=host, port=port, debug=debug_enabled)
 

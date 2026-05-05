@@ -767,3 +767,127 @@ struct DrugSearchResponse: Codable {
         case error
     }
 }
+
+// MARK: - ChEMBL Drug Detail (structure, properties, synonyms, indications)
+
+struct ChEMBLSynonym: Codable, Hashable {
+    let name: String
+    let type: String
+}
+
+struct ChEMBLProperties: Codable, Hashable {
+    let molecularWeight: Double?
+    let alogp: Double?
+    let molecularFormula: String?
+    let hba: Int?
+    let hbd: Int?
+    let psa: Double?
+    let ro5Violations: Int?
+    let rotatableBonds: Int?
+    let qedWeighted: Double?
+    let aromaticRings: Int?
+    let heavyAtoms: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case molecularWeight = "molecular_weight"
+        case alogp
+        case molecularFormula = "molecular_formula"
+        case hba
+        case hbd
+        case psa
+        case ro5Violations = "ro5_violations"
+        case rotatableBonds = "rotatable_bonds"
+        case qedWeighted = "qed_weighted"
+        case aromaticRings = "aromatic_rings"
+        case heavyAtoms = "heavy_atoms"
+    }
+}
+
+struct ChEMBLIndication: Codable, Hashable, Identifiable {
+    let meshHeading: String?
+    let meshId: String?
+    let efoTerm: String?
+    let efoId: String?
+    let maxPhase: Int?
+    let refCount: Int?
+
+    var id: String {
+        // mesh_heading is the dedup key; fall back to efo_term if missing.
+        return meshHeading ?? efoTerm ?? UUID().uuidString
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case meshHeading = "mesh_heading"
+        case meshId = "mesh_id"
+        case efoTerm = "efo_term"
+        case efoId = "efo_id"
+        case maxPhase = "max_phase"
+        case refCount = "ref_count"
+    }
+}
+
+struct ChEMBLDrugDetail: Codable, Hashable {
+    let chemblId: String
+    let parentChemblId: String?
+    let prefName: String?
+    let parentPrefName: String?
+    let moleculeType: String?
+    let maxPhase: Int?
+    let firstApproval: Int?
+    let smiles: String?
+    let synonyms: [ChEMBLSynonym]?
+    let properties: ChEMBLProperties?
+    let indications: [ChEMBLIndication]?
+
+    enum CodingKeys: String, CodingKey {
+        case chemblId = "chembl_id"
+        case parentChemblId = "parent_chembl_id"
+        case prefName = "pref_name"
+        case parentPrefName = "parent_pref_name"
+        case moleculeType = "molecule_type"
+        case maxPhase = "max_phase"
+        case firstApproval = "first_approval"
+        case smiles
+        case synonyms
+        case properties
+        case indications
+    }
+}
+
+/// Decoder helper: the backend returns ChEMBLDrugDetail fields at the top level
+/// of the response (alongside `success` + `disclaimer` + `error`). This wrapper
+/// lets us decode either the embedded detail or a top-level error.
+struct ChEMBLDrugDetailResponse: Codable {
+    let success: Bool
+    let error: String?
+    // Embedded detail fields (decoded via dynamic key fallthrough).
+    let detail: ChEMBLDrugDetail?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: GenericCodingKeys.self)
+        self.success = try container.decodeIfPresent(Bool.self, forKey: GenericCodingKeys(stringValue: "success")!) ?? false
+        self.error = try container.decodeIfPresent(String.self, forKey: GenericCodingKeys(stringValue: "error")!)
+        if success {
+            // Re-decode the same payload as ChEMBLDrugDetail (it shares the keys).
+            self.detail = try ChEMBLDrugDetail(from: decoder)
+        } else {
+            self.detail = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: GenericCodingKeys.self)
+        try container.encode(success, forKey: GenericCodingKeys(stringValue: "success")!)
+        try container.encodeIfPresent(error, forKey: GenericCodingKeys(stringValue: "error")!)
+        if let detail = detail {
+            try detail.encode(to: encoder)
+        }
+    }
+}
+
+private struct GenericCodingKeys: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
+}

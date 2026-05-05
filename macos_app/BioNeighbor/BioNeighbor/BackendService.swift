@@ -1768,6 +1768,27 @@ class BackendService: ObservableObject {
         return drugs
     }
 
+    func fetchChEMBLDrugDetail(chemblId: String) async throws -> ChEMBLDrugDetail {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/detail") else {
+            throw BackendError.backendNotAvailable
+        }
+        var request = URLRequest(url: url)
+        // ChEMBL detail involves up to 4 round-trips (molecule + parent + 2 indication pulls).
+        request.timeoutInterval = 60.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch ChEMBL drug detail")
+        }
+
+        let decoded = try JSONDecoder().decode(ChEMBLDrugDetailResponse.self, from: data)
+        guard decoded.success, let detail = decoded.detail else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch ChEMBL drug detail")
+        }
+        return detail
+    }
+
     func fetchSimilarDrugs(chemblId: String, topK: Int = 20) async throws -> (drugs: [SimilarDrugHit], notInLocalIndex: Bool) {
         var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/similar")
         components?.queryItems = [URLQueryItem(name: "top_k", value: "\(topK)")]
