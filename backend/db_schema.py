@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -64,6 +64,7 @@ SCHEMA: Dict[str, Dict] = {
             ('brand_names', 'TEXT'),
             ('pubchem_cid', 'TEXT'),
             ('drugbank_id', 'TEXT'),
+            ('chembl_id', 'TEXT'),
             ('description', 'TEXT'),
             ('indication', 'TEXT'),
             ('active_ingredients', 'TEXT'),
@@ -77,6 +78,7 @@ SCHEMA: Dict[str, Dict] = {
             'CREATE INDEX IF NOT EXISTS idx_drug_generic_name ON drugs(generic_name)',
             'CREATE INDEX IF NOT EXISTS idx_drug_pubchem_cid ON drugs(pubchem_cid)',
             'CREATE INDEX IF NOT EXISTS idx_drug_drugbank_id ON drugs(drugbank_id)',
+            'CREATE INDEX IF NOT EXISTS idx_drug_chembl_id ON drugs(chembl_id)',
         ],
         'foreign_keys': []
     },

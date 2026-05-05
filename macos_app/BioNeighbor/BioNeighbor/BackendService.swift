@@ -1023,6 +1023,40 @@ class BackendService: ObservableObject {
         return results
     }
     
+    /// Live drug search with ChEMBL write-through cache. Returns merged
+    /// local + ChEMBL hits with a `source` flag per row. Use this in any UI
+    /// that wants the freshest data (vs. searchDrugs which is autocomplete-shaped).
+    func searchDrugsLive(query: String, limit: Int = 20, includeChembl: Bool = true) async throws -> (results: [DrugSearchResult], chemblUsed: Bool) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ([], false) }
+
+        var urlComponents = URLComponents(string: "\(baseURL)/search/drugs")
+        urlComponents?.queryItems = [
+            URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+            URLQueryItem(name: "include_chembl", value: includeChembl ? "1" : "0"),
+        ]
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // ChEMBL fallback adds up to ~5s; keep timeout generous.
+        request.timeoutInterval = 15.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Drug search failed")
+        }
+
+        let envelope = try JSONDecoder().decode(DrugSearchEnvelope.self, from: data)
+        guard envelope.success else {
+            throw BackendError.unknownError(envelope.error ?? "Drug search failed")
+        }
+        return (envelope.results ?? [], envelope.chemblUsed ?? false)
+    }
+
     func searchDrugs(query: String, limit: Int = 20) async throws -> [SearchResult] {
         var urlComponents = URLComponents(string: "\(baseURL)/search/drugs")
         urlComponents?.queryItems = [

@@ -1090,30 +1090,94 @@ def search_molecules():
 def search_drugs():
     """
     Search drugs by name for autocomplete.
-    
+
+    Hybrid local + live ChEMBL search. Local drugs-table hits are returned
+    immediately; in parallel we query ChEMBL by pref_name and any new hits
+    are written through to the drugs table so subsequent searches are local.
+
     Query parameters:
-    - q (string): Search query
-    - limit (int): Maximum results (default: 20)
-    
+    - q (string): Search query (≥2 chars to trigger ChEMBL)
+    - limit (int): Maximum results (default 20)
+    - include_chembl (0/1): Toggle ChEMBL fallback. Default 1.
+
     Response (JSON):
     {
         "success": true,
-        "results": [...]
+        "query": "anastrozole",
+        "results": [
+            {"id": 91, "name": "ANASTROZOLE", "chembl_id": "CHEMBL1399",
+             "source": "chembl", ...}
+        ],
+        "chembl_used": true,
+        "chembl_inserted": 3
     }
     """
     try:
-        query = request.args.get('q', '', type=str)
+        query = request.args.get('q', '', type=str).strip()
         limit = request.args.get('limit', 20, type=int)
-        limit = min(max(limit, 1), 100)  # Clamp between 1 and 100
-        
+        limit = min(max(limit, 1), 100)
+        include_chembl = request.args.get('include_chembl', '1') == '1'
+
         engine = get_engine()
-        results = engine.search_drugs_by_name(query, limit=limit)
-        
+        local_results = engine.search_drugs_by_name(query, limit=limit) if query else []
+
+        chembl_used = False
+        chembl_hits = []
+        chembl_id_to_local_id = {}
+        newly_inserted = 0
+
+        # ChEMBL fallback: only when query is meaningful and local results
+        # didn't fill the whole limit, so the merged list gives the broadest
+        # view without redundant ChEMBL traffic when local already has plenty.
+        if include_chembl and len(query) >= 2 and len(local_results) < limit:
+            from chembl_drug_search import (
+                search_chembl_by_name,
+                upsert_chembl_hits_into_drugs,
+                merge_drug_search_results,
+            )
+            chembl_hits = search_chembl_by_name(query, limit=limit)
+            chembl_used = True
+            if chembl_hits:
+                # Write-through cache so the next search is fast & local.
+                new_ids = upsert_chembl_hits_into_drugs(chembl_hits)
+                for hit, new_id in zip(chembl_hits, new_ids):
+                    if new_id is not None:
+                        chembl_id_to_local_id[hit['chembl_id']] = new_id
+                        newly_inserted += 1
+                # Also resolve local ids for ChEMBL hits that were already
+                # cached, so navigation links in the UI work.
+                import sqlite3
+                from data_loader import DB_PATH
+                conn = sqlite3.connect(DB_PATH)
+                try:
+                    cursor = conn.cursor()
+                    cids = [h['chembl_id'] for h in chembl_hits if h.get('chembl_id')]
+                    if cids:
+                        placeholders = ",".join(["?"] * len(cids))
+                        cursor.execute(
+                            f"SELECT chembl_id, id FROM drugs WHERE chembl_id IN ({placeholders})",
+                            cids,
+                        )
+                        for cid, drug_id in cursor.fetchall():
+                            chembl_id_to_local_id.setdefault(cid, drug_id)
+                finally:
+                    conn.close()
+
+            results = merge_drug_search_results(
+                local_results, chembl_hits, chembl_id_to_local_id, query, limit
+            )
+        else:
+            # Local-only path — annotate source for response shape consistency.
+            results = [{**r, 'source': 'local'} for r in local_results]
+
         return jsonify({
             'success': True,
-            'results': results
+            'query': query,
+            'results': results,
+            'chembl_used': chembl_used,
+            'chembl_inserted': newly_inserted,
         })
-    
+
     except Exception as e:
         import traceback
         error_msg = str(e)
@@ -3303,45 +3367,67 @@ def v2_drug_similar(chembl_id: str):
     back to fetching its SMILES from ChEMBL on-demand and running similarity
     against that — so the feature works for any ChEMBL drug, not just the
     pre-ingested subset.
+
+    Each result row's `name` is enriched with ChEMBL `pref_name` when a
+    chembl_id is present, so the UI shows recognizable names ("ANASTROZOLE")
+    rather than IUPAC strings from our local molecules table.
     """
     try:
         top_k = max(1, min(int(request.args.get('top_k', 20)), 100))
         engine = get_engine()
 
+        results: List[Dict] = []
+        fetched_from_chembl = False
+        not_in_local_index = False
+
         # Fast path: drug already in local FAISS index.
         try:
             results = engine.search_by_chembl_id(chembl_id, top_k=top_k)
-            return jsonify({
-                'success': True,
-                'chembl_id': chembl_id,
-                'similar': results,
-                'fetched_from_chembl': False,
-                'not_in_local_index': False,
-                'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
-            })
         except ValueError:
-            pass  # fall through to on-demand ChEMBL fetch
+            # Fallback: pull SMILES from ChEMBL, then run search_similar.
+            from chembl_drug_detail import fetch_smiles
+            smiles = fetch_smiles(chembl_id)
+            if not smiles:
+                return jsonify({
+                    'success': True,
+                    'chembl_id': chembl_id,
+                    'similar': [],
+                    'fetched_from_chembl': False,
+                    'not_in_local_index': True,
+                    'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+                })
+            results = engine.search_similar(smiles, top_k=top_k)
+            fetched_from_chembl = True
 
-        # Fallback: pull SMILES from ChEMBL, then run search_similar against it.
-        from chembl_drug_detail import fetch_smiles
-        smiles = fetch_smiles(chembl_id)
-        if not smiles:
-            return jsonify({
-                'success': True,
-                'chembl_id': chembl_id,
-                'similar': [],
-                'fetched_from_chembl': False,
-                'not_in_local_index': True,
-                'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
-            })
+        # Enrich result names with ChEMBL pref_name (e.g. "ANASTROZOLE" vs.
+        # the IUPAC string stored in the local molecules table). The local
+        # FAISS index currently uses numeric placeholders for many molecules
+        # (e.g. chembl_id="2187") — only call ChEMBL for IDs that look real.
+        try:
+            import re
+            from chembl_drug_detail import fetch_pref_names
+            real_id_pattern = re.compile(r'^CHEMBL\d+$', re.IGNORECASE)
+            cids = [r.get('chembl_id') for r in results
+                    if r.get('chembl_id') and real_id_pattern.match(str(r['chembl_id']))]
+            if cids:
+                name_map = fetch_pref_names(cids)
+                for r in results:
+                    cid = r.get('chembl_id')
+                    pref = name_map.get(cid) if cid else None
+                    if pref:
+                        # Keep the original IUPAC for callers that want both.
+                        r['iupac_name'] = r.get('name')
+                        r['pref_name'] = pref
+                        r['name'] = pref
+        except Exception as e:
+            print(f"   ⚠️  pref_name enrichment skipped: {e}")
 
-        results = engine.search_similar(smiles, top_k=top_k)
         return jsonify({
             'success': True,
             'chembl_id': chembl_id,
             'similar': results,
-            'fetched_from_chembl': True,
-            'not_in_local_index': False,
+            'fetched_from_chembl': fetched_from_chembl,
+            'not_in_local_index': not_in_local_index,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
         })
     except Exception:

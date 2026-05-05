@@ -83,6 +83,14 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None
     ),
+    8: (
+        "Add chembl_id column to drugs table (cross-ref for live ChEMBL search write-through cache)",
+        [
+            "ALTER TABLE drugs ADD COLUMN chembl_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_drug_chembl_id ON drugs(chembl_id)",
+        ],
+        None  # No rollback for ALTER TABLE ADD COLUMN in SQLite
+    ),
 }
 
 

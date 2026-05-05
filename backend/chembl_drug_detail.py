@@ -191,6 +191,40 @@ def _normalize_indications(raw_indications: List[Dict]) -> List[Dict]:
     return rows
 
 
+def fetch_pref_names(chembl_ids: List[str], batch_size: int = 50) -> Dict[str, str]:
+    """
+    Batch-resolve molecule_chembl_id → pref_name for a list of IDs. Used by
+    /similar to replace IUPAC names from the local FAISS index with the
+    recognizable ChEMBL preferred name (e.g. "ANASTROZOLE" instead of
+    "2-[3-(2-cyanopropan-2-yl)-...nitrile"). Empty dict on ChEMBL failure.
+    """
+    if not chembl_ids or not CHEMBL_AVAILABLE or new_client is None:
+        return {}
+
+    out: Dict[str, str] = {}
+    # Dedupe + filter out empties before the request.
+    unique_ids = sorted({cid for cid in chembl_ids if cid})
+    for i in range(0, len(unique_ids), batch_size):
+        chunk = unique_ids[i:i + batch_size]
+        try:
+            results = _run_with_timeout(
+                lambda ids=chunk: list(
+                    new_client.molecule.filter(molecule_chembl_id__in=ids)
+                    .only(["molecule_chembl_id", "pref_name"])
+                )
+            )
+            for mol in results or []:
+                cid = mol.get("molecule_chembl_id")
+                pref = mol.get("pref_name")
+                if cid and pref:
+                    out[cid] = pref
+        except FuturesTimeoutError:
+            print(f"   ⚠️  pref_name batch timed out (chunk starting {i})")
+        except Exception as e:
+            print(f"   ⚠️  pref_name batch error: {e}")
+    return out
+
+
 def fetch_smiles(chembl_id: str) -> Optional[str]:
     """
     Cheap SMILES-only lookup for the similarity fallback. Always prefers the

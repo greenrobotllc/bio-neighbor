@@ -1082,12 +1082,18 @@ class SearchEngine:
             if not cursor.fetchone():
                 return []
             
+            # Tolerate older DBs that haven't migrated to v8 yet (no chembl_id column).
+            cursor.execute("PRAGMA table_info(drugs)")
+            has_chembl_col = any(row[1] == 'chembl_id' for row in cursor.fetchall())
+            select_chembl = ", chembl_id" if has_chembl_col else ", NULL AS chembl_id"
+
             cursor.execute(
-                "SELECT id, name, generic_name, brand_names FROM drugs WHERE LOWER(name) LIKE LOWER(?) OR LOWER(generic_name) LIKE LOWER(?) LIMIT ?",
+                f"SELECT id, name, generic_name, brand_names{select_chembl} "
+                "FROM drugs WHERE LOWER(name) LIKE LOWER(?) OR LOWER(generic_name) LIKE LOWER(?) LIMIT ?",
                 (f'%{query}%', f'%{query}%', limit)
             )
             rows = cursor.fetchall()
-            
+
             results = []
             for row in rows:
                 brand_names = []
@@ -1096,18 +1102,19 @@ class SearchEngine:
                         brand_names = json.loads(row[3])
                     except:
                         pass
-                
+
                 display_name = row[1]
                 if row[2] and row[2] != row[1]:
                     display_name = f"{row[1]} ({row[2]})"
-                
+
                 results.append({
                     'id': row[0],
                     'name': display_name,
                     'generic_name': row[2],
-                    'brand_names': brand_names
+                    'brand_names': brand_names,
+                    'chembl_id': row[4],
                 })
-            
+
             return results
         
         except sqlite3.OperationalError:

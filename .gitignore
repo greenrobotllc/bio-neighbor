@@ -81,6 +81,11 @@ backend/*.pkl
 *.db.bak
 data/*.bak
 
+# SQLite WAL / SHM (transient, regenerated on every connection)
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
+
 # IDE
 .vscode/
 .idea/

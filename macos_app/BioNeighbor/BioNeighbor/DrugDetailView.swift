@@ -59,9 +59,34 @@ struct DrugDetailView: View {
                     }
                     
                     Divider()
-                    
-                    // Description
-                    if let description = drug.description, !description.isEmpty {
+
+                    // ChEMBL-driven rich detail (structure, properties, synonyms,
+                    // indications, similar drugs). Appears for any drug with a
+                    // ChEMBL ID — includes drugs newly cached via the live
+                    // /search/drugs ChEMBL fallback. Loads in its own .task so
+                    // it never blocks the rest of the page.
+                    if let chembl = drug.chemblId, !chembl.isEmpty {
+                        HStack(spacing: 12) {
+                            Label(chembl, systemImage: "barcode")
+                                .font(.caption.monospaced())
+                                .foregroundColor(.secondary)
+                            if let url = URL(string: "https://www.ebi.ac.uk/chembl/explore/compound/\(chembl)") {
+                                Link(destination: url) {
+                                    Label("Open in ChEMBL", systemImage: "arrow.up.right.square")
+                                        .font(.caption)
+                                }
+                            }
+                        }
+                        ChEMBLDetailPanel(chemblId: chembl)
+                        Divider()
+                    }
+
+                    // Description — hide when it's the auto-generated placeholder
+                    // ("ChEMBL max_phase=...; Small molecule") that the live
+                    // search write-through wrote, since the rich panel above
+                    // already conveys that info more clearly.
+                    if let description = drug.description, !description.isEmpty,
+                       !description.hasPrefix("ChEMBL max_phase=") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Description")
                                 .font(.headline)
@@ -103,48 +128,53 @@ struct DrugDetailView: View {
                         }
                     }
                     
-                    // Active ingredients
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Active Ingredients")
-                            .font(.headline)
-                        
-                        if isLoadingMolecules {
-                            ProgressView("Loading active ingredients...")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                        } else if !backendService.isBackendRunning {
-                            Text("Backend is not running. Please start the backend to load active ingredients.")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                                .padding()
-                        } else if let error = errorMessage {
-                            Text("Error: \(error)")
-                                .font(.caption)
-                                .foregroundColor(.red)
-                                .padding()
-                        } else if activeIngredientMolecules.isEmpty {
-                            Text("No active ingredient molecules found")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding()
-                        } else {
-                            LazyVGrid(columns: [
-                                GridItem(.adaptive(minimum: 200), spacing: 16)
-                            ], spacing: 16) {
-                                ForEach(activeIngredientMolecules) { molecule in
-                                    NavigationLink(value: Molecule(
-                                        id: molecule.id,
-                                        chemblId: molecule.chemblId,
-                                        name: molecule.name,
-                                        smiles: molecule.smiles,
-                                        similarity: 1.0,
-                                        similarityScore: 0.0,
-                                        molecularWeight: molecule.molecularWeight,
-                                        isApproved: molecule.isApproved,
-                                        formula: molecule.formula
-                                    )) {
-                                        MoleculeCard(molecule: molecule) {
-                                            // Navigation handled by NavigationLink
+                    // Active ingredients — only render when the drug actually
+                    // has active-ingredient molecule indices to load (legacy
+                    // FDA-style drugs). For ChEMBL-cached drugs, the rich
+                    // panel above already shows the molecular structure.
+                    if let indices = drug.activeIngredientMoleculeIndices, !indices.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Active Ingredients")
+                                .font(.headline)
+
+                            if isLoadingMolecules {
+                                ProgressView("Loading active ingredients...")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                            } else if !backendService.isBackendRunning {
+                                Text("Backend is not running. Please start the backend to load active ingredients.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                    .padding()
+                            } else if let error = errorMessage {
+                                Text("Error: \(error)")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                    .padding()
+                            } else if activeIngredientMolecules.isEmpty {
+                                Text("No active ingredient molecules found")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                            } else {
+                                LazyVGrid(columns: [
+                                    GridItem(.adaptive(minimum: 200), spacing: 16)
+                                ], spacing: 16) {
+                                    ForEach(activeIngredientMolecules) { molecule in
+                                        NavigationLink(value: Molecule(
+                                            id: molecule.id,
+                                            chemblId: molecule.chemblId,
+                                            name: molecule.name,
+                                            smiles: molecule.smiles,
+                                            similarity: 1.0,
+                                            similarityScore: 0.0,
+                                            molecularWeight: molecule.molecularWeight,
+                                            isApproved: molecule.isApproved,
+                                            formula: molecule.formula
+                                        )) {
+                                            MoleculeCard(molecule: molecule) {
+                                                // Navigation handled by NavigationLink
+                                            }
                                         }
                                     }
                                 }
@@ -163,26 +193,30 @@ struct DrugDetailView: View {
                         }
                     }
                     
-                    // IDs
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Identifiers")
-                            .font(.headline)
-                        
-                        if let pubchemCid = drug.pubchemCid {
-                            HStack {
-                                Text("PubChem CID:")
-                                    .foregroundColor(.secondary)
-                                Text(pubchemCid)
-                                    .fontDesign(.monospaced)
+                    // External identifiers (PubChem CID / DrugBank). Hide the
+                    // whole section when neither is set — the ChEMBL ID is
+                    // already surfaced by the rich panel above.
+                    if drug.pubchemCid != nil || drug.drugbankId != nil {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Identifiers")
+                                .font(.headline)
+
+                            if let pubchemCid = drug.pubchemCid {
+                                HStack {
+                                    Text("PubChem CID:")
+                                        .foregroundColor(.secondary)
+                                    Text(pubchemCid)
+                                        .fontDesign(.monospaced)
+                                }
                             }
-                        }
-                        
-                        if let drugbankId = drug.drugbankId {
-                            HStack {
-                                Text("DrugBank ID:")
-                                    .foregroundColor(.secondary)
-                                Text(drugbankId)
-                                    .fontDesign(.monospaced)
+
+                            if let drugbankId = drug.drugbankId {
+                                HStack {
+                                    Text("DrugBank ID:")
+                                        .foregroundColor(.secondary)
+                                    Text(drugbankId)
+                                        .fontDesign(.monospaced)
+                                }
                             }
                         }
                     }
