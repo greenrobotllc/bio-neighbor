@@ -65,6 +65,7 @@ project.xcworkspace
 data/*.db
 data/*.parquet
 data/*.index
+data/*.bin
 data/*.pkl
 data/chembl_*.csv
 data/chembl_*.sqlite
