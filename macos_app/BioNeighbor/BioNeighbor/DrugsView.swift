@@ -214,10 +214,6 @@ struct DrugsView: View {
 
         isSearching = true
         defer { isSearching = false }
-        // Clear stale results so they aren't tappable while the new request
-        // is in flight.
-        liveResults = nil
-        errorMessage = nil
         do {
             let response = try await backendService.searchDrugsLive(query: q, limit: 30)
             if Task.isCancelled { return }
