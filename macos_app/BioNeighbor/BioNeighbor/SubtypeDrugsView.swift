@@ -70,7 +70,7 @@ struct SubtypeDrugsView: View {
             VStack(spacing: 0) {
                 HStack {
                     Text(mechanism.name)
-                        .font(.headline)
+                        .appFont(.headline)
                     Spacer()
                     Button("Done") { openMechanism = nil }
                         .keyboardShortcut(.cancelAction)
@@ -128,7 +128,7 @@ struct SubtypeDrugsView: View {
             }
             if !searchQuery.isEmpty {
                 Text("\(filteredDrugs.count) of \(drugs.count)")
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
                     .padding(.leading, 4)
             }
@@ -151,7 +151,7 @@ struct SubtypeDrugsView: View {
                 .font(.system(size: 24))
                 .foregroundColor(.secondary)
             Text("No drugs match \u{201C}\(searchQuery)\u{201D}")
-                .font(.subheadline)
+                .appFont(.subheadline)
             Button("Clear filter") { searchQuery = "" }
                 .buttonStyle(.bordered)
         }
@@ -170,9 +170,9 @@ struct SubtypeDrugsView: View {
     private var relatedMechanismsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Related Mechanisms")
-                .font(.headline)
+                .appFont(.headline)
             Text("Tap to open the full mechanism workspace (targets, ligands, assays, hypotheses).")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
             FlowLayout(spacing: 8) {
                 ForEach(mechanisms) { mechanism in
@@ -184,7 +184,7 @@ struct SubtypeDrugsView: View {
                             Text(mechanism.mechanismName)
                             if let activity = mechanism.activityLevel {
                                 Text(activity)
-                                    .font(.caption2)
+                                    .appFont(.caption2)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 1)
                                     .background(activityColor(activity).opacity(0.18))
@@ -192,7 +192,7 @@ struct SubtypeDrugsView: View {
                                     .clipShape(Capsule())
                             }
                         }
-                        .font(.caption)
+                        .appFont(.caption)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(Color.accentColor.opacity(0.10))
@@ -223,11 +223,11 @@ struct SubtypeDrugsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(subtype.name)
-                    .font(.title2)
+                    .appFont(.title2)
                     .fontWeight(.semibold)
                 if let short = subtype.shortName, short != subtype.name {
                     Text(short)
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -237,14 +237,14 @@ struct SubtypeDrugsView: View {
                 Spacer()
                 if !drugs.isEmpty {
                     Text("\(drugs.count) drug\(drugs.count == 1 ? "" : "s")")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
             }
 
             if let description = subtype.description {
                 Text(description)
-                    .font(.subheadline)
+                    .appFont(.subheadline)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -253,7 +253,7 @@ struct SubtypeDrugsView: View {
                 FlowLayout(spacing: 6) {
                     ForEach(markers, id: \.self) { marker in
                         Text(marker)
-                            .font(.caption.monospaced())
+                            .appFont(.caption, monospaced: true)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(Color.accentColor.opacity(0.12))
@@ -264,7 +264,7 @@ struct SubtypeDrugsView: View {
             }
 
             Text("Drugs ranked by clinical phase (max_phase) and source agreement. Pulled from ChEMBL drug_indication, related mechanism ligands, and openFDA/ClinicalTrials.")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .padding(.top, 2)
         }
@@ -276,9 +276,9 @@ struct SubtypeDrugsView: View {
                 .font(.system(size: 36))
                 .foregroundColor(.secondary)
             Text("No drugs cached yet")
-                .font(.headline)
+                .appFont(.headline)
             Text("Tap “Refresh from ChEMBL” to pull the latest indications for this subtype.")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button {
@@ -299,9 +299,9 @@ struct SubtypeDrugsView: View {
                 .font(.system(size: 28))
                 .foregroundColor(.orange)
             Text("Couldn't load drugs")
-                .font(.headline)
+                .appFont(.headline)
             Text(message)
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry") {
@@ -364,7 +364,7 @@ private struct DrugTile: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(drug.drugName)
-                    .font(.headline)
+                    .appFont(.headline)
                     .lineLimit(2)
                 Spacer()
                 phaseBadge
@@ -372,19 +372,19 @@ private struct DrugTile: View {
 
             if let chembl = drug.chemblId {
                 Text(chembl)
-                    .font(.caption.monospaced())
+                    .appFont(.caption, monospaced: true)
                     .foregroundColor(.secondary)
             }
 
             HStack(spacing: 8) {
                 if let source = drug.source {
                     Label(prettySourceLabel(source), systemImage: sourceIcon(source))
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .foregroundColor(.secondary)
                 }
                 if let count = drug.sourceCount, count > 1 {
                     Text("\(count) sources")
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -427,7 +427,7 @@ private struct DrugTile: View {
                 }
             }()
             Text(label)
-                .font(.caption2.bold())
+                .appFont(.caption2, weight: .bold)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(color.opacity(0.15))

@@ -26,7 +26,7 @@ struct DrugDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(drug.name)
-                                .font(.largeTitle)
+                                .appFont(.largeTitle)
                                 .fontWeight(.bold)
                             
                             Spacer()
@@ -34,7 +34,7 @@ struct DrugDetailView: View {
                         
                         if let genericName = drug.genericName, genericName != drug.name {
                             Text(genericName)
-                                .font(.title3)
+                                .appFont(.title3)
                                 .foregroundColor(.secondary)
                         }
                         
@@ -42,11 +42,11 @@ struct DrugDetailView: View {
                         if let brandNames = drug.brandNames, !brandNames.isEmpty {
                             HStack(spacing: 8) {
                                 Text("Brand names:")
-                                    .font(.subheadline)
+                                    .appFont(.subheadline)
                                     .foregroundColor(.secondary)
                                 ForEach(brandNames, id: \.self) { brand in
                                     Text(brand)
-                                        .font(.subheadline)
+                                        .appFont(.subheadline)
                                         .foregroundColor(.blue)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
@@ -68,12 +68,12 @@ struct DrugDetailView: View {
                     if let chembl = drug.chemblId, !chembl.isEmpty {
                         HStack(spacing: 12) {
                             Label(chembl, systemImage: "barcode")
-                                .font(.caption.monospaced())
+                                .appFont(.caption, monospaced: true)
                                 .foregroundColor(.secondary)
                             if let url = URL(string: "https://www.ebi.ac.uk/chembl/explore/compound/\(chembl)") {
                                 Link(destination: url) {
                                     Label("Open in ChEMBL", systemImage: "arrow.up.right.square")
-                                        .font(.caption)
+                                        .appFont(.caption)
                                 }
                             }
                         }
@@ -89,9 +89,9 @@ struct DrugDetailView: View {
                        !description.hasPrefix("ChEMBL max_phase=") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Description")
-                                .font(.headline)
+                                .appFont(.headline)
                             Text(description)
-                                .font(.body)
+                                .appFont(.body)
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -100,9 +100,9 @@ struct DrugDetailView: View {
                     if let indication = drug.indication, !indication.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Indication")
-                                .font(.headline)
+                                .appFont(.headline)
                             Text(indication)
-                                .font(.body)
+                                .appFont(.body)
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -112,18 +112,18 @@ struct DrugDetailView: View {
                         HStack(spacing: 16) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Dosage Form")
-                                    .font(.caption)
+                                    .appFont(.caption)
                                     .foregroundColor(.secondary)
                                 Text(dosageForm)
-                                    .font(.body)
+                                    .appFont(.body)
                             }
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Route")
-                                    .font(.caption)
+                                    .appFont(.caption)
                                     .foregroundColor(.secondary)
                                 Text(route)
-                                    .font(.body)
+                                    .appFont(.body)
                             }
                         }
                     }
@@ -135,7 +135,7 @@ struct DrugDetailView: View {
                     if let indices = drug.activeIngredientMoleculeIndices, !indices.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Active Ingredients")
-                                .font(.headline)
+                                .appFont(.headline)
 
                             if isLoadingMolecules {
                                 ProgressView("Loading active ingredients...")
@@ -143,17 +143,17 @@ struct DrugDetailView: View {
                                     .padding()
                             } else if !backendService.isBackendRunning {
                                 Text("Backend is not running. Please start the backend to load active ingredients.")
-                                    .font(.caption)
+                                    .appFont(.caption)
                                     .foregroundColor(.orange)
                                     .padding()
                             } else if let error = errorMessage {
                                 Text("Error: \(error)")
-                                    .font(.caption)
+                                    .appFont(.caption)
                                     .foregroundColor(.red)
                                     .padding()
                             } else if activeIngredientMolecules.isEmpty {
                                 Text("No active ingredient molecules found")
-                                    .font(.caption)
+                                    .appFont(.caption)
                                     .foregroundColor(.secondary)
                                     .padding()
                             } else {
@@ -186,9 +186,9 @@ struct DrugDetailView: View {
                     if let inactiveIngredients = drug.inactiveIngredients, !inactiveIngredients.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Inactive Ingredients")
-                                .font(.headline)
+                                .appFont(.headline)
                             Text(inactiveIngredients.joined(separator: ", "))
-                                .font(.body)
+                                .appFont(.body)
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -199,7 +199,7 @@ struct DrugDetailView: View {
                     if drug.pubchemCid != nil || drug.drugbankId != nil {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Identifiers")
-                                .font(.headline)
+                                .appFont(.headline)
 
                             if let pubchemCid = drug.pubchemCid {
                                 HStack {

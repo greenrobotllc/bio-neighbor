@@ -191,9 +191,9 @@ struct ChEMBLDetailPanel: View {
                 ProgressView().scaleEffect(0.8)
             } else if detail?.smiles == nil {
                 VStack(spacing: 6) {
-                    Image(systemName: "atom").font(.title2).foregroundColor(.secondary)
+                    Image(systemName: "atom").appFont(.title2).foregroundColor(.secondary)
                     Text("No structure available")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
             }
@@ -204,7 +204,7 @@ struct ChEMBLDetailPanel: View {
     private var propertiesPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Molecular Properties")
-                .font(.headline)
+                .appFont(.headline)
                 .padding(.bottom, 4)
 
             if isLoadingDetail && detail == nil {
@@ -222,11 +222,11 @@ struct ChEMBLDetailPanel: View {
                 propertyRow("QED", p.qedWeighted.map { String(format: "%.2f", $0) })
             } else if let err = detailError {
                 Text(err)
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
             } else {
                 Text("No properties available")
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
             }
         }
@@ -237,11 +237,11 @@ struct ChEMBLDetailPanel: View {
         if let value = value, !value.isEmpty {
             HStack(alignment: .firstTextBaseline) {
                 Text(label)
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
                     .frame(width: 140, alignment: .leading)
                 Text(value)
-                    .font(.subheadline)
+                    .appFont(.subheadline)
                     .textSelection(.enabled)
             }
         }
@@ -257,7 +257,7 @@ struct ChEMBLDetailPanel: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             Text("Names")
-                .font(.headline)
+                .appFont(.headline)
             FlowLayout(spacing: 6) {
                 ForEach(primaryTypes, id: \.self) { type in
                     if let entries = grouped[type] {
@@ -272,7 +272,7 @@ struct ChEMBLDetailPanel: View {
                     FlowLayout(spacing: 6) {
                         ForEach(uniqueByName(researchCodes), id: \.name) { syn in
                             Text(syn.name)
-                                .font(.caption.monospaced())
+                                .appFont(.caption, monospaced: true)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Color.secondary.opacity(0.10))
@@ -282,7 +282,7 @@ struct ChEMBLDetailPanel: View {
                     }
                     .padding(.top, 4)
                 }
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
             }
         }
@@ -301,10 +301,10 @@ struct ChEMBLDetailPanel: View {
     private func synonymChip(_ syn: ChEMBLSynonym, isBrand: Bool) -> some View {
         HStack(spacing: 4) {
             Text(syn.type.replacingOccurrences(of: "_", with: " "))
-                .font(.caption2)
+                .appFont(.caption2)
                 .foregroundColor(isBrand ? .green.opacity(0.9) : .secondary)
             Text(syn.name)
-                .font(.caption.bold())
+                .appFont(.caption, weight: .bold)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -320,25 +320,25 @@ struct ChEMBLDetailPanel: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Indications")
-                    .font(.headline)
+                    .appFont(.headline)
                 Spacer()
                 if !normalizedFind.isEmpty && total != indications.count {
                     Text("\(indications.count) of \(total)")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 } else {
                     Text("\(total) from ChEMBL")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
             }
             Text("Conditions ChEMBL has linked to this drug, with the highest clinical phase reached. Sorted by phase.")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
 
             if indications.isEmpty {
                 Text("No indications match \u{201C}\(findQuery)\u{201D}.")
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 40)
             } else {
@@ -358,22 +358,22 @@ struct ChEMBLDetailPanel: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Clinical Trial Outcomes")
-                    .font(.headline)
+                    .appFont(.headline)
                 Spacer()
                 if !trials.isEmpty {
                     if !normalizedFind.isEmpty {
                         Text("\(visibleTrials.count) of \(trials.count)")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                     } else {
                         Text("\(trials.count) trial\(trials.count == 1 ? "" : "s")")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
             }
             Text("Trial arms with reported primary outcomes from ClinicalTrials.gov. Arms including this drug are highlighted; multi-arm trials let you compare regimens (e.g. backbone vs backbone + this drug).")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
 
             if isLoadingTrials {
@@ -382,18 +382,18 @@ struct ChEMBLDetailPanel: View {
             } else if let err = trialsError {
                 VStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle").foregroundColor(.orange)
-                    Text(err).font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Text(err).appFont(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
                     Button("Retry") { Task { await loadTrials() } }.buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, minHeight: 100)
             } else if trials.isEmpty {
                 Text("No linked clinical trials found for this drug.")
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else if visibleTrials.isEmpty {
                 Text("No trials match \u{201C}\(findQuery)\u{201D}.")
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
@@ -425,27 +425,27 @@ struct ChEMBLDetailPanel: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Molecularly Similar Drugs")
-                    .font(.headline)
+                    .appFont(.headline)
                 Spacer()
                 if similarFetchedFromChEMBL {
                     Label("via ChEMBL", systemImage: "checkmark.seal")
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .foregroundColor(.secondary)
                 }
                 if !similar.isEmpty {
                     if !normalizedFind.isEmpty {
                         Text("\(visibleSimilar.count) of \(similar.count)")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                     } else {
                         Text("\(similar.count) hits")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
             }
             Text("Top-K nearest neighbors from the local FAISS index using Morgan fingerprints (ECFP4).")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
 
             if isLoadingSimilar {
@@ -454,7 +454,7 @@ struct ChEMBLDetailPanel: View {
             } else if let error = similarError {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle").foregroundColor(.orange)
-                    Text(error).font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Text(error).appFont(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
                     Button("Retry") { Task { await loadSimilar() } }
                         .buttonStyle(.bordered)
                 }
@@ -465,9 +465,9 @@ struct ChEMBLDetailPanel: View {
                         .font(.system(size: 28))
                         .foregroundColor(.secondary)
                     Text("Couldn't fetch SMILES from ChEMBL")
-                        .font(.subheadline)
+                        .appFont(.subheadline)
                     Text("ChEMBL has no canonical structure for this drug. The similarity search needs a SMILES string.")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -479,7 +479,7 @@ struct ChEMBLDetailPanel: View {
             } else if visibleSimilar.isEmpty {
                 Text("No similar drugs match \u{201C}\(findQuery)\u{201D}.")
                     .foregroundColor(.secondary)
-                    .font(.caption)
+                    .appFont(.caption)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 LazyVGrid(columns: similarColumns, spacing: 12) {
@@ -545,17 +545,17 @@ struct IndicationRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(indication.meshHeading ?? indication.efoTerm ?? "Unknown")
-                .font(.subheadline)
+                .appFont(.subheadline)
                 .lineLimit(2)
             if let mesh = indication.meshId {
                 Text(mesh)
-                    .font(.caption2.monospaced())
+                    .appFont(.caption2, monospaced: true)
                     .foregroundColor(.secondary)
             }
             Spacer()
             if let refs = indication.refCount, refs > 0 {
                 Text("\(refs) ref\(refs == 1 ? "" : "s")")
-                    .font(.caption2)
+                    .appFont(.caption2)
                     .foregroundColor(.secondary)
             }
             phaseChip
@@ -582,7 +582,7 @@ struct IndicationRow: View {
                 }
             }()
             Text(label)
-                .font(.caption2.bold())
+                .appFont(.caption2, weight: .bold)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(color.opacity(0.15))
@@ -603,7 +603,7 @@ struct TrialCard: View {
             // Header — title + NCT link + status chip
             HStack(alignment: .firstTextBaseline) {
                 Text(trial.title ?? trial.nctId)
-                    .font(.subheadline.bold())
+                    .appFont(.subheadline, weight: .bold)
                     .lineLimit(2)
                 Spacer()
                 statusChip
@@ -612,11 +612,11 @@ struct TrialCard: View {
             HStack(spacing: 10) {
                 if let url = URL(string: "https://clinicaltrials.gov/study/\(trial.nctId)") {
                     Link(trial.nctId, destination: url)
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                 }
                 if let phases = trial.phase, !phases.isEmpty {
                     Text(phases.joined(separator: ", "))
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.secondary.opacity(0.12))
@@ -641,7 +641,7 @@ struct TrialCard: View {
                 }
             } else if !(trial.hasResults ?? false) {
                 Text("Results not yet reported")
-                    .font(.caption2)
+                    .appFont(.caption2)
                     .foregroundColor(.secondary)
             }
         }
@@ -669,7 +669,7 @@ struct TrialCard: View {
                 }
             }()
             Text(status.replacingOccurrences(of: "_", with: " ").capitalized)
-                .font(.caption2.bold())
+                .appFont(.caption2, weight: .bold)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(color.opacity(0.15))
@@ -687,13 +687,13 @@ private struct TrialArmRow: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: containsCurrentDrug ? "checkmark.circle.fill" : "circle")
                 .foregroundColor(containsCurrentDrug ? .accentColor : .secondary.opacity(0.5))
-                .font(.caption)
+                .appFont(.caption)
             VStack(alignment: .leading, spacing: 2) {
                 Text(arm.label ?? "—")
-                    .font(.caption.bold())
+                    .appFont(.caption, weight: .bold)
                 if let interventions = arm.interventions, !interventions.isEmpty {
                     Text(interventions.joined(separator: " + "))
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .foregroundColor(.secondary)
                         .lineLimit(2)
                 }
@@ -745,18 +745,18 @@ private struct TrialOutcomeRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Primary")
-                    .font(.caption2.bold())
+                    .appFont(.caption2, weight: .bold)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .background(Color.blue.opacity(0.15))
                     .foregroundColor(.blue)
                     .clipShape(Capsule())
                 Text(outcome.title ?? "—")
-                    .font(.caption)
+                    .appFont(.caption)
                     .lineLimit(2)
                 if let unit = outcome.unit, !unit.isEmpty {
                     Text("(\(unit))")
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .foregroundColor(.secondary)
                 }
                 Spacer()
@@ -765,12 +765,12 @@ private struct TrialOutcomeRow: View {
             ForEach(outcome.armResults ?? [], id: \.armLabel) { result in
                 HStack(alignment: .firstTextBaseline) {
                     Text(result.armLabel ?? "?")
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .lineLimit(2)
                     Spacer()
                     if let value = result.value, !value.isEmpty {
                         Text(value)
-                            .font(.caption.monospaced())
+                            .appFont(.caption, monospaced: true)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(Color.green.opacity(0.12))
@@ -780,7 +780,7 @@ private struct TrialOutcomeRow: View {
                     if let l = result.lower, let u = result.upper,
                        l.uppercased() != "NA" && u.uppercased() != "NA" {
                         Text("(\(l)–\(u))")
-                            .font(.caption2.monospaced())
+                            .appFont(.caption2, monospaced: true)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -797,7 +797,7 @@ private struct TrialOutcomeRow: View {
         switch ciStatus {
         case .distinct:
             Label("Distinct CIs", systemImage: "checkmark.circle.fill")
-                .font(.caption2.bold())
+                .appFont(.caption2, weight: .bold)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.green.opacity(0.15))
@@ -806,7 +806,7 @@ private struct TrialOutcomeRow: View {
                 .help("The 95% confidence intervals do not overlap — the difference between arms is likely real, not chance.")
         case .overlap:
             Label("CIs overlap", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption2.bold())
+                .appFont(.caption2, weight: .bold)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.yellow.opacity(0.18))
@@ -826,12 +826,12 @@ struct SimilarDrugTile: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(hit.name ?? "Unknown")
-                    .font(.subheadline.bold())
+                    .appFont(.subheadline, weight: .bold)
                     .lineLimit(2)
                 Spacer()
                 if let sim = displayedSimilarity {
                     Text(String(format: "%.2f", sim))
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.accentColor.opacity(0.15))
@@ -841,12 +841,12 @@ struct SimilarDrugTile: View {
             }
             if let chembl = hit.chemblId, isRealChemblId(chembl) {
                 Text(chembl)
-                    .font(.caption.monospaced())
+                    .appFont(.caption, monospaced: true)
                     .foregroundColor(.secondary)
             }
             if let smiles = hit.smiles {
                 Text(smiles)
-                    .font(.caption2.monospaced())
+                    .appFont(.caption2, monospaced: true)
                     .foregroundColor(.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)

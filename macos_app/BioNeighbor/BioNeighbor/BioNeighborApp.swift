@@ -47,6 +47,93 @@ enum AppTextSize: Int, CaseIterable, Identifiable {
         case .huge: return .xxxLarge
         }
     }
+
+    /// Multiplier applied to the named-text-style base point sizes. macOS
+    /// SwiftUI does NOT honor app-level dynamicTypeSize for `.font(.body)`
+    /// etc., so we drive scaling explicitly via the `.appFont(...)` modifier
+    /// below.
+    var scale: CGFloat {
+        switch self {
+        case .small: return 0.85
+        case .medium: return 0.92
+        case .default: return 1.0
+        case .large: return 1.20
+        case .extraLarge: return 1.45
+        case .huge: return 1.75
+        }
+    }
+}
+
+// MARK: - .appFont(.body) — explicit, app-storage-driven font scaling
+//
+// macOS SwiftUI ignores `.dynamicTypeSize` for named text styles, so we
+// emit `.font(.system(size: base * scale, weight:, design:))` ourselves.
+// Use `.appFont(.body)` instead of `.font(.body)` anywhere we want the user's
+// Settings text-size choice to take effect.
+
+private extension Font.TextStyle {
+    /// Apple's macOS body sizes per text style. Used as the base before
+    /// applying our scale.
+    var basePointSize: CGFloat {
+        switch self {
+        case .largeTitle: return 26
+        case .title: return 22
+        case .title2: return 17
+        case .title3: return 15
+        case .headline: return 13
+        case .subheadline: return 11
+        case .body: return 13
+        case .callout: return 12
+        case .footnote: return 10
+        case .caption: return 10
+        case .caption2: return 10
+        @unknown default: return 13
+        }
+    }
+}
+
+struct AppFontModifier: ViewModifier {
+    @AppStorage("appTextSize") private var sizeRaw: Int = AppTextSize.default.rawValue
+    let style: Font.TextStyle
+    let weight: Font.Weight?
+    let monospaced: Bool
+
+    private var pointSize: CGFloat {
+        let scale = (AppTextSize(rawValue: sizeRaw) ?? .default).scale
+        return style.basePointSize * scale
+    }
+
+    /// SwiftUI's named text styles imply a default weight (.headline is
+    /// semibold, others are regular). Match that so callers don't need to
+    /// pass `weight: .semibold` everywhere.
+    private var resolvedWeight: Font.Weight {
+        if let weight = weight { return weight }
+        switch style {
+        case .headline: return .semibold
+        default: return .regular
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content.font(
+            .system(
+                size: pointSize,
+                weight: resolvedWeight,
+                design: monospaced ? .monospaced : .default
+            )
+        )
+    }
+}
+
+extension View {
+    /// Replacement for `.font(.body)` that respects the app's Settings text size.
+    func appFont(
+        _ style: Font.TextStyle,
+        weight: Font.Weight? = nil,
+        monospaced: Bool = false
+    ) -> some View {
+        modifier(AppFontModifier(style: style, weight: weight, monospaced: monospaced))
+    }
 }
 
 @main

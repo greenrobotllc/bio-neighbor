@@ -41,7 +41,7 @@ struct CancerSubtypePickerView: View {
                     errorView(error)
                 } else if subtypes.isEmpty {
                     Text("No subtypes are curated yet for this cancer type.")
-                        .font(.subheadline)
+                        .appFont(.subheadline)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 100)
                 } else {
@@ -112,12 +112,12 @@ struct CancerSubtypePickerView: View {
         if let err = searchError {
             VStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle").foregroundColor(.orange)
-                Text(err).font(.caption).foregroundColor(.secondary)
+                Text(err).appFont(.caption).foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 80)
         } else if searchQuery.count < 2 {
             Text("Type at least 2 characters.")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if searchResults.isEmpty && !isSearching {
@@ -126,11 +126,11 @@ struct CancerSubtypePickerView: View {
                     .font(.system(size: 24))
                     .foregroundColor(.secondary)
                 Text("No \(cancerType.displayName ?? cancerType.name) subtype has \u{201C}\(searchQuery)\u{201D} cached.")
-                    .font(.subheadline)
+                    .appFont(.subheadline)
                     .multilineTextAlignment(.center)
                 if uncachedSubtypeCount > 0 {
                     Text("\(uncachedSubtypeCount) subtype\(uncachedSubtypeCount == 1 ? " has" : "s have") not been indexed yet — visit them to populate the search.")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -141,12 +141,12 @@ struct CancerSubtypePickerView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Matched in \(searchResults.count) subtype\(searchResults.count == 1 ? "" : "s")")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
                     if uncachedSubtypeCount > 0 {
                         Text("\(uncachedSubtypeCount) not yet indexed")
-                            .font(.caption2)
+                            .appFont(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -198,12 +198,12 @@ struct CancerSubtypePickerView: View {
                     .font(.system(size: 22))
                     .foregroundColor(.accentColor)
                 Text(cancerType.displayName ?? cancerType.name)
-                    .font(.title2)
+                    .appFont(.title2)
                     .fontWeight(.semibold)
                 Spacer()
                 if let mesh = cancerType.meshId {
                     Text("MeSH \(mesh)")
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
@@ -213,11 +213,11 @@ struct CancerSubtypePickerView: View {
             }
             if let description = cancerType.description {
                 Text(description)
-                    .font(.subheadline)
+                    .appFont(.subheadline)
                     .foregroundColor(.secondary)
             }
             Text("Pick a subtype to see top drugs (coming next) and similar molecules.")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .padding(.top, 4)
         }
@@ -229,9 +229,9 @@ struct CancerSubtypePickerView: View {
                 .font(.system(size: 28))
                 .foregroundColor(.orange)
             Text("Couldn't load subtypes")
-                .font(.headline)
+                .appFont(.headline)
             Text(message)
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry") {
@@ -262,10 +262,10 @@ private struct SubtypeRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(subtype.name)
-                    .font(.headline)
+                    .appFont(.headline)
                 if let short = subtype.shortName, short != subtype.name {
                     Text(short)
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -275,14 +275,14 @@ private struct SubtypeRow: View {
                 Spacer()
                 if let count = subtype.drugCount, count > 0 {
                     Label("\(count) drugs", systemImage: "pills.fill")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
             }
 
             if let description = subtype.description {
                 Text(description)
-                    .font(.subheadline)
+                    .appFont(.subheadline)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -312,7 +312,7 @@ private struct MarkerChipsView: View {
         FlowLayout(spacing: 6) {
             ForEach(markers, id: \.self) { marker in
                 Text(marker)
-                    .font(.caption.monospaced())
+                    .appFont(.caption, monospaced: true)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Color.accentColor.opacity(0.12))
@@ -334,10 +334,10 @@ private struct DrugSearchMatchRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(subtype.name)
-                    .font(.headline)
+                    .appFont(.headline)
                 if let short = subtype.shortName, short != subtype.name {
                     Text(short)
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -346,7 +346,7 @@ private struct DrugSearchMatchRow: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
             }
 
@@ -354,11 +354,11 @@ private struct DrugSearchMatchRow: View {
                 ForEach(match.matchedDrugs, id: \.drugName) { drug in
                     HStack(spacing: 4) {
                         Image(systemName: "pills.fill")
-                            .font(.caption2)
+                            .appFont(.caption2)
                         Text(drug.drugName)
                         if let phase = drug.maxPhase, phase == 4 {
                             Text("Approved")
-                                .font(.caption2.bold())
+                                .appFont(.caption2, weight: .bold)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(Color.green.opacity(0.18))
@@ -366,7 +366,7 @@ private struct DrugSearchMatchRow: View {
                                 .clipShape(Capsule())
                         } else if let phase = drug.maxPhase, phase > 0 {
                             Text("P\(phase)")
-                                .font(.caption2.bold())
+                                .appFont(.caption2, weight: .bold)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(Color.blue.opacity(0.18))
@@ -374,7 +374,7 @@ private struct DrugSearchMatchRow: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    .font(.caption)
+                    .appFont(.caption)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.accentColor.opacity(0.12))

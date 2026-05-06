@@ -40,7 +40,7 @@ struct CancerTypePickerView: View {
                                 }
                             } header: {
                                 Text(group.category)
-                                    .font(.headline)
+                                    .appFont(.headline)
                                     .foregroundColor(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.top, 8)
@@ -63,10 +63,10 @@ struct CancerTypePickerView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Browse by Cancer Type")
-                .font(.title2)
+                .appFont(.title2)
                 .fontWeight(.semibold)
             Text("Pick a cancer type to explore its subtypes, top treatments, and similar drugs.")
-                .font(.subheadline)
+                .appFont(.subheadline)
                 .foregroundColor(.secondary)
         }
     }
@@ -77,9 +77,9 @@ struct CancerTypePickerView: View {
                 .font(.system(size: 32))
                 .foregroundColor(.orange)
             Text("Couldn't load cancer types")
-                .font(.headline)
+                .appFont(.headline)
             Text(message)
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry") {
@@ -135,7 +135,7 @@ private struct CancerTypeCard: View {
                 Spacer()
                 if let count = type.subtypeCount {
                     Text("\(count) subtypes")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
@@ -145,13 +145,13 @@ private struct CancerTypeCard: View {
             }
 
             Text(type.displayName ?? type.name)
-                .font(.title3)
+                .appFont(.title3)
                 .fontWeight(.semibold)
                 .foregroundColor(.primary)
 
             if let description = type.description {
                 Text(description)
-                    .font(.caption)
+                    .appFont(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(3)
             }

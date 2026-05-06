@@ -27,7 +27,7 @@ struct DrugsView: View {
             // Sidebar with search
             VStack(alignment: .leading, spacing: 16) {
                 Text("Drugs")
-                    .font(.largeTitle)
+                    .appFont(.largeTitle)
                     .fontWeight(.bold)
                 
                 HStack(spacing: 6) {
@@ -39,18 +39,18 @@ struct DrugsView: View {
                 }
                 if lastChemblUsed && !searchText.isEmpty {
                     Text("Includes live ChEMBL results")
-                        .font(.caption2)
+                        .appFont(.caption2)
                         .foregroundColor(.secondary)
                 }
                 
                 if !backendService.isBackendRunning {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("⚠️ Backend not running")
-                            .font(.headline)
+                            .appFont(.headline)
                             .foregroundColor(.orange)
                         
                         Text("The Python backend needs to be started.")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                         
                         Button("Start Backend") {
@@ -77,13 +77,13 @@ struct DrugsView: View {
                 } else {
                     let count = liveResults?.count ?? drugs.count
                     Text("\(count) drug\(count == 1 ? "" : "s")")
-                        .font(.subheadline)
+                        .appFont(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 
                 if let error = errorMessage {
                     Text("Error: \(error)")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.red)
                         .padding()
                         .background(Color.red.opacity(0.1))
@@ -117,10 +117,10 @@ struct DrugsView: View {
                                 .font(.system(size: 60))
                                 .foregroundColor(.secondary)
                             Text("No drugs match your search")
-                                .font(.headline)
+                                .appFont(.headline)
                                 .foregroundColor(.secondary)
                             Text("Tried local DB \(lastChemblUsed ? "and ChEMBL" : "")— nothing found.")
-                                .font(.caption)
+                                .appFont(.caption)
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity)
@@ -141,10 +141,10 @@ struct DrugsView: View {
                             .font(.system(size: 60))
                             .foregroundColor(.secondary)
                         Text("No drugs found")
-                            .font(.headline)
+                            .appFont(.headline)
                             .foregroundColor(.secondary)
                         Text("Drug data may not be loaded yet. Try downloading drug information from the Download Data tab.")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
@@ -285,13 +285,13 @@ private struct LiveDrugSearchCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(hit.name)
-                        .font(.headline)
+                        .appFont(.headline)
                         .foregroundColor(.primary)
                         .lineLimit(2)
                     Spacer()
                     if hit.source == "chembl" {
                         Label("ChEMBL", systemImage: "checkmark.seal")
-                            .font(.caption2)
+                            .appFont(.caption2)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.accentColor.opacity(0.12))
@@ -303,12 +303,12 @@ private struct LiveDrugSearchCard: View {
 
                 if let chembl = hit.chemblId {
                     Text(chembl)
-                        .font(.caption.monospaced())
+                        .appFont(.caption, monospaced: true)
                         .foregroundColor(.secondary)
                 }
                 if let generic = hit.genericName, generic != hit.name {
                     Text(generic)
-                        .font(.subheadline)
+                        .appFont(.subheadline)
                         .foregroundColor(.secondary)
                 }
             }
@@ -341,7 +341,7 @@ private struct LiveDrugSearchCard: View {
                 }
             }()
             Text(label)
-                .font(.caption2.bold())
+                .appFont(.caption2, weight: .bold)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(color.opacity(0.15))

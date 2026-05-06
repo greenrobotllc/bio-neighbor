@@ -22,7 +22,7 @@ struct CancerDrugDetailView: View {
                     ChEMBLDetailPanel(chemblId: chembl)
                 } else {
                     Text("This drug has no ChEMBL ID, so we can't fetch structural or indication detail.")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
             }
@@ -37,7 +37,7 @@ struct CancerDrugDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(drug.drugName)
-                    .font(.title2)
+                    .appFont(.title2)
                     .fontWeight(.semibold)
                 Spacer()
                 phaseBadge
@@ -45,17 +45,17 @@ struct CancerDrugDetailView: View {
 
             HStack(spacing: 12) {
                 Label(drug.chemblId ?? "—", systemImage: "barcode")
-                    .font(.caption.monospaced())
+                    .appFont(.caption, monospaced: true)
                     .foregroundColor(.secondary)
                 if let source = drug.source {
                     Label(source.replacingOccurrences(of: "_", with: " ").capitalized,
                           systemImage: "checkmark.seal")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
                 if let count = drug.sourceCount, count > 1 {
                     Text("\(count) sources agree")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -68,7 +68,7 @@ struct CancerDrugDetailView: View {
                let url = URL(string: "https://www.ebi.ac.uk/chembl/explore/compound/\(chembl)") {
                 Link(destination: url) {
                     Label("Open in ChEMBL", systemImage: "arrow.up.right.square")
-                        .font(.caption)
+                        .appFont(.caption)
                 }
             }
         }
@@ -96,7 +96,7 @@ struct CancerDrugDetailView: View {
                 }
             }()
             Text(label)
-                .font(.caption.bold())
+                .appFont(.caption, weight: .bold)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(color.opacity(0.15))
