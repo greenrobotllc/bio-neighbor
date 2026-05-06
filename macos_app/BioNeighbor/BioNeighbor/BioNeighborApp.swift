@@ -51,19 +51,12 @@ enum AppTextSize: Int, CaseIterable, Identifiable {
 
 @main
 struct BioNeighborApp: App {
-    @AppStorage("appTextSize") private var textSizeRaw: Int = AppTextSize.default.rawValue
-
-    private var textSize: AppTextSize {
-        AppTextSize(rawValue: textSizeRaw) ?? .default
-    }
-
     var body: some Scene {
         WindowGroup {
-            ContentTabView()
-                .dynamicTypeSize(textSize.dynamicType)
-                // Make every Text view selectable by default. Per-view
-                // overrides still work; this is just the global baseline.
-                .textSelection(.enabled)
+            // Wrap the tab view so @AppStorage("appTextSize") is read inside a
+            // View — SwiftUI on macOS doesn't reliably propagate dynamicTypeSize
+            // when @AppStorage is read at the App level.
+            AppShell()
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 1200, height: 800)
@@ -85,6 +78,27 @@ struct BioNeighborApp: App {
         Settings {
             SettingsView()
         }
+    }
+}
+
+/// Wraps ContentTabView so the dynamic-type read happens inside a View
+/// (where @AppStorage triggers SwiftUI re-render) rather than at the App
+/// level (where it doesn't always propagate on macOS).
+struct AppShell: View {
+    @AppStorage("appTextSize") private var textSizeRaw: Int = AppTextSize.default.rawValue
+
+    private var textSize: AppTextSize {
+        AppTextSize(rawValue: textSizeRaw) ?? .default
+    }
+
+    var body: some View {
+        ContentTabView()
+            // Apply via both the typed modifier and the explicit environment
+            // value as belt-and-suspenders — SwiftUI on macOS has been
+            // inconsistent about which path actually re-applies on change.
+            .dynamicTypeSize(textSize.dynamicType)
+            .environment(\.dynamicTypeSize, textSize.dynamicType)
+            .textSelection(.enabled)
     }
 }
 
