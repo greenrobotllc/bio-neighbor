@@ -87,10 +87,23 @@ def _load_subtype(conn: sqlite3.Connection, subtype_id: int) -> Optional[Dict]:
 
 
 def _chembl_query_with_timeout(query_fn, timeout: int = CHEMBL_QUERY_TIMEOUT):
-    """Run a ChEMBL query in a worker thread with a hard timeout."""
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(query_fn)
+    """Run a ChEMBL query in a worker thread with a hard timeout.
+
+    The executor is *not* used as a context manager — `__exit__` calls
+    `shutdown(wait=True)`, which blocks until the worker thread exits and
+    silently nullifies the timeout. Using `shutdown(wait=False)` in a finally
+    block releases the caller immediately on timeout; the orphaned worker
+    finishes in the background.
+    """
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(query_fn)
+    try:
         return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=False)
 
 
 def fetch_chembl_drugs_for_subtype(subtype: Dict, per_term_limit: int = 50) -> List[Dict]:
