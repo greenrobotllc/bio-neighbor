@@ -947,7 +947,7 @@ private struct TrialOutcomeRow: View {
                 .background(Color.green.opacity(0.15))
                 .foregroundColor(.green)
                 .clipShape(Capsule())
-                .help("The 95% confidence intervals do not overlap — the difference between arms is likely real, not chance.")
+                .help("Visual heuristic: the 95% CIs do not overlap. This is a quick cue only — confirm with the trial's reported effect estimate or p-value for a formal assessment.")
         case .overlap:
             Label("CIs overlap", systemImage: "exclamationmark.triangle.fill")
                 .appFont(.caption2, weight: .bold)
@@ -956,7 +956,7 @@ private struct TrialOutcomeRow: View {
                 .background(Color.yellow.opacity(0.18))
                 .foregroundColor(.orange)
                 .clipShape(Capsule())
-                .help("The 95% confidence intervals overlap — the apparent difference between arms could be due to chance. Check the trial's reported p-value or hazard ratio for the formal call.")
+                .help("Visual heuristic: the 95% CIs overlap. This is a quick cue only — confirm with the trial's reported effect estimate or p-value for a formal assessment.")
         case .none:
             EmptyView()
         }
