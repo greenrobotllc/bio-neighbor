@@ -301,7 +301,7 @@ def fetch_mechanism_ligands_for_subtype(conn: sqlite3.Connection, subtype: Dict)
            OR LOWER(cm.cancer_type) LIKE '%' || LOWER(?) || '%'
            OR LOWER(?) LIKE '%' || LOWER(cm.cancer_type) || '%'
         """,
-        (type_name, type_display, type_display or type_name, type_name),
+        (type_name, type_display, type_display or type_name, type_display or type_name),
     )
 
     rows = []
