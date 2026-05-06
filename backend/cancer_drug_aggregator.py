@@ -352,8 +352,12 @@ def aggregate_top_drugs_for_subtype(
             cid = r["chembl_id"]
             if cid in merged:
                 merged[cid]["sources"].add("cancer_mechanism")
-                merged[cid].setdefault("ligand_id", r.get("ligand_id"))
-                merged[cid].setdefault("molecule_index", r.get("molecule_index"))
+                # ChEMBL seed pre-fills these as None; setdefault would lock that
+                # in. Only overwrite when the mechanism row actually has a value.
+                if r.get("ligand_id") is not None:
+                    merged[cid]["ligand_id"] = r["ligand_id"]
+                if r.get("molecule_index") is not None:
+                    merged[cid]["molecule_index"] = r["molecule_index"]
                 if not merged[cid]["drug_name"] or merged[cid]["drug_name"] == cid:
                     merged[cid]["drug_name"] = r.get("drug_name") or merged[cid]["drug_name"]
             else:

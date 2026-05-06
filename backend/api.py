@@ -1178,14 +1178,16 @@ def search_drugs():
             'chembl_inserted': newly_inserted,
         })
 
-    except Exception as e:
+    except Exception:
         import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /search/drugs endpoint: {error_msg}")
-        print(traceback.format_exc())
+        logger.error(
+            "Unexpected error in /search/drugs endpoint (q=%r)\n%s",
+            request.args.get('q'),
+            traceback.format_exc(),
+        )
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal server error',
         }), 500
 
 
@@ -3403,7 +3405,7 @@ def v2_drug_similar(chembl_id: str):
         top_k = max(1, min(int(request.args.get('top_k', 20)), 100))
         engine = get_engine()
 
-        results: List[Dict] = []
+        results: list[dict] = []
         fetched_from_chembl = False
         not_in_local_index = False
 

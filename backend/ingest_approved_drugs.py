@@ -64,6 +64,9 @@ def fetch_approved_drugs_from_chembl(max_drugs: int) -> List[Dict]:
         raise RuntimeError("chembl_webresource_client not installed — cannot fetch from ChEMBL")
 
     print(f"🔍 Fetching up to {max_drugs} approved drugs from ChEMBL (max_phase=4)…")
+    # `max_phase` must be in the projection — normalize_drug_record() reads
+    # drug["max_phase"] to set is_approved. Without it every row gets
+    # is_approved=0 even though we filtered to max_phase=4.
     approved_drugs = new_client.molecule.filter(max_phase=4).only([
         'molecule_chembl_id',
         'molecule_structures',
@@ -71,6 +74,7 @@ def fetch_approved_drugs_from_chembl(max_drugs: int) -> List[Dict]:
         'pref_name',
         'molecular_weight',
         'molecule_type',
+        'max_phase',
     ])
 
     out: List[Dict] = []
@@ -391,11 +395,26 @@ def main(argv=None) -> int:
         print("\n🛑 --dry-run set; skipping DB + index writes.")
         return 0
 
-    # 4. Backup, replace molecules, rebuild index
-    backup_database()
+    # 4. Backup, replace molecules, rebuild index.
+    #
+    # Full staging-table + atomic-rename is a future improvement. The minimum
+    # we need today is that an index-rebuild failure doesn't leave the DB
+    # silently ahead of the index — surface the inconsistency loudly and point
+    # the operator at the backup we just took so recovery is one cp away.
+    backup_path = backup_database()
     with sqlite3.connect(DB_PATH) as conn:
         replace_molecules_table(conn, drugs)
-    rebuild_faiss_index(drugs)
+    try:
+        rebuild_faiss_index(drugs)
+    except Exception as rebuild_err:
+        print(
+            "❌ FAISS index rebuild FAILED after the molecules table was "
+            "already replaced. The DB and index are now out of sync.\n"
+            f"   Error: {rebuild_err}\n"
+            f"   Restore from backup: cp {backup_path} {DB_PATH}\n"
+            "   Then re-run ingest_approved_drugs.",
+        )
+        raise
 
     # 5. Sanity check
     run_sanity_check()

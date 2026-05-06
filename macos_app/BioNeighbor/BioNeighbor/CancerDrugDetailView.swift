@@ -79,7 +79,9 @@ struct CancerDrugDetailView: View {
         if let phase = drug.maxPhase, phase > 0 {
             let label: String = {
                 switch phase {
-                case 4: return "FDA Approved"
+                // ChEMBL's max_phase=4 means "approved/marketed" by *some*
+                // regulator, not necessarily FDA — keep the label neutral.
+                case 4: return "Approved"
                 case 3: return "Phase 3"
                 case 2: return "Phase 2"
                 case 1: return "Phase 1"

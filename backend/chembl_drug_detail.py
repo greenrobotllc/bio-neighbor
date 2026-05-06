@@ -38,10 +38,23 @@ DISPLAYED_SYN_TYPES = {
 
 
 def _run_with_timeout(query_fn, timeout: int = CHEMBL_QUERY_TIMEOUT):
-    """Run a ChEMBL query in a worker thread with a hard timeout."""
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(query_fn)
+    """Run a ChEMBL query in a worker thread with a hard timeout.
+
+    The executor is *not* used as a context manager — `__exit__` would call
+    `shutdown(wait=True)` and block on the worker thread even after a timeout,
+    re-introducing the hang we're trying to avoid. On timeout we cancel the
+    future (best effort) and shut the executor down with `wait=False`, leaving
+    the worker thread to finish in the background.
+    """
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(query_fn)
+    try:
         return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=False)
 
 
 def _fetch_molecule_raw(chembl_id: str) -> Optional[Dict]:

@@ -20,6 +20,9 @@ struct SubtypeDrugsView: View {
     @State private var isLoading = false
     @State private var isRefreshing = false
     @State private var errorMessage: String?
+    /// Separate from `errorMessage` so a failed mechanism lookup doesn't blow
+    /// the whole page away by triggering `errorView`. Surfaced as an alert.
+    @State private var mechanismOpenError: String?
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
 
@@ -100,6 +103,18 @@ struct SubtypeDrugsView: View {
         .task {
             await loadDrugs()
             await loadMechanisms()
+        }
+        .alert(
+            "Couldn't open mechanism",
+            isPresented: Binding(
+                get: { mechanismOpenError != nil },
+                set: { if !$0 { mechanismOpenError = nil } }
+            ),
+            presenting: mechanismOpenError
+        ) { _ in
+            Button("OK", role: .cancel) { mechanismOpenError = nil }
+        } message: { msg in
+            Text(msg)
         }
         .onReceive(NotificationCenter.default.publisher(for: .cancerFindDrug)) { _ in
             searchFieldFocused = true
@@ -339,7 +354,10 @@ struct SubtypeDrugsView: View {
         do {
             openMechanism = try await backendService.fetchMechanism(id: mechanismId)
         } catch {
-            errorMessage = "Couldn't open mechanism: \(error.localizedDescription)"
+            // Don't touch the page-level errorMessage — that flips the whole
+            // view into errorView and hides the drug list. Surface this as an
+            // alert via mechanismOpenError instead.
+            mechanismOpenError = "Couldn't open mechanism: \(error.localizedDescription)"
         }
     }
 

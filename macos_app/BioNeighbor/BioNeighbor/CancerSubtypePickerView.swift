@@ -152,12 +152,29 @@ struct CancerSubtypePickerView: View {
                 }
                 LazyVStack(spacing: 12) {
                     ForEach(searchResults) { match in
-                        if let subtype = subtypes.first(where: { $0.id == match.subtypeId }) {
-                            NavigationLink(value: subtype) {
-                                DrugSearchMatchRow(subtype: subtype, match: match)
-                            }
-                            .buttonStyle(.plain)
+                        // Prefer the fully-loaded subtype object so we can show
+                        // markers/description; fall back to a minimal subtype
+                        // synthesized from the match metadata so a row never
+                        // disappears just because the subtypes list hasn't
+                        // finished loading yet.
+                        let subtype = subtypes.first(where: { $0.id == match.subtypeId })
+                            ?? CancerSubtype(
+                                id: match.subtypeId,
+                                name: match.subtypeName,
+                                shortName: match.subtypeShortName,
+                                description: nil,
+                                meshId: nil,
+                                efoId: nil,
+                                markers: nil,
+                                chemblIndicationTerms: nil,
+                                prevalenceNote: nil,
+                                drugCount: nil,
+                                cancerType: nil
+                            )
+                        NavigationLink(value: subtype) {
+                            DrugSearchMatchRow(subtype: subtype, match: match)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -185,7 +202,12 @@ struct CancerSubtypePickerView: View {
             if Task.isCancelled { return }
             searchResults = response.subtypeMatches ?? []
             uncachedSubtypeCount = response.uncachedSubtypeCount ?? 0
+        } catch is CancellationError {
+            // Task(id:) cancellation is the normal "user is still typing"
+            // path — silently abandon, don't flash an error banner.
+            return
         } catch {
+            if Task.isCancelled { return }
             searchError = error.localizedDescription
             searchResults = []
         }

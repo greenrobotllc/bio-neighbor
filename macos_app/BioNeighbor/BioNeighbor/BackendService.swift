@@ -1045,9 +1045,17 @@ class BackendService: ObservableObject {
         request.timeoutInterval = 15.0
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Drug search failed")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            // Surface backend-supplied error messages instead of swallowing
+            // them — matches the pattern used by `searchDrugs` etc.
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
         }
 
         let envelope = try JSONDecoder().decode(DrugSearchEnvelope.self, from: data)
@@ -1868,8 +1876,23 @@ class BackendService: ObservableObject {
     }
 
     func searchDrugsInCancerType(typeId: Int, query: String, limitPerSubtype: Int = 5) async throws -> DrugSearchResponse {
-        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/cancer-types/\(typeId)/drug-search")
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Mirror searchDrugsLive's empty-query guard so we don't dispatch a
+        // backend search for a blank string and accidentally repopulate stale
+        // results.
+        guard !trimmed.isEmpty else {
+            return DrugSearchResponse(
+                success: true,
+                query: "",
+                cancerTypeId: typeId,
+                subtypeMatches: [],
+                uncachedSubtypeCount: 0,
+                note: nil,
+                disclaimer: nil,
+                error: nil
+            )
+        }
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/cancer-types/\(typeId)/drug-search")
         components?.queryItems = [
             URLQueryItem(name: "q", value: trimmed),
             URLQueryItem(name: "limit", value: "\(limitPerSubtype)"),

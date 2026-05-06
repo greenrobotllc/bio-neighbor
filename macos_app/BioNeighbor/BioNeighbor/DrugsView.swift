@@ -225,25 +225,31 @@ struct DrugsView: View {
 
     @MainActor
     private func openLiveResult(_ hit: DrugSearchResult) {
-        // If we know the local drug id, use full Drug navigation. Otherwise
-        // there's nothing to navigate to yet (extremely rare — write-through
-        // always populates an id).
-        guard let drugId = hit.id else { return }
-        Task {
-            do {
-                let drug = try await backendService.getDrug(id: drugId)
-                await MainActor.run {
-                    navCoordinator.push(BreadcrumbItem(
-                        title: drug.name,
-                        icon: "pills",
-                        type: .drug
-                    ))
-                    navCoordinator.navigationPath.append(drug)
+        // Prefer the local DB id when we have it (full Drug navigation with
+        // synonyms, ingredients, etc.). The write-through cache populates a
+        // row on first ChEMBL hit, so this is almost always present.
+        if let drugId = hit.localId {
+            Task {
+                do {
+                    let drug = try await backendService.getDrug(id: drugId)
+                    await MainActor.run {
+                        navCoordinator.push(BreadcrumbItem(
+                            title: drug.name,
+                            icon: "pills",
+                            type: .drug
+                        ))
+                        navCoordinator.navigationPath.append(drug)
+                    }
+                } catch {
+                    errorMessage = "Couldn't open \(hit.name): \(error.localizedDescription)"
                 }
-            } catch {
-                errorMessage = "Couldn't open \(hit.name): \(error.localizedDescription)"
             }
+            return
         }
+        // No local id yet — surface a clear message instead of silently
+        // ignoring the tap. Falls through to the user re-running the search,
+        // which forces the write-through and gives us an id next time.
+        errorMessage = "Couldn't open \(hit.name) — not yet cached locally. Re-run the search to retry."
     }
 
     private func loadDrugs() {

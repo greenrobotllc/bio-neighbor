@@ -449,7 +449,12 @@ struct ChEMBLDetailPanel: View {
         defer { isLoadingTrials = false }
         do {
             trials = try await backendService.fetchClinicalTrials(chemblId: chemblId, limit: 15)
+        } catch is CancellationError {
+            // Task was cancelled (e.g. user navigated away) — don't surface as
+            // a failure.
+            return
         } catch {
+            if Task.isCancelled { return }
             trialsError = error.localizedDescription
         }
     }
@@ -566,7 +571,10 @@ struct ChEMBLDetailPanel: View {
             if let smiles = result.smiles {
                 await renderStructure(smiles: smiles)
             }
+        } catch is CancellationError {
+            return
         } catch {
+            if Task.isCancelled { return }
             detailError = error.localizedDescription
         }
     }
@@ -593,7 +601,10 @@ struct ChEMBLDetailPanel: View {
             similar = result.drugs
             similarNotInLocalIndex = result.notInLocalIndex
             similarFetchedFromChEMBL = !result.drugs.isEmpty
+        } catch is CancellationError {
+            return
         } catch {
+            if Task.isCancelled { return }
             similarError = error.localizedDescription
         }
     }

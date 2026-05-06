@@ -642,9 +642,12 @@ struct SimilarDrugHit: Codable, Identifiable, Hashable {
     let similarityScore: Double?
 
     var id: String {
+        // Deterministic so SwiftUI can diff rows across renders. UUID() here
+        // would mint a new id every body call and force the row to remount.
         if let cid = chemblId { return cid }
         if let idx = index { return "idx-\(idx)" }
-        return name ?? UUID().uuidString
+        if let name { return "name-\(name)" }
+        return "unknown-\(smiles ?? "")"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -812,8 +815,12 @@ struct ChEMBLIndication: Codable, Hashable, Identifiable {
     let refCount: Int?
 
     var id: String {
-        // mesh_heading is the dedup key; fall back to efo_term if missing.
-        return meshHeading ?? efoTerm ?? UUID().uuidString
+        // mesh_heading is the dedup key; fall back to efo_term, then to a
+        // composite of remaining stable fields. Avoid UUID() so SwiftUI can
+        // keep row identity stable across renders.
+        if let m = meshHeading { return "mesh:\(m)" }
+        if let e = efoTerm { return "efo:\(e)" }
+        return "ind:\(meshId ?? "")|\(efoId ?? "")|\(maxPhase ?? -1)"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -879,7 +886,9 @@ struct ClinicalTrialOutcome: Codable, Hashable, Identifiable {
     let unit: String?
     let armResults: [TrialArmResult]?
 
-    var id: String { title ?? UUID().uuidString }
+    // Deterministic composite — title alone isn't unique within a trial
+    // (e.g. two outcomes both named "Overall Survival" with different units).
+    var id: String { "\(title ?? "")|\(paramType ?? "")|\(unit ?? "")" }
 
     enum CodingKeys: String, CodingKey {
         case title
@@ -894,7 +903,8 @@ struct ClinicalTrialArm: Codable, Hashable, Identifiable {
     let type: String?
     let interventions: [String]?
 
-    var id: String { label ?? UUID().uuidString }
+    // Composite avoids duplicate-id crashes when two arms share a label.
+    var id: String { "\(label ?? "")|\(type ?? "")|\(interventions?.joined(separator: ",") ?? "")" }
 }
 
 struct ClinicalTrial: Codable, Hashable, Identifiable {

@@ -24,7 +24,7 @@ TRIAL_FIELDS = (
     "protocolSection.statusModule,"
     "protocolSection.designModule,"
     "protocolSection.armsInterventionsModule,"
-    "ResultsSection"
+    "resultsSection"
 )
 PER_TRIAL_TIMEOUT = 10  # seconds
 MAX_PARALLEL = 5  # concurrent CT.gov requests

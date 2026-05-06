@@ -438,13 +438,15 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                 conn.commit()
 
                 # Seed the curated cancer taxonomy. Import lazily so a missing
-                # seed module does not break older migrations.
-                try:
-                    from cancer_taxonomy_seed import seed_cancer_taxonomy
-                    seeded = seed_cancer_taxonomy(conn)
-                    print(f"   🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
-                except Exception as seed_err:
-                    print(f"   ⚠️  Taxonomy seed skipped: {seed_err}")
+                # seed module does not break older migrations. If seeding fails
+                # we let the exception propagate — the outer try/except will
+                # roll back and keep the schema version unchanged so the next
+                # run retries cleanly. Marking the migration applied here would
+                # leave the DB in a half-migrated state that subsequent code
+                # assumes is good.
+                from cancer_taxonomy_seed import seed_cancer_taxonomy
+                seeded = seed_cancer_taxonomy(conn)
+                print(f"   🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
 
                 set_schema_version(conn, version)
                 print(f"   ✅ Migration {version} applied successfully")
@@ -541,13 +543,13 @@ def initialize_schema(conn: sqlite3.Connection, force_recreate: bool = False) ->
         conn.commit()
 
         # Seed curated cancer taxonomy on a fresh DB so the v2 Cancer Research
-        # browse has data immediately. Idempotent — safe to re-run.
-        try:
-            from cancer_taxonomy_seed import seed_cancer_taxonomy
-            seeded = seed_cancer_taxonomy(conn)
-            print(f"🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
-        except Exception as seed_err:
-            print(f"⚠️  Taxonomy seed skipped: {seed_err}")
+        # browse has data immediately. Idempotent — safe to re-run. If seeding
+        # fails we re-raise so the outer except rolls back and reports failure;
+        # otherwise the DB is marked at SCHEMA_VERSION while critical seed data
+        # is missing.
+        from cancer_taxonomy_seed import seed_cancer_taxonomy
+        seeded = seed_cancer_taxonomy(conn)
+        print(f"🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
 
         print(f"✅ Schema initialized (version {SCHEMA_VERSION})")
         return True

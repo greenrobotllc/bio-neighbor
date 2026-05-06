@@ -204,7 +204,10 @@ struct DiseaseSearchResponse: Codable {
 /// where the same payload may carry locally-cached and ChEMBL-fetched rows
 /// distinguished by `source`.
 struct DrugSearchResult: Codable, Identifiable, Hashable {
-    let id: Int?
+    /// DB primary key when available (local rows), nil for ChEMBL-only rows
+    /// that haven't been cached yet. Use this when you specifically need the
+    /// numeric drug id for navigation.
+    let localId: Int?
     let name: String
     let genericName: String?
     let brandNames: [String]?
@@ -212,8 +215,17 @@ struct DrugSearchResult: Codable, Identifiable, Hashable {
     let maxPhase: Int?
     let source: String  // "local" | "chembl"
 
+    /// Stable, non-optional Identifiable id — chembl id when present, else a
+    /// composite that's deterministic across renders. Do NOT use this for
+    /// navigation; use `localId` or `chemblId` directly.
+    var id: String {
+        if let chemblId, !chemblId.isEmpty { return "chembl:\(chemblId)" }
+        if let localId { return "local:\(localId)" }
+        return "result:\(source)|\(name)"
+    }
+
     enum CodingKeys: String, CodingKey {
-        case id
+        case localId = "id"
         case name
         case genericName = "generic_name"
         case brandNames = "brand_names"

@@ -24,10 +24,21 @@ CHEMBL_SEARCH_TIMEOUT = 5  # seconds — kept tight so type-ahead stays responsi
 
 
 def _run_with_timeout(query_fn, timeout: int = CHEMBL_SEARCH_TIMEOUT):
-    """Run a ChEMBL query in a worker thread with a hard timeout."""
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(query_fn)
+    """Run a ChEMBL query in a worker thread with a hard timeout.
+
+    See chembl_drug_detail._run_with_timeout for why we avoid `with` here:
+    the context manager calls `shutdown(wait=True)` which blocks on the worker
+    thread even after the future times out, making the timeout itself useless.
+    """
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(query_fn)
+    try:
         return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=False)
 
 
 def search_chembl_by_name(query: str, limit: int = 20) -> List[Dict]:
@@ -113,14 +124,23 @@ def upsert_chembl_hits_into_drugs(
             if hit.get("molecule_type"):
                 description_parts.append(hit["molecule_type"])
             description = "; ".join(description_parts) or None
+            # Atomic insert-if-absent: the SELECT-then-INSERT preflight above
+            # is racy under concurrent requests for the same chembl_id (Flask
+            # is multi-threaded). Pushing the existence check into the INSERT
+            # statement closes the window. If another writer beat us, rowcount
+            # will be 0 and we look up the existing id below.
             cursor.execute(
                 """
                 INSERT INTO drugs (name, generic_name, chembl_id, description)
-                VALUES (?, ?, ?, ?)
+                SELECT ?, ?, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM drugs WHERE chembl_id = ?)
                 """,
-                (hit["name"], hit["name"], cid, description),
+                (hit["name"], hit["name"], cid, description, cid),
             )
-            new_ids.append(cursor.lastrowid)
+            if cursor.rowcount == 1:
+                new_ids.append(cursor.lastrowid)
+            else:
+                new_ids.append(None)
             existing.add(cid)
 
         conn.commit()
