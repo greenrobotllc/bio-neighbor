@@ -3447,6 +3447,7 @@ def v2_drug_similar(chembl_id: str):
             results = engine.search_by_chembl_id(chembl_id, top_k=top_k)
         except ValueError:
             # Fallback: pull SMILES from ChEMBL, then run search_similar.
+            not_in_local_index = True
             from chembl_drug_detail import fetch_smiles
             smiles = fetch_smiles(chembl_id)
             if not smiles:

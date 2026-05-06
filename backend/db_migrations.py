@@ -389,7 +389,7 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         cursor.execute(ddl)
                     except sqlite3.OperationalError as e:
                         if 'already exists' in str(e).lower():
-                            print(f"   ⚠️  Table already exists, skipping")
+                            print("   ⚠️  Table already exists, skipping")
                         else:
                             raise
                 for index_sql in migration_4_indexes:
@@ -470,7 +470,7 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         cursor.execute(ddl)
                     except sqlite3.OperationalError as e:
                         if 'already exists' in str(e).lower():
-                            print(f"   ⚠️  Table already exists, skipping")
+                            print("   ⚠️  Table already exists, skipping")
                         else:
                             raise
                 for index_sql in migration_7_indexes:
