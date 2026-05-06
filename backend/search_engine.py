@@ -34,30 +34,55 @@ class SearchEngine:
     
     def __init__(self, index_path: Path = INDEX_PATH, metadata_path: Path = METADATA_PATH):
         """
-        Initialize the search engine by loading FAISS index and metadata.
-        
+        Initialize the search engine. The FAISS index is optional — when it's
+        missing, similarity-search methods raise on use, but SQLite-backed
+        endpoints (drug/disease autocomplete, table listings) keep working.
+        This means a fresh checkout without `index_builder.py` having been run
+        can still serve the Treatment Auditor and other non-similarity flows.
+
         Args:
             index_path: Path to FAISS index file
             metadata_path: Path to metadata file
         """
         self.index_path = index_path
         self.metadata_path = metadata_path
-        self.index = None
-        self.metadata = None
+        self._index = None
+        self._metadata = None
         self.molecule_df = None
-        
+
         self._load_index()
         self._load_molecule_data()
-    
+
     def _load_index(self):
-        """Load FAISS index and metadata."""
-        self.index, self.metadata = load_index(self.index_path, self.metadata_path)
-        if self.index is None or self.metadata is None:
+        """Try to load FAISS index and metadata; warn (don't raise) on miss."""
+        self._index, self._metadata = load_index(self.index_path, self.metadata_path)
+        if self._index is None or self._metadata is None:
+            print(
+                "⚠️  FAISS index not present at "
+                f"{self.index_path} / {self.metadata_path}. "
+                "Similarity-search endpoints will return errors until "
+                "index_builder.py is run; SQLite-backed endpoints work normally."
+            )
+            return
+        print(f"✅ Search engine initialized with {self._index.ntotal} molecules")
+
+    @property
+    def index(self):
+        if self._index is None:
             raise RuntimeError(
                 f"FAISS index not found. Please run index_builder.py first.\n"
                 f"Expected files: {self.index_path}, {self.metadata_path}"
             )
-        print(f"✅ Search engine initialized with {self.index.ntotal} molecules")
+        return self._index
+
+    @property
+    def metadata(self):
+        if self._metadata is None:
+            raise RuntimeError(
+                f"FAISS metadata not found. Please run index_builder.py first.\n"
+                f"Expected file: {self.metadata_path}"
+            )
+        return self._metadata
     
     def _load_molecule_data(self):
         """Load molecule data from database for metadata retrieval."""
