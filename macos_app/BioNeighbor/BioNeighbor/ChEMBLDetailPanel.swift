@@ -32,6 +32,12 @@ struct ChEMBLDetailPanel: View {
     @State private var isLoadingTrials = false
     @State private var trialsError: String?
 
+    @AppStorage("ollamaEnabled") private var ollamaEnabled: Bool = false
+    @State private var aiSummary: String = ""
+    @State private var isSummarizing: Bool = false
+    @State private var summaryError: String?
+    @State private var summaryTask: Task<Void, Never>?
+
     // Page-wide find — focused by ⌘F. Filters indications, trials, and the
     // similar drugs grid by case-insensitive substring match across the
     // searchable fields of each.
@@ -70,6 +76,11 @@ struct ChEMBLDetailPanel: View {
             similarNotInLocalIndex = false
             trials = []
             trialsError = nil
+            summaryTask?.cancel()
+            summaryTask = nil
+            aiSummary = ""
+            summaryError = nil
+            isSummarizing = false
             findQuery = ""
 
             async let detailTask: Void = loadDetail()
@@ -360,6 +371,15 @@ struct ChEMBLDetailPanel: View {
                 Text("Clinical Trial Outcomes")
                     .appFont(.headline)
                 Spacer()
+                if ollamaEnabled && !trials.isEmpty {
+                    Button {
+                        startAISummary()
+                    } label: {
+                        Label(isSummarizing ? "Summarizing…" : "Summarize with AI", systemImage: "sparkles")
+                    }
+                    .controlSize(.small)
+                    .disabled(isSummarizing)
+                }
                 if !trials.isEmpty {
                     if !normalizedFind.isEmpty {
                         Text("\(visibleTrials.count) of \(trials.count)")
@@ -375,6 +395,22 @@ struct ChEMBLDetailPanel: View {
             Text("Trial arms with reported primary outcomes from ClinicalTrials.gov. Arms including this drug are highlighted; multi-arm trials let you compare regimens (e.g. backbone vs backbone + this drug).")
                 .appFont(.caption)
                 .foregroundColor(.secondary)
+
+            if !aiSummary.isEmpty || isSummarizing || summaryError != nil {
+                AISummaryCard(
+                    summary: aiSummary,
+                    isStreaming: isSummarizing,
+                    error: summaryError,
+                    onRegenerate: { startAISummary() },
+                    onDismiss: {
+                        summaryTask?.cancel()
+                        summaryTask = nil
+                        aiSummary = ""
+                        summaryError = nil
+                        isSummarizing = false
+                    }
+                )
+            }
 
             if isLoadingTrials {
                 ProgressView("Loading trials from ClinicalTrials.gov…")
@@ -415,6 +451,32 @@ struct ChEMBLDetailPanel: View {
             trials = try await backendService.fetchClinicalTrials(chemblId: chemblId, limit: 15)
         } catch {
             trialsError = error.localizedDescription
+        }
+    }
+
+    private func startAISummary() {
+        summaryTask?.cancel()
+        let drugName = detail?.prefName ?? detail?.parentPrefName
+        let trialsSnapshot = trials
+        aiSummary = ""
+        summaryError = nil
+        isSummarizing = true
+        summaryTask = Task { @MainActor in
+            defer { isSummarizing = false }
+            do {
+                let stream = OllamaService.shared.summarizeClinicalTrials(
+                    trials: trialsSnapshot,
+                    drugName: drugName
+                )
+                for try await chunk in stream {
+                    if Task.isCancelled { return }
+                    aiSummary += chunk
+                }
+            } catch {
+                if !Task.isCancelled {
+                    summaryError = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -589,6 +651,67 @@ struct IndicationRow: View {
                 .foregroundColor(color)
                 .clipShape(Capsule())
         }
+    }
+}
+
+// MARK: - AI summary card
+
+struct AISummaryCard: View {
+    let summary: String
+    let isStreaming: Bool
+    let error: String?
+    let onRegenerate: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .foregroundColor(.accentColor)
+                Text("AI summary (on-device)")
+                    .appFont(.caption, weight: .bold)
+                if isStreaming {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer()
+                Button(action: onRegenerate) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .disabled(isStreaming)
+                .help("Regenerate summary")
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss summary")
+            }
+
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .appFont(.caption)
+                    .foregroundColor(.orange)
+            } else if summary.isEmpty && isStreaming {
+                Text("Generating summary from \(isStreaming ? "Ollama" : "")…")
+                    .appFont(.caption)
+                    .foregroundColor(.secondary)
+            } else if !summary.isEmpty {
+                Text(summary)
+                    .appFont(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.accentColor.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+        )
     }
 }
 

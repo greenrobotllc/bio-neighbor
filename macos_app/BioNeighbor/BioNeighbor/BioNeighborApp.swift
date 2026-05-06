@@ -194,6 +194,18 @@ struct AppShell: View {
 struct SettingsView: View {
     @AppStorage("appTextSize") private var textSizeRaw: Int = AppTextSize.default.rawValue
 
+    @AppStorage("ollamaEnabled") private var ollamaEnabled: Bool = false
+    @AppStorage("ollamaEndpoint") private var ollamaEndpoint: String = OllamaService.defaultEndpoint
+    @AppStorage("ollamaModel") private var ollamaModel: String = OllamaService.defaultModel
+
+    @State private var ollamaTestState: OllamaTestState = .idle
+    private enum OllamaTestState: Equatable {
+        case idle
+        case testing
+        case ok(Int)
+        case failed(String)
+    }
+
     var body: some View {
         Form {
             Section("Appearance") {
@@ -207,9 +219,53 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            Section("AI Assistant (Ollama)") {
+                Toggle("Enable on-device AI summaries", isOn: $ollamaEnabled)
+                TextField("Endpoint", text: $ollamaEndpoint, prompt: Text(OllamaService.defaultEndpoint))
+                    .textFieldStyle(.roundedBorder)
+                TextField("Model", text: $ollamaModel, prompt: Text(OllamaService.defaultModel))
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Test connection") {
+                        Task { await runOllamaTest() }
+                    }
+                    .disabled(ollamaTestState == .testing)
+                    switch ollamaTestState {
+                    case .idle:
+                        EmptyView()
+                    case .testing:
+                        ProgressView().controlSize(.small)
+                    case .ok(let count):
+                        Label("OK — \(count) model\(count == 1 ? "" : "s") available", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.caption)
+                    case .failed(let msg):
+                        Label(msg, systemImage: "xmark.circle.fill")
+                            .foregroundColor(.red)
+                            .font(.caption)
+                            .lineLimit(2)
+                    }
+                }
+                Text("Requires Ollama 0.20+ (ollama.com) running locally. Pull a model first: `ollama pull gemma4:26b` (≈18 GB) or `ollama pull gemma4` (≈9.6 GB E4B for lower-RAM machines).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 480)
+    }
+
+    @MainActor
+    private func runOllamaTest() async {
+        ollamaTestState = .testing
+        do {
+            let models = try await OllamaService.shared.listModels()
+            ollamaTestState = .ok(models.count)
+        } catch {
+            ollamaTestState = .failed(error.localizedDescription)
+        }
     }
 }
 
