@@ -91,6 +91,52 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None  # No rollback for ALTER TABLE ADD COLUMN in SQLite
     ),
+    9: (
+        "Make drugs.chembl_id UNIQUE — dedupe existing rows (redirecting drug_id FKs to the lowest-id keeper) so INSERT OR IGNORE in chembl_drug_search is atomic",
+        [
+            # Build a temp loser→keeper map for every chembl_id with >1 row.
+            # Keeper is the lowest id; losers are everyone else with the same
+            # chembl_id.
+            """
+            CREATE TEMP TABLE _drug_dedupe_map AS
+            SELECT d.id AS loser_id, k.keep_id, d.chembl_id
+            FROM drugs d
+            JOIN (
+                SELECT chembl_id, MIN(id) AS keep_id
+                FROM drugs
+                WHERE chembl_id IS NOT NULL
+                GROUP BY chembl_id
+                HAVING COUNT(*) > 1
+            ) k ON d.chembl_id = k.chembl_id AND d.id != k.keep_id
+            """,
+            # Redirect FK references in every table that joins to drugs.id, so
+            # we don't strand rows when we delete the losers below.
+            """
+            UPDATE drug_diseases
+            SET drug_id = (SELECT keep_id FROM _drug_dedupe_map WHERE loser_id = drug_diseases.drug_id)
+            WHERE drug_id IN (SELECT loser_id FROM _drug_dedupe_map)
+            """,
+            """
+            UPDATE drug_outcomes
+            SET drug_id = (SELECT keep_id FROM _drug_dedupe_map WHERE loser_id = drug_outcomes.drug_id)
+            WHERE drug_id IN (SELECT loser_id FROM _drug_dedupe_map)
+            """,
+            """
+            UPDATE cancer_subtype_drugs
+            SET drug_id = (SELECT keep_id FROM _drug_dedupe_map WHERE loser_id = cancer_subtype_drugs.drug_id)
+            WHERE drug_id IN (SELECT loser_id FROM _drug_dedupe_map)
+            """,
+            # Now safe to delete the duplicate drug rows.
+            "DELETE FROM drugs WHERE id IN (SELECT loser_id FROM _drug_dedupe_map)",
+            # Replace the non-unique index with a UNIQUE one. SQLite requires
+            # the drop+recreate dance because you can't promote an index in
+            # place.
+            "DROP INDEX IF EXISTS idx_drug_chembl_id",
+            "CREATE UNIQUE INDEX idx_drug_chembl_id ON drugs(chembl_id)",
+            "DROP TABLE IF EXISTS _drug_dedupe_map",
+        ],
+        None  # No clean rollback — re-running is harmless (no dupes left).
+    ),
 }
 
 

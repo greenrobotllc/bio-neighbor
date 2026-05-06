@@ -127,18 +127,17 @@ def upsert_chembl_hits_into_drugs(
             if hit.get("molecule_type"):
                 description_parts.append(hit["molecule_type"])
             description = "; ".join(description_parts) or None
-            # Atomic insert-if-absent: the SELECT-then-INSERT preflight above
-            # is racy under concurrent requests for the same chembl_id (Flask
-            # is multi-threaded). Pushing the existence check into the INSERT
-            # statement closes the window. If another writer beat us, rowcount
-            # will be 0 and we look up the existing id below.
+            # Atomic insert-if-absent — relies on the UNIQUE index on
+            # drugs(chembl_id) added in migration 9. Concurrent inserts for
+            # the same chembl_id can't both succeed: SQLite's UNIQUE
+            # enforcement makes the second one a no-op. `cursor.rowcount`
+            # is 1 on insert, 0 on conflict.
             cursor.execute(
                 """
-                INSERT INTO drugs (name, generic_name, chembl_id, description)
-                SELECT ?, ?, ?, ?
-                WHERE NOT EXISTS (SELECT 1 FROM drugs WHERE chembl_id = ?)
+                INSERT OR IGNORE INTO drugs (name, generic_name, chembl_id, description)
+                VALUES (?, ?, ?, ?)
                 """,
-                (hit["name"], hit["name"], cid, description, cid),
+                (hit["name"], hit["name"], cid, description),
             )
             if cursor.rowcount == 1:
                 new_ids.append(cursor.lastrowid)

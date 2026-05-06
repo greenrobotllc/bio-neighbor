@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -78,7 +78,11 @@ SCHEMA: Dict[str, Dict] = {
             'CREATE INDEX IF NOT EXISTS idx_drug_generic_name ON drugs(generic_name)',
             'CREATE INDEX IF NOT EXISTS idx_drug_pubchem_cid ON drugs(pubchem_cid)',
             'CREATE INDEX IF NOT EXISTS idx_drug_drugbank_id ON drugs(drugbank_id)',
-            'CREATE INDEX IF NOT EXISTS idx_drug_chembl_id ON drugs(chembl_id)',
+            # UNIQUE so the live ChEMBL write-through cache can rely on
+            # `INSERT OR IGNORE` to atomically dedupe by chembl_id (see
+            # chembl_drug_search.upsert_chembl_hits_into_drugs). Existing DBs
+            # are migrated to UNIQUE in migration 9.
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_drug_chembl_id ON drugs(chembl_id)',
         ],
         'foreign_keys': []
     },
