@@ -32,6 +32,12 @@ struct ChEMBLDetailPanel: View {
     @State private var isLoadingTrials = false
     @State private var trialsError: String?
 
+    // Page-wide find — focused by ⌘F. Filters indications, trials, and the
+    // similar drugs grid by case-insensitive substring match across the
+    // searchable fields of each.
+    @State private var findQuery: String = ""
+    @FocusState private var findFocused: Bool
+
     private let similarColumns = [
         GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 12)
     ]
@@ -43,9 +49,10 @@ struct ChEMBLDetailPanel: View {
                 Divider()
                 synonymsSection(synonyms)
             }
+            findSection
             if let indications = detail?.indications, !indications.isEmpty {
                 Divider()
-                indicationsSection(indications)
+                indicationsSection(filteredIndications(indications))
             }
             Divider()
             trialsSection
@@ -63,11 +70,95 @@ struct ChEMBLDetailPanel: View {
             similarNotInLocalIndex = false
             trials = []
             trialsError = nil
+            findQuery = ""
 
             async let detailTask: Void = loadDetail()
             async let similarTask: Void = loadSimilar()
             async let trialsTask: Void = loadTrials()
             _ = await (detailTask, similarTask, trialsTask)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cancerFindDrug)) { _ in
+            findFocused = true
+        }
+    }
+
+    // MARK: - Page-wide find
+
+    private var findSection: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+            TextField("Find on this page — trials, indications, similar drugs (⌘F)", text: $findQuery)
+                .textFieldStyle(.plain)
+                .focused($findFocused)
+            if !findQuery.isEmpty {
+                Button {
+                    findQuery = ""
+                    findFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(findFocused ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    private var normalizedFind: String {
+        findQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func filteredIndications(_ all: [ChEMBLIndication]) -> [ChEMBLIndication] {
+        let q = normalizedFind
+        guard !q.isEmpty else { return all }
+        return all.filter { ind in
+            (ind.meshHeading ?? "").lowercased().contains(q) ||
+            (ind.efoTerm ?? "").lowercased().contains(q) ||
+            (ind.meshId ?? "").lowercased().contains(q)
+        }
+    }
+
+    private func filteredTrials(_ all: [ClinicalTrial]) -> [ClinicalTrial] {
+        let q = normalizedFind
+        guard !q.isEmpty else { return all }
+        return all.filter { trial in
+            if (trial.title ?? "").lowercased().contains(q) { return true }
+            if trial.nctId.lowercased().contains(q) { return true }
+            if (trial.status ?? "").lowercased().contains(q) { return true }
+            if let arms = trial.arms {
+                for arm in arms {
+                    if (arm.label ?? "").lowercased().contains(q) { return true }
+                    if let interventions = arm.interventions,
+                       interventions.contains(where: { $0.lowercased().contains(q) }) {
+                        return true
+                    }
+                }
+            }
+            if let outcomes = trial.primaryOutcomes {
+                for outcome in outcomes {
+                    if (outcome.title ?? "").lowercased().contains(q) { return true }
+                }
+            }
+            return false
+        }
+    }
+
+    private func filteredSimilar(_ all: [SimilarDrugHit]) -> [SimilarDrugHit] {
+        let q = normalizedFind
+        guard !q.isEmpty else { return all }
+        return all.filter { hit in
+            (hit.name ?? "").lowercased().contains(q) ||
+            (hit.chemblId ?? "").lowercased().contains(q)
         }
     }
 
@@ -225,22 +316,36 @@ struct ChEMBLDetailPanel: View {
     // MARK: - Indications
 
     private func indicationsSection(_ indications: [ChEMBLIndication]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let total = detail?.indications?.count ?? indications.count
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Indications")
                     .font(.headline)
                 Spacer()
-                Text("\(indications.count) from ChEMBL")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if !normalizedFind.isEmpty && total != indications.count {
+                    Text("\(indications.count) of \(total)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("\(total) from ChEMBL")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             Text("Conditions ChEMBL has linked to this drug, with the highest clinical phase reached. Sorted by phase.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            LazyVStack(spacing: 4) {
-                ForEach(indications) { ind in
-                    IndicationRow(indication: ind)
+            if indications.isEmpty {
+                Text("No indications match \u{201C}\(findQuery)\u{201D}.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+            } else {
+                LazyVStack(spacing: 4) {
+                    ForEach(indications) { ind in
+                        IndicationRow(indication: ind)
+                    }
                 }
             }
         }
@@ -249,15 +354,22 @@ struct ChEMBLDetailPanel: View {
     // MARK: - Clinical Trial Outcomes
 
     private var trialsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let visibleTrials = filteredTrials(trials)
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Clinical Trial Outcomes")
                     .font(.headline)
                 Spacer()
                 if !trials.isEmpty {
-                    Text("\(trials.count) trial\(trials.count == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if !normalizedFind.isEmpty {
+                        Text("\(visibleTrials.count) of \(trials.count)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("\(trials.count) trial\(trials.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             Text("Trial arms with reported primary outcomes from ClinicalTrials.gov. Arms including this drug are highlighted; multi-arm trials let you compare regimens (e.g. backbone vs backbone + this drug).")
@@ -279,9 +391,14 @@ struct ChEMBLDetailPanel: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 60)
+            } else if visibleTrials.isEmpty {
+                Text("No trials match \u{201C}\(findQuery)\u{201D}.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 LazyVStack(spacing: 12) {
-                    ForEach(trials) { trial in
+                    ForEach(visibleTrials) { trial in
                         TrialCard(trial: trial, currentDrugName: detail?.prefName ?? detail?.parentPrefName)
                     }
                 }
@@ -304,7 +421,8 @@ struct ChEMBLDetailPanel: View {
     // MARK: - Similar Drugs
 
     private var similarSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let visibleSimilar = filteredSimilar(similar)
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Molecularly Similar Drugs")
                     .font(.headline)
@@ -315,9 +433,15 @@ struct ChEMBLDetailPanel: View {
                         .foregroundColor(.secondary)
                 }
                 if !similar.isEmpty {
-                    Text("\(similar.count) hits")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if !normalizedFind.isEmpty {
+                        Text("\(visibleSimilar.count) of \(similar.count)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("\(similar.count) hits")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             Text("Top-K nearest neighbors from the local FAISS index using Morgan fingerprints (ECFP4).")
@@ -352,9 +476,14 @@ struct ChEMBLDetailPanel: View {
                 Text("No similar drugs found.")
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 80)
+            } else if visibleSimilar.isEmpty {
+                Text("No similar drugs match \u{201C}\(findQuery)\u{201D}.")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 LazyVGrid(columns: similarColumns, spacing: 12) {
-                    ForEach(similar) { hit in
+                    ForEach(visibleSimilar) { hit in
                         SimilarDrugTile(hit: hit)
                     }
                 }
@@ -588,6 +717,30 @@ private struct TrialArmRow: View {
 private struct TrialOutcomeRow: View {
     let outcome: ClinicalTrialOutcome
 
+    /// CI-overlap analysis across all arms with parseable numeric (value, lower, upper).
+    /// nil → not enough numeric data to call.
+    /// .distinct → no two arms have overlapping CIs (likely real difference).
+    /// .overlap → at least one pair of arms has overlapping CIs (interpret with caution).
+    private enum CIStatus { case distinct, overlap }
+
+    private var ciStatus: CIStatus? {
+        let parsed = (outcome.armResults ?? []).compactMap { r -> (lo: Double, hi: Double)? in
+            guard let lo = Double(r.lower ?? ""),
+                  let hi = Double(r.upper ?? ""),
+                  lo.isFinite, hi.isFinite else { return nil }
+            return (min(lo, hi), max(lo, hi))
+        }
+        guard parsed.count >= 2 else { return nil }
+        for i in 0..<parsed.count {
+            for j in (i + 1)..<parsed.count {
+                let a = parsed[i], b = parsed[j]
+                // Closed-interval overlap: a.lo <= b.hi && b.lo <= a.hi.
+                if a.lo <= b.hi && b.lo <= a.hi { return .overlap }
+            }
+        }
+        return .distinct
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
@@ -606,6 +759,8 @@ private struct TrialOutcomeRow: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+                Spacer()
+                ciStatusBadge
             }
             ForEach(outcome.armResults ?? [], id: \.armLabel) { result in
                 HStack(alignment: .firstTextBaseline) {
@@ -635,6 +790,32 @@ private struct TrialOutcomeRow: View {
         .padding(.horizontal, 8)
         .background(Color.secondary.opacity(0.06))
         .cornerRadius(6)
+    }
+
+    @ViewBuilder
+    private var ciStatusBadge: some View {
+        switch ciStatus {
+        case .distinct:
+            Label("Distinct CIs", systemImage: "checkmark.circle.fill")
+                .font(.caption2.bold())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.green.opacity(0.15))
+                .foregroundColor(.green)
+                .clipShape(Capsule())
+                .help("The 95% confidence intervals do not overlap — the difference between arms is likely real, not chance.")
+        case .overlap:
+            Label("CIs overlap", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2.bold())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.yellow.opacity(0.18))
+                .foregroundColor(.orange)
+                .clipShape(Capsule())
+                .help("The 95% confidence intervals overlap — the apparent difference between arms could be due to chance. Check the trial's reported p-value or hazard ratio for the formal call.")
+        case .none:
+            EmptyView()
+        }
     }
 }
 
