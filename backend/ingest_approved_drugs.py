@@ -314,28 +314,29 @@ def write_molecules_to_staging(conn: sqlite3.Connection, drugs: List[Dict]) -> N
     col_names = ", ".join(c for c, _ in cols)
     placeholders = ", ".join("?" * len(cols))
 
+    # Annotate each drug dict with the rowid we're assigning so downstream
+    # FAISS metadata can store the *real* rowid (rather than a dense
+    # 0..N-1 sequence that won't match the molecules table after promotion).
     if pinned:
         sql_pinned = f"INSERT INTO {STAGED_MOLECULES_TABLE} (rowid, {col_names}) VALUES (?, {placeholders})"
         print(f"📝 Staging {len(pinned)} drugs at their original rowids (preserves FKs)…")
-        cur.executemany(
-            sql_pinned,
-            [
-                (chembl_to_rowid[d['chembl_id']],) + tuple(fn(d) for _, fn in cols)
-                for d in pinned
-            ],
-        )
+        rows_pinned = []
+        for d in pinned:
+            assigned = chembl_to_rowid[d['chembl_id']]
+            d['rowid'] = assigned
+            rows_pinned.append((assigned,) + tuple(fn(d) for _, fn in cols))
+        cur.executemany(sql_pinned, rows_pinned)
 
     if fresh:
         max_rowid = max(chembl_to_rowid.values()) if chembl_to_rowid else 0
         sql_fresh = f"INSERT INTO {STAGED_MOLECULES_TABLE} (rowid, {col_names}) VALUES (?, {placeholders})"
         print(f"📝 Staging {len(fresh)} new drugs above rowid {max_rowid}…")
-        cur.executemany(
-            sql_fresh,
-            [
-                (max_rowid + 1 + i,) + tuple(fn(d) for _, fn in cols)
-                for i, d in enumerate(fresh)
-            ],
-        )
+        rows_fresh = []
+        for i, d in enumerate(fresh):
+            assigned = max_rowid + 1 + i
+            d['rowid'] = assigned
+            rows_fresh.append((assigned,) + tuple(fn(d) for _, fn in cols))
+        cur.executemany(sql_fresh, rows_fresh)
 
     conn.commit()
     print(f"✅ Staged {len(pinned)} pinned + {len(fresh)} new drugs into {STAGED_MOLECULES_TABLE}")
@@ -432,7 +433,10 @@ def rebuild_faiss_index(
     print(f"🔨 Building FAISS index for {len(drugs)} drugs…")
     fingerprints = np.vstack([d['fingerprint'] for d in drugs]).astype(np.float32)
     chembl_ids = [d['chembl_id'] for d in drugs]
-    molecule_ids = list(range(len(drugs)))
+    # Use the real molecules.rowid assigned by write_molecules_to_staging when
+    # available so FAISS metadata mirrors the live table. Falls back to a
+    # dense range only for legacy callers that don't pre-stage rowids.
+    molecule_ids = [d.get('rowid', i) for i, d in enumerate(drugs)]
     if index_path is None and metadata_path is None:
         # Legacy path: write straight to the live files.
         build_and_save_index(

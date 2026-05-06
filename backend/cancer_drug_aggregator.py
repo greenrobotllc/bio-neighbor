@@ -120,6 +120,15 @@ def fetch_chembl_drugs_for_subtype(subtype: Dict, per_term_limit: int = 50) -> L
     seen: Dict[str, Dict] = {}
 
     def absorb(items, fallback_phase: int = 0):
+        """Accumulate ChEMBL drug_indication hits per chembl_id.
+
+        Each call may add a new (mesh_heading, efo_term) match for an already-
+        seen drug; we keep them all in `matches` so downstream ranking can
+        boost drugs with multiple subtype-relevant filings instead of treating
+        them as a single hit. Top-level mesh/efo metadata tracks the
+        highest-phase match for back-compat with consumers that just want one
+        evidence row per drug.
+        """
         for item in items or []:
             chembl_id = item.get("molecule_chembl_id")
             if not chembl_id:
@@ -130,15 +139,31 @@ def fetch_chembl_drugs_for_subtype(subtype: Dict, per_term_limit: int = 50) -> L
                 phase = int(float(phase)) if phase is not None else fallback_phase
             except (TypeError, ValueError):
                 phase = fallback_phase
+            match = {
+                "max_phase": phase,
+                "mesh_heading": item.get("mesh_heading"),
+                "efo_term": item.get("efo_term"),
+                "mesh_id": item.get("mesh_id"),
+            }
             existing = seen.get(chembl_id)
-            if existing is None or phase > existing["max_phase"]:
+            if existing is None:
                 seen[chembl_id] = {
                     "chembl_id": chembl_id,
                     "max_phase": phase,
-                    "mesh_heading": item.get("mesh_heading"),
-                    "efo_term": item.get("efo_term"),
-                    "mesh_id": item.get("mesh_id"),
+                    "mesh_heading": match["mesh_heading"],
+                    "efo_term": match["efo_term"],
+                    "mesh_id": match["mesh_id"],
+                    "matches": [match],
                 }
+            else:
+                existing["matches"].append(match)
+                if phase > existing["max_phase"]:
+                    # Promote the higher-phase match's metadata to the top
+                    # level so back-compat consumers see the best filing.
+                    existing["max_phase"] = phase
+                    existing["mesh_heading"] = match["mesh_heading"]
+                    existing["efo_term"] = match["efo_term"]
+                    existing["mesh_id"] = match["mesh_id"]
 
     # Walk curated indication terms first — these are written by humans to
     # match real ChEMBL MeSH headings and are far more precise than the
@@ -171,6 +196,23 @@ def fetch_chembl_drugs_for_subtype(subtype: Dict, per_term_limit: int = 50) -> L
             except Exception as e:
                 print(f"   ⚠️  ChEMBL drug_indication error for '{variant}': {e}")
 
+    # Pull by the subtype's OWN MeSH ID first. Subtype-specific filings (e.g.
+    # "Triple Negative Breast Neoplasms") would otherwise be missed when the
+    # subtype mesh_id is more specific than the curated indication terms.
+    if subtype.get("mesh_id"):
+        try:
+            results = _chembl_query_with_timeout(
+                lambda: list(
+                    new_client.drug_indication.filter(mesh_id__exact=subtype["mesh_id"])
+                    .only(["molecule_chembl_id", "max_phase_for_ind", "mesh_heading", "efo_term", "mesh_id"])[:per_term_limit * 2]
+                )
+            )
+            absorb(results)
+        except FuturesTimeoutError:
+            print(f"   ⚠️  ChEMBL subtype-MeSH pull timed out for {subtype['mesh_id']}")
+        except Exception as e:
+            print(f"   ⚠️  ChEMBL subtype-MeSH error: {e}")
+
     # ALSO pull by parent cancer's MeSH ID (not just as fallback). Many drugs
     # — including subtype-specific ones like ribociclib for HR+ breast cancer —
     # are filed under the generic parent MeSH heading rather than a subtype
@@ -190,7 +232,18 @@ def fetch_chembl_drugs_for_subtype(subtype: Dict, per_term_limit: int = 50) -> L
         except Exception as e:
             print(f"   ⚠️  ChEMBL parent-MeSH error: {e}")
 
-    return list(seen.values())
+    # Compute a distinct-match count per drug — collapses identical hits from
+    # multiple queries (e.g. mesh-id and efo-term variants of the same drug)
+    # and exposes evidence multiplicity to ranking.
+    out = []
+    for row in seen.values():
+        signatures = {
+            (m.get("mesh_id"), m.get("efo_term"))
+            for m in row.get("matches") or []
+        }
+        row["match_count"] = max(1, len(signatures))
+        out.append(row)
+    return out
 
 
 def fetch_chembl_drug_names(chembl_ids: List[str], batch_size: int = 50) -> Dict[str, str]:
@@ -366,6 +419,9 @@ def aggregate_top_drugs_for_subtype(
                     "efo_term": r.get("efo_term"),
                     "mesh_id": r.get("mesh_id"),
                 },
+                # Carries through into rank_score so drugs with multiple
+                # subtype-relevant ChEMBL filings outrank single-hit drugs.
+                "chembl_match_count": r.get("match_count", 1),
                 "ligand_id": None,
                 "molecule_index": None,
             }
@@ -389,6 +445,7 @@ def aggregate_top_drugs_for_subtype(
                     "max_phase": 0,
                     "sources": {"cancer_mechanism"},
                     "evidence": {"source": "cancer_mechanism"},
+                    "chembl_match_count": 0,  # no chembl_indication hit
                     "ligand_id": r.get("ligand_id"),
                     "molecule_index": r.get("molecule_index"),
                 }
@@ -417,7 +474,12 @@ def aggregate_top_drugs_for_subtype(
         # Score and persist
         rows_to_persist = []
         for row in merged.values():
-            source_count = len(row["sources"])
+            # Effective source_count = distinct data systems (sources set) +
+            # bounded boost for ChEMBL evidence multiplicity. The cap stops a
+            # drug with many parent-MeSH filings from out-ranking a drug with
+            # a single Phase 4 entry.
+            chembl_boost = min(max(row.get("chembl_match_count", 1) - 1, 0), 3)
+            source_count = len(row["sources"]) + chembl_boost
             primary_source = (
                 "chembl_indication" if "chembl_indication" in row["sources"]
                 else "cancer_mechanism" if "cancer_mechanism" in row["sources"]

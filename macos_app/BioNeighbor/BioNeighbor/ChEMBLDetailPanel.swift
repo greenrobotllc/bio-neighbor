@@ -906,7 +906,10 @@ private struct TrialOutcomeRow: View {
                 Spacer()
                 ciStatusBadge
             }
-            ForEach(outcome.armResults ?? [], id: \.armLabel) { result in
+            // Use array offset as identity — armLabel is optional and not
+            // guaranteed unique within an outcome (multi-arm trials can list
+            // duplicate labels), which produced SwiftUI duplicate-id warnings.
+            ForEach(Array((outcome.armResults ?? []).enumerated()), id: \.offset) { _, result in
                 HStack(alignment: .firstTextBaseline) {
                     Text(result.armLabel ?? "?")
                         .appFont(.caption2)

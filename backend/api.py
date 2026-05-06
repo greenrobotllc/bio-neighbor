@@ -3241,7 +3241,11 @@ def v2_subtype_refresh_drugs(subtype_id: int):
         from cancer_drug_aggregator import aggregate_top_drugs_for_subtype
         result = aggregate_top_drugs_for_subtype(subtype_id, limit=100, refresh=True)
         if not result.get('success'):
-            return jsonify({'success': False, 'error': result.get('error', 'Refresh failed')}), 500
+            err = result.get('error', 'Refresh failed')
+            # Mirror v2_subtype_top_drugs's 404 path so a missing subtype is a
+            # client error, not a server error.
+            status = 404 if 'not found' in err.lower() else 500
+            return jsonify({'success': False, 'error': err}), status
         # Strip the heavy `drugs` payload from the refresh response — clients
         # immediately re-fetch via top-drugs anyway.
         return jsonify({

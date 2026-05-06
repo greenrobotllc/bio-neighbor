@@ -584,18 +584,19 @@ def initialize_schema(conn: sqlite3.Connection, force_recreate: bool = False) ->
                     else:
                         print(f"   ⚠️  Warning: Could not create index: {index_sql[:50]}... ({e})")
         
-        # Set schema version
-        set_schema_version(conn, SCHEMA_VERSION)
-        conn.commit()
-
         # Seed curated cancer taxonomy on a fresh DB so the v2 Cancer Research
         # browse has data immediately. Idempotent — safe to re-run. If seeding
-        # fails we re-raise so the outer except rolls back and reports failure;
-        # otherwise the DB is marked at SCHEMA_VERSION while critical seed data
-        # is missing.
+        # fails we re-raise so the outer except rolls back and reports failure.
+        # CRITICAL: do NOT mark the schema as initialized before this succeeds —
+        # set_schema_version commits internally, so a failed seed would leave
+        # the DB stamped at SCHEMA_VERSION with critical data missing and the
+        # next startup would skip re-seeding.
         from cancer_taxonomy_seed import seed_cancer_taxonomy
         seeded = seed_cancer_taxonomy(conn)
         print(f"🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
+
+        # Only now is it safe to advertise the schema as fully initialized.
+        set_schema_version(conn, SCHEMA_VERSION)
 
         print(f"✅ Schema initialized (version {SCHEMA_VERSION})")
         return True

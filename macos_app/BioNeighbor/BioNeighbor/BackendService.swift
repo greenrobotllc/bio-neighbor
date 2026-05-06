@@ -47,6 +47,23 @@ class BackendService: ObservableObject {
     private init() {
         checkBackendHealth()
     }
+
+    /// Throws a descriptive `BackendError` for any non-200 response, parsing
+    /// the backend's `{"error": "..."}` body when present so failures surface
+    /// the actual reason instead of a hard-coded "Failed to fetch X" string.
+    /// No-op on success.
+    private func ensureOK(_ response: URLResponse, data: Data, fallback: String) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            if let body = try? JSONDecoder().decode([String: String].self, from: data),
+               let message = body["error"] {
+                throw BackendError.networkError(message)
+            }
+            throw BackendError.networkError("\(fallback) (HTTP \(http.statusCode))")
+        }
+    }
     
     func checkBackendHealth() {
         guard let url = URL(string: "\(baseURL)/health") else {
@@ -1501,10 +1518,7 @@ class BackendService: ObservableObject {
         
         let (data, response) = try await URLSession.shared.data(from: url)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch mechanisms")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch mechanisms")
         
         let mechanismsResponse = try JSONDecoder().decode(MechanismsResponse.self, from: data)
         guard mechanismsResponse.success, let mechanisms = mechanismsResponse.mechanisms else {
@@ -1521,10 +1535,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch mechanism")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch mechanism")
 
         let mechanismResponse = try JSONDecoder().decode(MechanismResponse.self, from: data)
         guard mechanismResponse.success, let mechanism = mechanismResponse.mechanism else {
@@ -1541,10 +1552,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch targets")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch targets")
 
         let targetsResponse = try JSONDecoder().decode(TargetsResponse.self, from: data)
         guard targetsResponse.success, let targets = targetsResponse.targets else {
@@ -1561,10 +1569,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch ligands")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch ligands")
 
         let ligandsResponse = try JSONDecoder().decode(LigandsResponse.self, from: data)
         guard ligandsResponse.success, let ligands = ligandsResponse.ligands else {
@@ -1581,10 +1586,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch drug outcomes")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch drug outcomes")
 
         let outcomesResponse = try JSONDecoder().decode(DrugOutcomesResponse.self, from: data)
         guard outcomesResponse.success, let outcomes = outcomesResponse.outcomes else {
@@ -1601,10 +1603,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch assays")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch assays")
 
         let assaysResponse = try JSONDecoder().decode(AssaysResponse.self, from: data)
         guard assaysResponse.success, let assays = assaysResponse.assays else {
@@ -1621,10 +1620,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch cancers")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch cancers")
 
         let cancersResponse = try JSONDecoder().decode(CancersResponse.self, from: data)
         guard cancersResponse.success, let cancers = cancersResponse.cancers else {
@@ -1641,10 +1637,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to list workspaces")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to list workspaces")
 
         let workspacesResponse = try JSONDecoder().decode(WorkspacesResponse.self, from: data)
         guard workspacesResponse.success else {
@@ -1680,10 +1673,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to create workspace")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to create workspace")
 
         let workspaceResponse = try JSONDecoder().decode(WorkspaceCreateResponse.self, from: data)
         guard workspaceResponse.success, let workspaceId = workspaceResponse.workspaceId else {
@@ -1715,12 +1705,9 @@ class BackendService: ObservableObject {
         }
         request.httpBody = bodyData
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to update workspace")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to update workspace")
     }
 
     // MARK: - Cancer Research v2 (disease-first browse)
@@ -1732,10 +1719,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch cancer types")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch cancer types")
 
         let decoded = try JSONDecoder().decode(CancerTypesResponse.self, from: data)
         guard decoded.success, let types = decoded.cancerTypes else {
@@ -1751,10 +1735,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch subtypes")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch subtypes")
 
         let decoded = try JSONDecoder().decode(SubtypesResponse.self, from: data)
         guard decoded.success, let subtypes = decoded.subtypes else {
@@ -1770,10 +1751,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch subtype")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch subtype")
 
         let decoded = try JSONDecoder().decode(SubtypeDetailResponse.self, from: data)
         guard decoded.success, let subtype = decoded.subtype else {
@@ -1798,10 +1776,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch top drugs")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch top drugs")
 
         let decoded = try JSONDecoder().decode(SubtypeTopDrugsResponse.self, from: data)
         guard decoded.success, let drugs = decoded.drugs else {
@@ -1822,10 +1797,7 @@ class BackendService: ObservableObject {
         request.timeoutInterval = 90.0
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch clinical trials")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch clinical trials")
 
         let decoded = try JSONDecoder().decode(ClinicalTrialsResponse.self, from: data)
         guard decoded.success else {
@@ -1843,10 +1815,7 @@ class BackendService: ObservableObject {
         request.timeoutInterval = 60.0
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch ChEMBL drug detail")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch ChEMBL drug detail")
 
         let decoded = try JSONDecoder().decode(ChEMBLDrugDetailResponse.self, from: data)
         guard decoded.success, let detail = decoded.detail else {
@@ -1863,10 +1832,7 @@ class BackendService: ObservableObject {
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch similar drugs")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch similar drugs")
 
         let decoded = try JSONDecoder().decode(SimilarDrugsResponse.self, from: data)
         guard decoded.success else {
@@ -1906,10 +1872,7 @@ class BackendService: ObservableObject {
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Drug search failed")
-        }
+        try ensureOK(response, data: data, fallback: "Drug search failed")
 
         let decoded = try JSONDecoder().decode(DrugSearchResponse.self, from: data)
         guard decoded.success else {
@@ -1924,10 +1887,7 @@ class BackendService: ObservableObject {
         }
 
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch subtype mechanisms")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch subtype mechanisms")
 
         let decoded = try JSONDecoder().decode(SubtypeMechanismsResponse.self, from: data)
         guard decoded.success else {
@@ -1947,10 +1907,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to refresh drugs")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to refresh drugs")
 
         let decoded = try JSONDecoder().decode(SubtypeRefreshResponse.self, from: data)
         guard decoded.success else {

@@ -203,8 +203,11 @@ struct DrugsView: View {
         if Task.isCancelled { return }
 
         if q.isEmpty {
+            // Reset cleanly — clear any stale error banner so it doesn't
+            // outlive the search that produced it.
             liveResults = nil
             lastChemblUsed = false
+            errorMessage = nil
             return
         }
         guard backendService.isBackendRunning else { return }
@@ -214,6 +217,8 @@ struct DrugsView: View {
         do {
             let response = try await backendService.searchDrugsLive(query: q, limit: 30)
             if Task.isCancelled { return }
+            // Clear any prior error before showing fresh successful results.
+            errorMessage = nil
             liveResults = response.results
             lastChemblUsed = response.chemblUsed
         } catch is CancellationError {
