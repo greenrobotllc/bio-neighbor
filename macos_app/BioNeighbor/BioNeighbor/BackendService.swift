@@ -1802,6 +1802,30 @@ class BackendService: ObservableObject {
         return drugs
     }
 
+    func fetchClinicalTrials(chemblId: String, limit: Int = 15) async throws -> [ClinicalTrial] {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/trials")
+        components?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // Each trial fetch hits ClinicalTrials.gov; up to 30 in parallel takes ~10-30s.
+        request.timeoutInterval = 90.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw BackendError.networkError("Failed to fetch clinical trials")
+        }
+
+        let decoded = try JSONDecoder().decode(ClinicalTrialsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch clinical trials")
+        }
+        return decoded.trials ?? []
+    }
+
     func fetchChEMBLDrugDetail(chemblId: String) async throws -> ChEMBLDrugDetail {
         guard let url = URL(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/detail") else {
             throw BackendError.backendNotAvailable

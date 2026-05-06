@@ -3333,6 +3333,33 @@ def v2_cancer_type_drug_search(type_id: int):
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 
+@app.route('/cancer-research/v2/drugs/<chembl_id>/trials', methods=['GET'])
+def v2_drug_trials(chembl_id: str):
+    """
+    Return clinical trials for a drug from ClinicalTrials.gov, parsed for the
+    drug detail page's "Clinical Trial Outcomes" section. Each trial carries
+    its arms (with intervention names) and primary outcome measures with
+    values per arm — surfaces the regimen-vs-regimen comparisons users care
+    about.
+
+    Trials with multi-arm reported outcomes are returned first.
+    Slow path: a fresh fetch hits ClinicalTrials.gov (one request per trial).
+    """
+    try:
+        from clinical_trials import fetch_trials_for_drug
+        max_trials = max(1, min(int(request.args.get('limit', 15)), 30))
+        trials = fetch_trials_for_drug(chembl_id, max_trials=max_trials)
+        return jsonify({
+            'success': True,
+            'chembl_id': chembl_id,
+            'trials': trials,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 drug trials error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 @app.route('/cancer-research/v2/drugs/<chembl_id>/detail', methods=['GET'])
 def v2_drug_detail(chembl_id: str):
     """
@@ -3741,6 +3768,7 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print("   GET  /cancer-research/v2/subtypes/<id>/top-drugs - v2: ranked drugs (ChEMBL+mechanism+multi-API, 30-day cache)")
     print("   POST /cancer-research/v2/subtypes/<id>/refresh-drugs - v2: force ChEMBL re-pull")
     print("   GET  /cancer-research/v2/drugs/<chembl_id>/detail - v2: ChEMBL drug detail (properties, synonyms, indications)")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/trials - v2: ClinicalTrials.gov arm + outcome data")
     print("   GET  /cancer-research/v2/drugs/<chembl_id>/similar - v2: molecularly similar drugs via FAISS (with ChEMBL SMILES fallback)")
     print("   GET  /cancer-research/v2/subtypes/<id>/mechanisms - v2: mechanisms relevant to subtype")
     app.run(host=host, port=port, debug=debug_enabled)

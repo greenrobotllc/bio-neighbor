@@ -191,6 +191,27 @@ def _normalize_indications(raw_indications: List[Dict]) -> List[Dict]:
     return rows
 
 
+def fetch_nct_ids_for_drug(chembl_id: str) -> List[str]:
+    """
+    Return all unique NCT IDs (clinicaltrials.gov references) for a drug,
+    walking ChEMBL drug_indication.indication_refs across every indication.
+    Used by clinical_trials.fetch_trials_for_drug to seed the trial pull.
+    """
+    raw = _fetch_indications_raw(chembl_id)
+    seen: set = set()
+    out: List[str] = []
+    for ind in raw or []:
+        for ref in ind.get("indication_refs") or []:
+            if (ref.get("ref_type") or "").lower() != "clinicaltrials":
+                continue
+            for nct in (ref.get("ref_id") or "").split(","):
+                nct = nct.strip().upper()
+                if nct.startswith("NCT") and nct not in seen:
+                    seen.add(nct)
+                    out.append(nct)
+    return out
+
+
 def fetch_pref_names(chembl_ids: List[str], batch_size: int = 50) -> Dict[str, str]:
     """
     Batch-resolve molecule_chembl_id → pref_name for a list of IDs. Used by

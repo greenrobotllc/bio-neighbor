@@ -28,6 +28,10 @@ struct ChEMBLDetailPanel: View {
     @State private var similarNotInLocalIndex = false
     @State private var similarError: String?
 
+    @State private var trials: [ClinicalTrial] = []
+    @State private var isLoadingTrials = false
+    @State private var trialsError: String?
+
     private let similarColumns = [
         GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 12)
     ]
@@ -44,6 +48,8 @@ struct ChEMBLDetailPanel: View {
                 indicationsSection(indications)
             }
             Divider()
+            trialsSection
+            Divider()
             similarSection
         }
         .task(id: chemblId) {
@@ -55,10 +61,13 @@ struct ChEMBLDetailPanel: View {
             similarError = nil
             similarFetchedFromChEMBL = false
             similarNotInLocalIndex = false
+            trials = []
+            trialsError = nil
 
             async let detailTask: Void = loadDetail()
             async let similarTask: Void = loadSimilar()
-            _ = await (detailTask, similarTask)
+            async let trialsTask: Void = loadTrials()
+            _ = await (detailTask, similarTask, trialsTask)
         }
     }
 
@@ -237,6 +246,61 @@ struct ChEMBLDetailPanel: View {
         }
     }
 
+    // MARK: - Clinical Trial Outcomes
+
+    private var trialsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Clinical Trial Outcomes")
+                    .font(.headline)
+                Spacer()
+                if !trials.isEmpty {
+                    Text("\(trials.count) trial\(trials.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text("Trial arms with reported primary outcomes from ClinicalTrials.gov. Arms including this drug are highlighted; multi-arm trials let you compare regimens (e.g. backbone vs backbone + this drug).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if isLoadingTrials {
+                ProgressView("Loading trials from ClinicalTrials.gov…")
+                    .frame(maxWidth: .infinity, minHeight: 100)
+            } else if let err = trialsError {
+                VStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle").foregroundColor(.orange)
+                    Text(err).font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Button("Retry") { Task { await loadTrials() } }.buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, minHeight: 100)
+            } else if trials.isEmpty {
+                Text("No linked clinical trials found for this drug.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            } else {
+                LazyVStack(spacing: 12) {
+                    ForEach(trials) { trial in
+                        TrialCard(trial: trial, currentDrugName: detail?.prefName ?? detail?.parentPrefName)
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadTrials() async {
+        isLoadingTrials = true
+        trialsError = nil
+        defer { isLoadingTrials = false }
+        do {
+            trials = try await backendService.fetchClinicalTrials(chemblId: chemblId, limit: 15)
+        } catch {
+            trialsError = error.localizedDescription
+        }
+    }
+
     // MARK: - Similar Drugs
 
     private var similarSection: some View {
@@ -396,6 +460,181 @@ struct IndicationRow: View {
                 .foregroundColor(color)
                 .clipShape(Capsule())
         }
+    }
+}
+
+// MARK: - Trial card / arm row / outcome row
+
+struct TrialCard: View {
+    let trial: ClinicalTrial
+    let currentDrugName: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header — title + NCT link + status chip
+            HStack(alignment: .firstTextBaseline) {
+                Text(trial.title ?? trial.nctId)
+                    .font(.subheadline.bold())
+                    .lineLimit(2)
+                Spacer()
+                statusChip
+            }
+
+            HStack(spacing: 10) {
+                if let url = URL(string: "https://clinicaltrials.gov/study/\(trial.nctId)") {
+                    Link(trial.nctId, destination: url)
+                        .font(.caption.monospaced())
+                }
+                if let phases = trial.phase, !phases.isEmpty {
+                    Text(phases.joined(separator: ", "))
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12))
+                        .foregroundColor(.secondary)
+                        .clipShape(Capsule())
+                }
+            }
+
+            // Arms — current drug highlighted
+            if let arms = trial.arms, !arms.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(arms) { arm in
+                        TrialArmRow(arm: arm, currentDrugName: currentDrugName)
+                    }
+                }
+            }
+
+            // Primary outcomes with arm-level results
+            if let outcomes = trial.primaryOutcomes, !outcomes.isEmpty {
+                ForEach(outcomes) { outcome in
+                    TrialOutcomeRow(outcome: outcome)
+                }
+            } else if !(trial.hasResults ?? false) {
+                Text("Results not yet reported")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var statusChip: some View {
+        if let status = trial.status {
+            let color: Color = {
+                switch status {
+                case "COMPLETED": return .green
+                case "ACTIVE_NOT_RECRUITING", "RECRUITING", "ENROLLING_BY_INVITATION": return .blue
+                case "TERMINATED", "WITHDRAWN", "SUSPENDED": return .orange
+                default: return .gray
+                }
+            }()
+            Text(status.replacingOccurrences(of: "_", with: " ").capitalized)
+                .font(.caption2.bold())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(color.opacity(0.15))
+                .foregroundColor(color)
+                .clipShape(Capsule())
+        }
+    }
+}
+
+private struct TrialArmRow: View {
+    let arm: ClinicalTrialArm
+    let currentDrugName: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: containsCurrentDrug ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(containsCurrentDrug ? .accentColor : .secondary.opacity(0.5))
+                .font(.caption)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(arm.label ?? "—")
+                    .font(.caption.bold())
+                if let interventions = arm.interventions, !interventions.isEmpty {
+                    Text(interventions.joined(separator: " + "))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var containsCurrentDrug: Bool {
+        guard let drugName = currentDrugName?.lowercased(), !drugName.isEmpty,
+              let interventions = arm.interventions else { return false }
+        // Match the drug name as a token within any intervention string. Trial
+        // sponsors sometimes use research codes (LEE011 = ribociclib) which
+        // won't match — that's fine, we just don't highlight.
+        return interventions.contains { intervention in
+            intervention.lowercased().contains(drugName)
+        }
+    }
+}
+
+private struct TrialOutcomeRow: View {
+    let outcome: ClinicalTrialOutcome
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Primary")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.blue.opacity(0.15))
+                    .foregroundColor(.blue)
+                    .clipShape(Capsule())
+                Text(outcome.title ?? "—")
+                    .font(.caption)
+                    .lineLimit(2)
+                if let unit = outcome.unit, !unit.isEmpty {
+                    Text("(\(unit))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            ForEach(outcome.armResults ?? [], id: \.armLabel) { result in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(result.armLabel ?? "?")
+                        .font(.caption2)
+                        .lineLimit(2)
+                    Spacer()
+                    if let value = result.value, !value.isEmpty {
+                        Text(value)
+                            .font(.caption.monospaced())
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.green.opacity(0.12))
+                            .foregroundColor(.green)
+                            .clipShape(Capsule())
+                    }
+                    if let l = result.lower, let u = result.upper,
+                       l.uppercased() != "NA" && u.uppercased() != "NA" {
+                        Text("(\(l)–\(u))")
+                            .font(.caption2.monospaced())
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(Color.secondary.opacity(0.06))
+        .cornerRadius(6)
     }
 }
 

@@ -857,6 +857,82 @@ struct ChEMBLDrugDetail: Codable, Hashable {
 /// Decoder helper: the backend returns ChEMBLDrugDetail fields at the top level
 /// of the response (alongside `success` + `disclaimer` + `error`). This wrapper
 /// lets us decode either the embedded detail or a top-level error.
+// MARK: - Clinical Trials (ClinicalTrials.gov v2)
+
+struct TrialArmResult: Codable, Hashable {
+    let armLabel: String?
+    let value: String?
+    let lower: String?
+    let upper: String?
+
+    enum CodingKeys: String, CodingKey {
+        case armLabel = "arm_label"
+        case value
+        case lower
+        case upper
+    }
+}
+
+struct ClinicalTrialOutcome: Codable, Hashable, Identifiable {
+    let title: String?
+    let paramType: String?
+    let unit: String?
+    let armResults: [TrialArmResult]?
+
+    var id: String { title ?? UUID().uuidString }
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case paramType = "param_type"
+        case unit
+        case armResults = "arm_results"
+    }
+}
+
+struct ClinicalTrialArm: Codable, Hashable, Identifiable {
+    let label: String?
+    let type: String?
+    let interventions: [String]?
+
+    var id: String { label ?? UUID().uuidString }
+}
+
+struct ClinicalTrial: Codable, Hashable, Identifiable {
+    let nctId: String
+    let title: String?
+    let status: String?
+    let phase: [String]?
+    let arms: [ClinicalTrialArm]?
+    let primaryOutcomes: [ClinicalTrialOutcome]?
+    let hasResults: Bool?
+
+    var id: String { nctId }
+
+    enum CodingKeys: String, CodingKey {
+        case nctId = "nct_id"
+        case title
+        case status
+        case phase
+        case arms
+        case primaryOutcomes = "primary_outcomes"
+        case hasResults = "has_results"
+    }
+}
+
+struct ClinicalTrialsResponse: Codable {
+    let success: Bool
+    let chemblId: String?
+    let trials: [ClinicalTrial]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case chemblId = "chembl_id"
+        case trials
+        case error
+    }
+}
+
 struct ChEMBLDrugDetailResponse: Codable {
     let success: Bool
     let error: String?
