@@ -373,7 +373,12 @@ private struct DrugSearchMatchRow: View {
             }
 
             FlowLayout(spacing: 6) {
-                ForEach(match.matchedDrugs, id: \.drugName) { drug in
+                // `\.self` uses the full Hashable struct as identity — two
+                // drugs with the same name but different chembl_id (or phase)
+                // remain distinct. Avoids SwiftUI duplicate-id warnings and
+                // chip rendering glitches when a subtype lists multiple
+                // formulations of the "same" drug.
+                ForEach(match.matchedDrugs, id: \.self) { drug in
                     HStack(spacing: 4) {
                         Image(systemName: "pills.fill")
                             .appFont(.caption2)

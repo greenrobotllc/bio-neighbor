@@ -666,6 +666,11 @@ struct SimilarDrugsResponse: Codable {
     let chemblId: String?
     let similar: [SimilarDrugHit]?
     let notInLocalIndex: Bool?
+    /// Whether the backend resorted to the ChEMBL SMILES fallback (i.e. the
+    /// drug wasn't already in the local FAISS index). Drives the "via ChEMBL"
+    /// badge — heuristics like `!similar.isEmpty` falsely lit up the badge
+    /// for drugs that lived in the local index AND had neighbors.
+    let fetchedFromChEMBL: Bool?
     let disclaimer: String?
     let error: String?
 
@@ -674,6 +679,7 @@ struct SimilarDrugsResponse: Codable {
         case chemblId = "chembl_id"
         case similar
         case notInLocalIndex = "not_in_local_index"
+        case fetchedFromChEMBL = "fetched_from_chembl"
         case disclaimer
         case error
     }

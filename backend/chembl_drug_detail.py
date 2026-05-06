@@ -329,19 +329,31 @@ def fetch_drug_detail(chembl_id: str) -> Optional[Dict]:
     # ChEMBL files some indications under the parent only.
     if parent_id and parent_id != chembl_id:
         parent_indications = _normalize_indications(_fetch_indications_raw(parent_id))
-        # Merge by (mesh_heading, efo_term) keeping max phase + summed refs.
-        merged: Dict[tuple, Dict] = {}
+        # Merge by mesh_heading only — _normalize_indications already collapses
+        # the per-EFO-term rows ChEMBL returns into one row per MeSH heading,
+        # so keying on (mesh, efo) here would re-split them when the salt's
+        # winning EFO term differs from the parent's. Keep the metadata from
+        # whichever side has the higher max_phase so the more clinically
+        # advanced row's EFO mapping wins.
+        merged: Dict[str, Dict] = {}
         for row in indications + parent_indications:
-            key = (
-                (row.get("mesh_heading") or "").lower(),
-                (row.get("efo_term") or "").lower(),
-            )
+            key = (row.get("mesh_heading") or "").lower()
+            if not key:
+                continue
             existing = merged.get(key)
             if existing is None:
                 merged[key] = dict(row)
+                continue
+            row_phase = row.get("max_phase") or 0
+            existing_phase = existing.get("max_phase") or 0
+            if row_phase > existing_phase:
+                # Take the higher-phase row's metadata, sum refs from both.
+                summed_refs = (existing.get("ref_count") or 0) + (row.get("ref_count") or 0)
+                merged[key] = dict(row)
+                merged[key]["ref_count"] = summed_refs
             else:
-                existing["max_phase"] = max(existing["max_phase"], row["max_phase"])
-                existing["ref_count"] += row["ref_count"]
+                existing["max_phase"] = max(existing_phase, row_phase)
+                existing["ref_count"] = (existing.get("ref_count") or 0) + (row.get("ref_count") or 0)
         indications = sorted(
             merged.values(),
             key=lambda x: (

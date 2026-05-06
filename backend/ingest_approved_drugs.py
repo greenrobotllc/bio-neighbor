@@ -26,7 +26,6 @@ fresh ChEMBL data. The pre-rebuild database is always backed up to
 """
 
 import argparse
-import shutil
 import sqlite3
 import sys
 import time
@@ -222,9 +221,23 @@ def normalize_drug_record(drug: Dict) -> Optional[Dict]:
 
 
 def backup_database() -> Path:
+    """Take a consistent snapshot via SQLite's online backup API.
+
+    `shutil.copy2` would byte-copy the file even mid-write, which can produce
+    a torn snapshot if another process is touching the DB. The sqlite3 backup
+    API holds the right locks and produces a transactionally consistent copy.
+    """
     backup = DB_PATH.with_suffix('.db.pre-drug-rebuild.bak')
     print(f"📦 Backing up {DB_PATH} → {backup}")
-    shutil.copy2(DB_PATH, backup)
+    src = sqlite3.connect(str(DB_PATH))
+    try:
+        dst = sqlite3.connect(str(backup))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
     return backup
 
 
@@ -235,6 +248,13 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
     (it was created out-of-band by old ingestion scripts) so we introspect
     the column set and only insert columns that exist. Fingerprints aren't
     persisted to the table — the FAISS index file is the source of truth.
+
+    Rowid preservation: dependent tables (drug_diseases, ligands, drug_outcomes,
+    cancer_subtype_drugs) carry molecule_index FKs into molecules.rowid. A
+    naive DELETE+INSERT would reassign rowids and silently invalidate every
+    existing FK. We snapshot the old chembl_id→rowid map first and reuse the
+    same rowid for any drug whose chembl_id is still present in the new set,
+    so existing FK references stay correct.
     """
     cur = conn.cursor()
 
@@ -257,16 +277,59 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
             "(chembl_id, name, smiles, molecular_weight, is_approved)"
         )
 
+    # Snapshot existing chembl_id → rowid before we wipe.
+    chembl_to_rowid: Dict[str, int] = {}
+    if 'chembl_id' in live_columns:
+        cur.execute("SELECT rowid, chembl_id FROM molecules WHERE chembl_id IS NOT NULL")
+        for rowid, cid in cur.fetchall():
+            if cid:
+                chembl_to_rowid[cid] = rowid
+
     print("🧹 Truncating molecules table…")
     cur.execute("DELETE FROM molecules")
 
+    # Two passes: first the drugs we can pin to a preserved rowid, then the
+    # rest. Pinning uses an explicit rowid in the INSERT; new drugs fall
+    # through to auto-rowid above the previous max so we never collide with
+    # a preserved rowid.
+    pinned: List[Dict] = []
+    fresh: List[Dict] = []
+    for d in drugs:
+        if d['chembl_id'] in chembl_to_rowid:
+            pinned.append(d)
+        else:
+            fresh.append(d)
+
     col_names = ", ".join(c for c, _ in cols)
     placeholders = ", ".join("?" * len(cols))
-    sql = f"INSERT INTO molecules ({col_names}) VALUES ({placeholders})"
-    print(f"📝 Inserting {len(drugs)} drugs into ({col_names})…")
-    cur.executemany(sql, [tuple(fn(d) for _, fn in cols) for d in drugs])
+
+    if pinned:
+        sql_pinned = f"INSERT INTO molecules (rowid, {col_names}) VALUES (?, {placeholders})"
+        print(f"📝 Re-inserting {len(pinned)} drugs at their original rowids (preserves FKs)…")
+        cur.executemany(
+            sql_pinned,
+            [
+                (chembl_to_rowid[d['chembl_id']],) + tuple(fn(d) for _, fn in cols)
+                for d in pinned
+            ],
+        )
+
+    if fresh:
+        # Force fresh rows above the previous max rowid so AUTOINCREMENT-style
+        # gap avoidance can't hand out a rowid that collides with a pinned one.
+        max_rowid = max(chembl_to_rowid.values()) if chembl_to_rowid else 0
+        sql_fresh = f"INSERT INTO molecules (rowid, {col_names}) VALUES (?, {placeholders})"
+        print(f"📝 Inserting {len(fresh)} new drugs above rowid {max_rowid}…")
+        cur.executemany(
+            sql_fresh,
+            [
+                (max_rowid + 1 + i,) + tuple(fn(d) for _, fn in cols)
+                for i, d in enumerate(fresh)
+            ],
+        )
+
     conn.commit()
-    print("✅ molecules table replaced")
+    print(f"✅ molecules table replaced ({len(pinned)} pinned, {len(fresh)} new)")
 
 
 def rebuild_faiss_index(drugs: List[Dict]) -> None:

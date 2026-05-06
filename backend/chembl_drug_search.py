@@ -95,6 +95,9 @@ def upsert_chembl_hits_into_drugs(
     """
     if not hits:
         return []
+    # When the caller passes their own `conn`, they own the transaction —
+    # don't commit, rollback, or close it from here. Only manage lifecycle for
+    # the connection we open ourselves.
     own_conn = conn is None
     if own_conn:
         conn = sqlite3.connect(DB_PATH)
@@ -143,7 +146,8 @@ def upsert_chembl_hits_into_drugs(
                 new_ids.append(None)
             existing.add(cid)
 
-        conn.commit()
+        if own_conn:
+            conn.commit()
         return new_ids
     finally:
         if own_conn:

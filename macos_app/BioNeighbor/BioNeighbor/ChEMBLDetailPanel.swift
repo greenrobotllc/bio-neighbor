@@ -584,8 +584,16 @@ struct ChEMBLDetailPanel: View {
         isLoadingStructure = true
         defer { isLoadingStructure = false }
         do {
-            structureImage = try await backendService.renderMolecule(smiles: smiles, width: 440, height: 440)
+            let image = try await backendService.renderMolecule(smiles: smiles, width: 440, height: 440)
+            // Bail before mutating state if the panel was task-cancelled (e.g.
+            // user navigated to a different drug while we were rendering) —
+            // otherwise a stale image overwrites the new drug's structure.
+            if Task.isCancelled { return }
+            structureImage = image
+        } catch is CancellationError {
+            return
         } catch {
+            if Task.isCancelled { return }
             structureImage = nil
         }
     }
@@ -600,7 +608,9 @@ struct ChEMBLDetailPanel: View {
             let result = try await backendService.fetchSimilarDrugs(chemblId: chemblId, topK: 20)
             similar = result.drugs
             similarNotInLocalIndex = result.notInLocalIndex
-            similarFetchedFromChEMBL = !result.drugs.isEmpty
+            // Use the explicit backend provenance flag — `!drugs.isEmpty`
+            // would falsely show "via ChEMBL" for any drug with neighbors.
+            similarFetchedFromChEMBL = result.fetchedFromChEMBL
         } catch is CancellationError {
             return
         } catch {

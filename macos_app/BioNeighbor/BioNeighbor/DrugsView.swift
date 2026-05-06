@@ -216,9 +216,12 @@ struct DrugsView: View {
             if Task.isCancelled { return }
             liveResults = response.results
             lastChemblUsed = response.chemblUsed
+        } catch is CancellationError {
+            // Debounce / new keystroke cancelled this run — silent.
+            return
         } catch {
-            // Surface the error inline but keep showing whatever we had.
             if Task.isCancelled { return }
+            // Surface the error inline but keep showing whatever we had.
             errorMessage = "Search failed: \(error.localizedDescription)"
         }
     }

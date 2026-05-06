@@ -306,11 +306,20 @@ def aggregate_top_drugs_for_subtype(
 
         if not refresh and not _cache_is_stale(conn, subtype_id):
             cached = get_top_drugs_for_subtype(subtype_id, limit=limit, conn=conn)
+            # `len(cached)` would equal `limit` whenever more rows exist, hiding
+            # the true cache size from the UI. Read the row count directly so
+            # the response matches the refresh path.
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM cancer_subtype_drugs WHERE subtype_id = ?",
+                (subtype_id,),
+            )
+            total = cursor.fetchone()[0]
             return {
                 "success": True,
                 "subtype_id": subtype_id,
                 "from_cache": True,
-                "drug_count": len(cached),
+                "drug_count": total,
                 "drugs": cached,
             }
 

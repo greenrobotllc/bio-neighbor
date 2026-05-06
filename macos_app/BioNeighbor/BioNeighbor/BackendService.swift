@@ -1855,7 +1855,7 @@ class BackendService: ObservableObject {
         return detail
     }
 
-    func fetchSimilarDrugs(chemblId: String, topK: Int = 20) async throws -> (drugs: [SimilarDrugHit], notInLocalIndex: Bool) {
+    func fetchSimilarDrugs(chemblId: String, topK: Int = 20) async throws -> (drugs: [SimilarDrugHit], notInLocalIndex: Bool, fetchedFromChEMBL: Bool) {
         var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/similar")
         components?.queryItems = [URLQueryItem(name: "top_k", value: "\(topK)")]
         guard let url = components?.url else {
@@ -1872,7 +1872,11 @@ class BackendService: ObservableObject {
         guard decoded.success else {
             throw BackendError.unknownError(decoded.error ?? "Failed to fetch similar drugs")
         }
-        return (decoded.similar ?? [], decoded.notInLocalIndex ?? false)
+        return (
+            decoded.similar ?? [],
+            decoded.notInLocalIndex ?? false,
+            decoded.fetchedFromChEMBL ?? false
+        )
     }
 
     func searchDrugsInCancerType(typeId: Int, query: String, limitPerSubtype: Int = 5) async throws -> DrugSearchResponse {

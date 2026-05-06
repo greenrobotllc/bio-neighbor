@@ -37,6 +37,25 @@ CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
 
+
+def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
+    """Parse and clamp an integer query parameter.
+
+    Raises werkzeug.exceptions.BadRequest (HTTP 400) for non-numeric input
+    instead of letting `int()`'s ValueError surface as a 500. Returns the
+    parsed value clamped to [lo, hi].
+    """
+    raw = request.args.get(name)
+    if raw is None or raw == '':
+        return max(lo, min(default, hi))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        from werkzeug.exceptions import BadRequest
+        raise BadRequest(f"Query parameter '{name}' must be an integer")
+    return max(lo, min(value, hi))
+
+
 # Global search engine instance
 _engine: Optional[SearchEngine] = None
 
@@ -1129,39 +1148,49 @@ def search_drugs():
         # ChEMBL fallback: only when query is meaningful and local results
         # didn't fill the whole limit, so the merged list gives the broadest
         # view without redundant ChEMBL traffic when local already has plenty.
+        # Wrapped so any ChEMBL-side failure (network, ChEMBL 5xx, write-
+        # through DB error) degrades gracefully to local-only results — better
+        # than a 500 for what's effectively an autocomplete endpoint.
         if include_chembl and len(query) >= 2 and len(local_results) < limit:
             from chembl_drug_search import (
                 search_chembl_by_name,
                 upsert_chembl_hits_into_drugs,
                 merge_drug_search_results,
             )
-            chembl_hits = search_chembl_by_name(query, limit=limit)
-            chembl_used = True
-            if chembl_hits:
-                # Write-through cache so the next search is fast & local.
-                new_ids = upsert_chembl_hits_into_drugs(chembl_hits)
-                for hit, new_id in zip(chembl_hits, new_ids):
-                    if new_id is not None:
-                        chembl_id_to_local_id[hit['chembl_id']] = new_id
-                        newly_inserted += 1
-                # Also resolve local ids for ChEMBL hits that were already
-                # cached, so navigation links in the UI work.
-                import sqlite3
-                from data_loader import DB_PATH
-                conn = sqlite3.connect(DB_PATH)
-                try:
-                    cursor = conn.cursor()
-                    cids = [h['chembl_id'] for h in chembl_hits if h.get('chembl_id')]
-                    if cids:
-                        placeholders = ",".join(["?"] * len(cids))
-                        cursor.execute(
-                            f"SELECT chembl_id, id FROM drugs WHERE chembl_id IN ({placeholders})",
-                            cids,
-                        )
-                        for cid, drug_id in cursor.fetchall():
-                            chembl_id_to_local_id.setdefault(cid, drug_id)
-                finally:
-                    conn.close()
+            try:
+                chembl_hits = search_chembl_by_name(query, limit=limit)
+                chembl_used = True
+                if chembl_hits:
+                    # Write-through cache so the next search is fast & local.
+                    new_ids = upsert_chembl_hits_into_drugs(chembl_hits)
+                    for hit, new_id in zip(chembl_hits, new_ids):
+                        if new_id is not None:
+                            chembl_id_to_local_id[hit['chembl_id']] = new_id
+                            newly_inserted += 1
+                    # Also resolve local ids for ChEMBL hits that were already
+                    # cached, so navigation links in the UI work.
+                    import sqlite3
+                    from data_loader import DB_PATH
+                    conn = sqlite3.connect(DB_PATH)
+                    try:
+                        cursor = conn.cursor()
+                        cids = [h['chembl_id'] for h in chembl_hits if h.get('chembl_id')]
+                        if cids:
+                            placeholders = ",".join(["?"] * len(cids))
+                            cursor.execute(
+                                f"SELECT chembl_id, id FROM drugs WHERE chembl_id IN ({placeholders})",
+                                cids,
+                            )
+                            for cid, drug_id in cursor.fetchall():
+                                chembl_id_to_local_id.setdefault(cid, drug_id)
+                    finally:
+                        conn.close()
+            except Exception:
+                logger.exception("ChEMBL fallback failed for q=%r — returning local-only results", query)
+                chembl_hits = []
+                chembl_used = False
+                chembl_id_to_local_id = {}
+                newly_inserted = 0
 
             results = merge_drug_search_results(
                 local_results, chembl_hits, chembl_id_to_local_id, query, limit
@@ -3165,7 +3194,7 @@ def v2_subtype_top_drugs(subtype_id: int):
     try:
         from cancer_drug_aggregator import aggregate_top_drugs_for_subtype, get_top_drugs_for_subtype
 
-        limit = max(1, min(int(request.args.get('limit', 25)), 100))
+        limit = _int_arg('limit', default=25, lo=1, hi=100)
         refresh = request.args.get('refresh', '0') == '1'
 
         # Cheap path: read cache directly. The aggregator only fires when stale.
@@ -3262,7 +3291,7 @@ def v2_cancer_type_drug_search(type_id: int):
                 'subtype_matches': [],
                 'note': 'Type at least 2 characters to search.',
             })
-        limit_per_subtype = max(1, min(int(request.args.get('limit', 5)), 25))
+        limit_per_subtype = _int_arg('limit', default=5, lo=1, hi=25)
 
         import sqlite3
         from data_loader import DB_PATH
@@ -3349,7 +3378,7 @@ def v2_drug_trials(chembl_id: str):
     """
     try:
         from clinical_trials import fetch_trials_for_drug
-        max_trials = max(1, min(int(request.args.get('limit', 15)), 30))
+        max_trials = _int_arg('limit', default=15, lo=1, hi=30)
         trials = fetch_trials_for_drug(chembl_id, max_trials=max_trials)
         return jsonify({
             'success': True,
@@ -3402,7 +3431,7 @@ def v2_drug_similar(chembl_id: str):
     rather than IUPAC strings from our local molecules table.
     """
     try:
-        top_k = max(1, min(int(request.args.get('top_k', 20)), 100))
+        top_k = _int_arg('top_k', default=20, lo=1, hi=100)
         engine = get_engine()
 
         results: list[dict] = []
