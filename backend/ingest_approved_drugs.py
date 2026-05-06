@@ -26,6 +26,7 @@ fresh ChEMBL data. The pre-rebuild database is always backed up to
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 import time
@@ -241,28 +242,31 @@ def backup_database() -> Path:
     return backup
 
 
-def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None:
-    """
-    Wipe the molecules table and bulk-insert the new drugs in a single
-    transaction. The live `molecules` table schema varies across deployments
-    (it was created out-of-band by old ingestion scripts) so we introspect
-    the column set and only insert columns that exist. Fingerprints aren't
-    persisted to the table — the FAISS index file is the source of truth.
+STAGED_MOLECULES_TABLE = "molecules_new"
 
-    Rowid preservation: dependent tables (drug_diseases, ligands, drug_outcomes,
-    cancer_subtype_drugs) carry molecule_index FKs into molecules.rowid. A
-    naive DELETE+INSERT would reassign rowids and silently invalidate every
-    existing FK. We snapshot the old chembl_id→rowid map first and reuse the
-    same rowid for any drug whose chembl_id is still present in the new set,
-    so existing FK references stay correct.
+
+def write_molecules_to_staging(conn: sqlite3.Connection, drugs: List[Dict]) -> None:
+    """
+    Populate a staging table (`molecules_new`) with the new drug rows without
+    touching the live `molecules` table. The live table stays available for
+    read traffic during the long FAISS rebuild that follows; promote_artifacts
+    swaps both DB and index into place atomically afterwards.
+
+    Rowid preservation: dependent tables (drug_diseases, ligands,
+    drug_outcomes, cancer_subtype_drugs) carry molecule_index FKs into
+    molecules.rowid. We snapshot the live chembl_id→rowid map and write the
+    same rowid into the staging table for any drug whose chembl_id is already
+    known, so when the staging table is promoted the existing FK references
+    stay correct.
     """
     cur = conn.cursor()
 
-    # Introspect the live table to find which columns actually exist.
+    # Introspect the live table to find which columns actually exist —
+    # the molecules schema varies across deployments (created out-of-band by
+    # old ingest scripts) so we only insert columns that are there.
     cur.execute("PRAGMA table_info(molecules)")
     live_columns = {row[1] for row in cur.fetchall()}
 
-    # The full set of columns we COULD populate from a drug record.
     candidate_cols = [
         ('chembl_id',        lambda d: d['chembl_id']),
         ('name',             lambda d: d['name']),
@@ -277,7 +281,6 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
             "(chembl_id, name, smiles, molecular_weight, is_approved)"
         )
 
-    # Snapshot existing chembl_id → rowid before we wipe.
     chembl_to_rowid: Dict[str, int] = {}
     if 'chembl_id' in live_columns:
         cur.execute("SELECT rowid, chembl_id FROM molecules WHERE chembl_id IS NOT NULL")
@@ -285,13 +288,21 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
             if cid:
                 chembl_to_rowid[cid] = rowid
 
-    print("🧹 Truncating molecules table…")
-    cur.execute("DELETE FROM molecules")
+    # Clone the live molecules schema into the staging table. Reading the
+    # CREATE TABLE statement from sqlite_master and swapping the name keeps us
+    # honest about whatever columns/types/defaults the live DB actually has.
+    cur.execute("DROP TABLE IF EXISTS molecules_new")
+    cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='molecules'")
+    row = cur.fetchone()
+    if not row or not row[0]:
+        raise RuntimeError("Could not read CREATE TABLE statement for molecules")
+    create_sql = row[0]
+    # Replace the first occurrence of the table name. CREATE TABLE statements
+    # always start with "CREATE TABLE [IF NOT EXISTS] <name>", so a single
+    # targeted replacement is safe.
+    staged_create = create_sql.replace("molecules", STAGED_MOLECULES_TABLE, 1)
+    cur.execute(staged_create)
 
-    # Two passes: first the drugs we can pin to a preserved rowid, then the
-    # rest. Pinning uses an explicit rowid in the INSERT; new drugs fall
-    # through to auto-rowid above the previous max so we never collide with
-    # a preserved rowid.
     pinned: List[Dict] = []
     fresh: List[Dict] = []
     for d in drugs:
@@ -304,8 +315,8 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
     placeholders = ", ".join("?" * len(cols))
 
     if pinned:
-        sql_pinned = f"INSERT INTO molecules (rowid, {col_names}) VALUES (?, {placeholders})"
-        print(f"📝 Re-inserting {len(pinned)} drugs at their original rowids (preserves FKs)…")
+        sql_pinned = f"INSERT INTO {STAGED_MOLECULES_TABLE} (rowid, {col_names}) VALUES (?, {placeholders})"
+        print(f"📝 Staging {len(pinned)} drugs at their original rowids (preserves FKs)…")
         cur.executemany(
             sql_pinned,
             [
@@ -315,11 +326,9 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
         )
 
     if fresh:
-        # Force fresh rows above the previous max rowid so AUTOINCREMENT-style
-        # gap avoidance can't hand out a rowid that collides with a pinned one.
         max_rowid = max(chembl_to_rowid.values()) if chembl_to_rowid else 0
-        sql_fresh = f"INSERT INTO molecules (rowid, {col_names}) VALUES (?, {placeholders})"
-        print(f"📝 Inserting {len(fresh)} new drugs above rowid {max_rowid}…")
+        sql_fresh = f"INSERT INTO {STAGED_MOLECULES_TABLE} (rowid, {col_names}) VALUES (?, {placeholders})"
+        print(f"📝 Staging {len(fresh)} new drugs above rowid {max_rowid}…")
         cur.executemany(
             sql_fresh,
             [
@@ -329,24 +338,128 @@ def replace_molecules_table(conn: sqlite3.Connection, drugs: List[Dict]) -> None
         )
 
     conn.commit()
-    print(f"✅ molecules table replaced ({len(pinned)} pinned, {len(fresh)} new)")
+    print(f"✅ Staged {len(pinned)} pinned + {len(fresh)} new drugs into {STAGED_MOLECULES_TABLE}")
 
 
-def rebuild_faiss_index(drugs: List[Dict]) -> None:
+def promote_staged_artifacts(
+    conn: sqlite3.Connection,
+    temp_index_path: Path,
+    temp_metadata_path: Path,
+    live_index_path: Path,
+    live_metadata_path: Path,
+) -> None:
+    """
+    Atomically swap staged molecules_new → molecules and rename the temp index
+    files into place. The DB swap is one sqlite transaction; the index files
+    are promoted via os.replace which is atomic on POSIX.
+
+    There's a small (millisecond-scale) window between the DB commit and the
+    index rename where the two could disagree if the rename fails. If that
+    happens we surface a clear error so the operator can restore from the
+    pre-rebuild backup. This is dramatically better than the previous design
+    where the inconsistency window was the entire FAISS build duration.
+    """
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(molecules)")
+    live_columns_raw = cur.fetchall()
+    if not live_columns_raw:
+        raise RuntimeError("molecules table missing — cannot promote staging table")
+    live_cols = [r[1] for r in live_columns_raw if r[1] != 'rowid']
+    cols_sql = ", ".join(live_cols)
+
+    print("🔁 Promoting staged molecules table…")
+    cur.execute("BEGIN IMMEDIATE")
+    try:
+        cur.execute("DELETE FROM molecules")
+        # Copy with explicit rowid so the FK-preservation work in
+        # write_molecules_to_staging carries through.
+        cur.execute(
+            f"INSERT INTO molecules (rowid, {cols_sql}) "
+            f"SELECT rowid, {cols_sql} FROM {STAGED_MOLECULES_TABLE}"
+        )
+        cur.execute(f"DROP TABLE {STAGED_MOLECULES_TABLE}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    print(f"🔁 Promoting FAISS index → {live_index_path}…")
+    try:
+        os.replace(str(temp_index_path), str(live_index_path))
+        os.replace(str(temp_metadata_path), str(live_metadata_path))
+    except OSError as e:
+        raise RuntimeError(
+            f"DB was promoted but FAISS index rename failed: {e}. "
+            "Restore from the pre-rebuild backup before retrying."
+        ) from e
+    print("✅ Promotion complete")
+
+
+def cleanup_staged_artifacts(
+    conn: Optional[sqlite3.Connection],
+    temp_index_path: Path,
+    temp_metadata_path: Path,
+) -> None:
+    """Best-effort removal of staged artifacts after a failure. Never raises —
+    the original exception is what the caller wants to see."""
+    if conn is not None:
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {STAGED_MOLECULES_TABLE}")
+            conn.commit()
+        except Exception as e:
+            print(f"   ⚠️  Cleanup warning: could not drop {STAGED_MOLECULES_TABLE}: {e}")
+    for p in (temp_index_path, temp_metadata_path):
+        try:
+            if p.exists():
+                p.unlink()
+        except OSError as e:
+            print(f"   ⚠️  Cleanup warning: could not remove {p}: {e}")
+
+
+def rebuild_faiss_index(
+    drugs: List[Dict],
+    index_path: Optional[Path] = None,
+    metadata_path: Optional[Path] = None,
+) -> None:
+    """Build the FAISS index. When `index_path`/`metadata_path` are provided,
+    write to those files instead of the live ones — used by the staged-promotion
+    flow so a failed build leaves the live index untouched.
+
+    Cosine over Morgan fingerprints behaves like Tanimoto for our purposes —
+    it ignores fingerprint magnitude so tiny molecules (water, salts) stop
+    dominating L2 nearest-neighbour searches by virtue of their sparse vectors.
+    """
     print(f"🔨 Building FAISS index for {len(drugs)} drugs…")
     fingerprints = np.vstack([d['fingerprint'] for d in drugs]).astype(np.float32)
     chembl_ids = [d['chembl_id'] for d in drugs]
     molecule_ids = list(range(len(drugs)))
-    # Cosine over Morgan fingerprints behaves like Tanimoto for our purposes —
-    # it ignores fingerprint magnitude so tiny molecules (water, salts) stop
-    # dominating L2 nearest-neighbour searches by virtue of their sparse vectors.
-    build_and_save_index(
-        fingerprints,
-        molecule_ids,
-        chembl_ids=chembl_ids,
-        index_type='cosine',
-        force_rebuild=True,
-    )
+    if index_path is None and metadata_path is None:
+        # Legacy path: write straight to the live files.
+        build_and_save_index(
+            fingerprints,
+            molecule_ids,
+            chembl_ids=chembl_ids,
+            index_type='cosine',
+            force_rebuild=True,
+        )
+    else:
+        # Staged path: build in memory, save to caller-supplied paths, skip
+        # the cache shortcut entirely.
+        from index_builder import build_faiss_index, save_index, INDEX_PATH, METADATA_PATH
+        index = build_faiss_index(fingerprints, index_type='cosine')
+        metadata = {
+            'molecule_ids': molecule_ids,
+            'index_type': 'cosine',
+            'dimension': fingerprints.shape[1],
+            'n_vectors': len(fingerprints),
+            'chembl_ids': chembl_ids,
+        }
+        save_index(
+            index,
+            metadata,
+            index_path=index_path or INDEX_PATH,
+            metadata_path=metadata_path or METADATA_PATH,
+        )
     print("✅ FAISS index rebuilt")
 
 
@@ -458,26 +571,40 @@ def main(argv=None) -> int:
         print("\n🛑 --dry-run set; skipping DB + index writes.")
         return 0
 
-    # 4. Backup, replace molecules, rebuild index.
-    #
-    # Full staging-table + atomic-rename is a future improvement. The minimum
-    # we need today is that an index-rebuild failure doesn't leave the DB
-    # silently ahead of the index — surface the inconsistency loudly and point
-    # the operator at the backup we just took so recovery is one cp away.
+    # 4. Stage everything, build the FAISS index against the staged data, then
+    # promote DB + index together. The live molecules table and live index
+    # remain serving traffic for the duration of the FAISS build (which is by
+    # far the slowest step). On any failure during staging or build, cleanup
+    # leaves the live artifacts untouched.
+    from index_builder import INDEX_PATH, METADATA_PATH
     backup_path = backup_database()
+    temp_index_path = INDEX_PATH.with_suffix(INDEX_PATH.suffix + '.new')
+    temp_metadata_path = METADATA_PATH.with_suffix(METADATA_PATH.suffix + '.new')
+
     with sqlite3.connect(DB_PATH) as conn:
-        replace_molecules_table(conn, drugs)
-    try:
-        rebuild_faiss_index(drugs)
-    except Exception as rebuild_err:
-        print(
-            "❌ FAISS index rebuild FAILED after the molecules table was "
-            "already replaced. The DB and index are now out of sync.\n"
-            f"   Error: {rebuild_err}\n"
-            f"   Restore from backup: cp {backup_path} {DB_PATH}\n"
-            "   Then re-run ingest_approved_drugs.",
-        )
-        raise
+        try:
+            write_molecules_to_staging(conn, drugs)
+            rebuild_faiss_index(
+                drugs,
+                index_path=temp_index_path,
+                metadata_path=temp_metadata_path,
+            )
+            promote_staged_artifacts(
+                conn,
+                temp_index_path=temp_index_path,
+                temp_metadata_path=temp_metadata_path,
+                live_index_path=INDEX_PATH,
+                live_metadata_path=METADATA_PATH,
+            )
+        except Exception as err:
+            print(
+                "❌ Ingest failed during staging/build/promotion.\n"
+                f"   Error: {err}\n"
+                f"   Backup is at: {backup_path}\n"
+                "   Live DB and index were not modified."
+            )
+            cleanup_staged_artifacts(conn, temp_index_path, temp_metadata_path)
+            raise
 
     # 5. Sanity check
     run_sanity_check()
