@@ -52,7 +52,7 @@ def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
         value = int(raw)
     except (TypeError, ValueError):
         from werkzeug.exceptions import BadRequest
-        raise BadRequest(f"Query parameter '{name}' must be an integer")
+        raise BadRequest(f"Query parameter '{name}' must be an integer") from None
     return max(lo, min(value, hi))
 
 
@@ -3552,7 +3552,7 @@ def v2_subtype_mechanisms(subtype_id: int):
                     END,
                     m.name
                 """,
-                (type_name, type_display, type_display or type_name, type_name),
+                (type_name, type_display, type_display or type_name, type_display or type_name),
             )
             mech_rows = cursor.fetchall()
         finally:
