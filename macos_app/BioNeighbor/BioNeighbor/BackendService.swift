@@ -47,6 +47,23 @@ class BackendService: ObservableObject {
     private init() {
         checkBackendHealth()
     }
+
+    /// Throws a descriptive `BackendError` for any non-200 response, parsing
+    /// the backend's `{"error": "..."}` body when present so failures surface
+    /// the actual reason instead of a hard-coded "Failed to fetch X" string.
+    /// No-op on success.
+    private func ensureOK(_ response: URLResponse, data: Data, fallback: String) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            if let body = try? JSONDecoder().decode([String: String].self, from: data),
+               let message = body["error"] {
+                throw BackendError.networkError(message)
+            }
+            throw BackendError.networkError("\(fallback) (HTTP \(http.statusCode))")
+        }
+    }
     
     func checkBackendHealth() {
         guard let url = URL(string: "\(baseURL)/health") else {
@@ -1023,6 +1040,48 @@ class BackendService: ObservableObject {
         return results
     }
     
+    /// Live drug search with ChEMBL write-through cache. Returns merged
+    /// local + ChEMBL hits with a `source` flag per row. Use this in any UI
+    /// that wants the freshest data (vs. searchDrugs which is autocomplete-shaped).
+    func searchDrugsLive(query: String, limit: Int = 20, includeChembl: Bool = true) async throws -> (results: [DrugSearchResult], chemblUsed: Bool) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ([], false) }
+
+        var urlComponents = URLComponents(string: "\(baseURL)/search/drugs")
+        urlComponents?.queryItems = [
+            URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+            URLQueryItem(name: "include_chembl", value: includeChembl ? "1" : "0"),
+        ]
+        guard let url = urlComponents?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // ChEMBL fallback adds up to ~5s; keep timeout generous.
+        request.timeoutInterval = 15.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw BackendError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            // Surface backend-supplied error messages instead of swallowing
+            // them — matches the pattern used by `searchDrugs` etc.
+            if let errorData = try? JSONDecoder().decode([String: String].self, from: data),
+               let errorMessage = errorData["error"] {
+                throw BackendError.networkError(errorMessage)
+            }
+            throw BackendError.networkError("HTTP \(httpResponse.statusCode)")
+        }
+
+        let envelope = try JSONDecoder().decode(DrugSearchEnvelope.self, from: data)
+        guard envelope.success else {
+            throw BackendError.unknownError(envelope.error ?? "Drug search failed")
+        }
+        return (envelope.results ?? [], envelope.chemblUsed ?? false)
+    }
+
     func searchDrugs(query: String, limit: Int = 20) async throws -> [SearchResult] {
         var urlComponents = URLComponents(string: "\(baseURL)/search/drugs")
         urlComponents?.queryItems = [
@@ -1459,10 +1518,7 @@ class BackendService: ObservableObject {
         
         let (data, response) = try await URLSession.shared.data(from: url)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch mechanisms")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch mechanisms")
         
         let mechanismsResponse = try JSONDecoder().decode(MechanismsResponse.self, from: data)
         guard mechanismsResponse.success, let mechanisms = mechanismsResponse.mechanisms else {
@@ -1479,10 +1535,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch mechanism")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch mechanism")
 
         let mechanismResponse = try JSONDecoder().decode(MechanismResponse.self, from: data)
         guard mechanismResponse.success, let mechanism = mechanismResponse.mechanism else {
@@ -1499,10 +1552,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch targets")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch targets")
 
         let targetsResponse = try JSONDecoder().decode(TargetsResponse.self, from: data)
         guard targetsResponse.success, let targets = targetsResponse.targets else {
@@ -1519,10 +1569,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch ligands")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch ligands")
 
         let ligandsResponse = try JSONDecoder().decode(LigandsResponse.self, from: data)
         guard ligandsResponse.success, let ligands = ligandsResponse.ligands else {
@@ -1539,10 +1586,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch drug outcomes")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch drug outcomes")
 
         let outcomesResponse = try JSONDecoder().decode(DrugOutcomesResponse.self, from: data)
         guard outcomesResponse.success, let outcomes = outcomesResponse.outcomes else {
@@ -1559,10 +1603,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch assays")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch assays")
 
         let assaysResponse = try JSONDecoder().decode(AssaysResponse.self, from: data)
         guard assaysResponse.success, let assays = assaysResponse.assays else {
@@ -1579,10 +1620,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to fetch cancers")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to fetch cancers")
 
         let cancersResponse = try JSONDecoder().decode(CancersResponse.self, from: data)
         guard cancersResponse.success, let cancers = cancersResponse.cancers else {
@@ -1599,10 +1637,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to list workspaces")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to list workspaces")
 
         let workspacesResponse = try JSONDecoder().decode(WorkspacesResponse.self, from: data)
         guard workspacesResponse.success else {
@@ -1638,10 +1673,7 @@ class BackendService: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to create workspace")
-        }
+        try ensureOK(response, data: data, fallback: "Failed to create workspace")
 
         let workspaceResponse = try JSONDecoder().decode(WorkspaceCreateResponse.self, from: data)
         guard workspaceResponse.success, let workspaceId = workspaceResponse.workspaceId else {
@@ -1673,12 +1705,215 @@ class BackendService: ObservableObject {
         }
         request.httpBody = bodyData
         
-        let (_, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw BackendError.networkError("Failed to update workspace")
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        try ensureOK(response, data: data, fallback: "Failed to update workspace")
+    }
+
+    // MARK: - Cancer Research v2 (disease-first browse)
+
+    func fetchCancerTypes() async throws -> [CancerType] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/cancer-types") else {
+            throw BackendError.backendNotAvailable
         }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        try ensureOK(response, data: data, fallback: "Failed to fetch cancer types")
+
+        let decoded = try JSONDecoder().decode(CancerTypesResponse.self, from: data)
+        guard decoded.success, let types = decoded.cancerTypes else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch cancer types")
+        }
+        return types
+    }
+
+    func fetchSubtypes(forCancerTypeId typeId: Int) async throws -> [CancerSubtype] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/cancer-types/\(typeId)/subtypes") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        try ensureOK(response, data: data, fallback: "Failed to fetch subtypes")
+
+        let decoded = try JSONDecoder().decode(SubtypesResponse.self, from: data)
+        guard decoded.success, let subtypes = decoded.subtypes else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch subtypes")
+        }
+        return subtypes
+    }
+
+    func fetchSubtypeDetail(id subtypeId: Int) async throws -> CancerSubtype {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        try ensureOK(response, data: data, fallback: "Failed to fetch subtype")
+
+        let decoded = try JSONDecoder().decode(SubtypeDetailResponse.self, from: data)
+        guard decoded.success, let subtype = decoded.subtype else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch subtype")
+        }
+        return subtype
+    }
+
+    func fetchSubtypeTopDrugs(subtypeId: Int, limit: Int = 25, refresh: Bool = false) async throws -> [SubtypeTopDrug] {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/top-drugs")
+        components?.queryItems = [
+            URLQueryItem(name: "limit", value: "\(limit)"),
+            URLQueryItem(name: "refresh", value: refresh ? "1" : "0"),
+        ]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // ChEMBL pulls can take 30+ seconds when refresh=true.
+        request.timeoutInterval = refresh ? 120.0 : 60.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        try ensureOK(response, data: data, fallback: "Failed to fetch top drugs")
+
+        let decoded = try JSONDecoder().decode(SubtypeTopDrugsResponse.self, from: data)
+        guard decoded.success, let drugs = decoded.drugs else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch top drugs")
+        }
+        return drugs
+    }
+
+    func fetchClinicalTrials(chemblId: String, limit: Int = 15) async throws -> [ClinicalTrial] {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/trials")
+        components?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // Each trial fetch hits ClinicalTrials.gov; up to 30 in parallel takes ~10-30s.
+        request.timeoutInterval = 90.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to fetch clinical trials")
+
+        let decoded = try JSONDecoder().decode(ClinicalTrialsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch clinical trials")
+        }
+        return decoded.trials ?? []
+    }
+
+    func fetchChEMBLDrugDetail(chemblId: String) async throws -> ChEMBLDrugDetail {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/detail") else {
+            throw BackendError.backendNotAvailable
+        }
+        var request = URLRequest(url: url)
+        // ChEMBL detail involves up to 4 round-trips (molecule + parent + 2 indication pulls).
+        request.timeoutInterval = 60.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to fetch ChEMBL drug detail")
+
+        let decoded = try JSONDecoder().decode(ChEMBLDrugDetailResponse.self, from: data)
+        guard decoded.success, let detail = decoded.detail else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch ChEMBL drug detail")
+        }
+        return detail
+    }
+
+    func fetchSimilarDrugs(chemblId: String, topK: Int = 20) async throws -> (drugs: [SimilarDrugHit], notInLocalIndex: Bool, fetchedFromChEMBL: Bool) {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/similar")
+        components?.queryItems = [URLQueryItem(name: "top_k", value: "\(topK)")]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try ensureOK(response, data: data, fallback: "Failed to fetch similar drugs")
+
+        let decoded = try JSONDecoder().decode(SimilarDrugsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch similar drugs")
+        }
+        return (
+            decoded.similar ?? [],
+            decoded.notInLocalIndex ?? false,
+            decoded.fetchedFromChEMBL ?? false
+        )
+    }
+
+    func searchDrugsInCancerType(typeId: Int, query: String, limitPerSubtype: Int = 5) async throws -> DrugSearchResponse {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Mirror searchDrugsLive's empty-query guard so we don't dispatch a
+        // backend search for a blank string and accidentally repopulate stale
+        // results.
+        guard !trimmed.isEmpty else {
+            return DrugSearchResponse(
+                success: true,
+                query: "",
+                cancerTypeId: typeId,
+                subtypeMatches: [],
+                uncachedSubtypeCount: 0,
+                note: nil,
+                disclaimer: nil,
+                error: nil
+            )
+        }
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/cancer-types/\(typeId)/drug-search")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "limit", value: "\(limitPerSubtype)"),
+        ]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try ensureOK(response, data: data, fallback: "Drug search failed")
+
+        let decoded = try JSONDecoder().decode(DrugSearchResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Drug search failed")
+        }
+        return decoded
+    }
+
+    func fetchSubtypeMechanisms(subtypeId: Int) async throws -> [SubtypeMechanism] {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/mechanisms") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try ensureOK(response, data: data, fallback: "Failed to fetch subtype mechanisms")
+
+        let decoded = try JSONDecoder().decode(SubtypeMechanismsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch subtype mechanisms")
+        }
+        return decoded.mechanisms ?? []
+    }
+
+    @discardableResult
+    func refreshSubtypeDrugs(subtypeId: Int) async throws -> SubtypeRefreshResponse {
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/refresh-drugs") else {
+            throw BackendError.backendNotAvailable
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180.0  // ChEMBL refresh can be slow
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        try ensureOK(response, data: data, fallback: "Failed to refresh drugs")
+
+        let decoded = try JSONDecoder().decode(SubtypeRefreshResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Refresh failed")
+        }
+        return decoded
     }
 }
 

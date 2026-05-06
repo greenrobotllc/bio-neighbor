@@ -37,6 +37,25 @@ CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
 
+
+def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
+    """Parse and clamp an integer query parameter.
+
+    Raises werkzeug.exceptions.BadRequest (HTTP 400) for non-numeric input
+    instead of letting `int()`'s ValueError surface as a 500. Returns the
+    parsed value clamped to [lo, hi].
+    """
+    raw = request.args.get(name)
+    if raw is None or raw == '':
+        return max(lo, min(default, hi))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        from werkzeug.exceptions import BadRequest
+        raise BadRequest(f"Query parameter '{name}' must be an integer") from None
+    return max(lo, min(value, hi))
+
+
 # Global search engine instance
 _engine: Optional[SearchEngine] = None
 
@@ -1090,38 +1109,114 @@ def search_molecules():
 def search_drugs():
     """
     Search drugs by name for autocomplete.
-    
+
+    Hybrid local + live ChEMBL search. Local drugs-table hits are returned
+    immediately; in parallel we query ChEMBL by pref_name and any new hits
+    are written through to the drugs table so subsequent searches are local.
+
     Query parameters:
-    - q (string): Search query
-    - limit (int): Maximum results (default: 20)
-    
+    - q (string): Search query (≥2 chars to trigger ChEMBL)
+    - limit (int): Maximum results (default 20)
+    - include_chembl (0/1): Toggle ChEMBL fallback. Default 1.
+
     Response (JSON):
     {
         "success": true,
-        "results": [...]
+        "query": "anastrozole",
+        "results": [
+            {"id": 91, "name": "ANASTROZOLE", "chembl_id": "CHEMBL1399",
+             "source": "chembl", ...}
+        ],
+        "chembl_used": true,
+        "chembl_inserted": 3
     }
     """
     try:
-        query = request.args.get('q', '', type=str)
+        query = request.args.get('q', '', type=str).strip()
         limit = request.args.get('limit', 20, type=int)
-        limit = min(max(limit, 1), 100)  # Clamp between 1 and 100
-        
+        limit = min(max(limit, 1), 100)
+        include_chembl = request.args.get('include_chembl', '1') == '1'
+
         engine = get_engine()
-        results = engine.search_drugs_by_name(query, limit=limit)
-        
+        local_results = engine.search_drugs_by_name(query, limit=limit) if query else []
+
+        chembl_used = False
+        chembl_hits = []
+        chembl_id_to_local_id = {}
+        newly_inserted = 0
+
+        # ChEMBL fallback: only when query is meaningful and local results
+        # didn't fill the whole limit, so the merged list gives the broadest
+        # view without redundant ChEMBL traffic when local already has plenty.
+        # Wrapped so any ChEMBL-side failure (network, ChEMBL 5xx, write-
+        # through DB error) degrades gracefully to local-only results — better
+        # than a 500 for what's effectively an autocomplete endpoint.
+        if include_chembl and len(query) >= 2 and len(local_results) < limit:
+            from chembl_drug_search import (
+                search_chembl_by_name,
+                upsert_chembl_hits_into_drugs,
+                merge_drug_search_results,
+            )
+            try:
+                chembl_hits = search_chembl_by_name(query, limit=limit)
+                chembl_used = True
+                if chembl_hits:
+                    # Write-through cache so the next search is fast & local.
+                    new_ids = upsert_chembl_hits_into_drugs(chembl_hits)
+                    for hit, new_id in zip(chembl_hits, new_ids):
+                        if new_id is not None:
+                            chembl_id_to_local_id[hit['chembl_id']] = new_id
+                            newly_inserted += 1
+                    # Also resolve local ids for ChEMBL hits that were already
+                    # cached, so navigation links in the UI work.
+                    import sqlite3
+                    from data_loader import DB_PATH
+                    conn = sqlite3.connect(DB_PATH)
+                    try:
+                        cursor = conn.cursor()
+                        cids = [h['chembl_id'] for h in chembl_hits if h.get('chembl_id')]
+                        if cids:
+                            placeholders = ",".join(["?"] * len(cids))
+                            cursor.execute(
+                                f"SELECT chembl_id, id FROM drugs WHERE chembl_id IN ({placeholders})",
+                                cids,
+                            )
+                            for cid, drug_id in cursor.fetchall():
+                                chembl_id_to_local_id.setdefault(cid, drug_id)
+                    finally:
+                        conn.close()
+            except Exception:
+                logger.exception("ChEMBL fallback failed for q=%r — returning local-only results", query)
+                chembl_hits = []
+                chembl_used = False
+                chembl_id_to_local_id = {}
+                newly_inserted = 0
+
+            results = merge_drug_search_results(
+                local_results, chembl_hits, chembl_id_to_local_id, query, limit
+            )
+        else:
+            # Local-only path — annotate source for response shape consistency.
+            results = [{**r, 'source': 'local'} for r in local_results]
+
         return jsonify({
             'success': True,
-            'results': results
+            'query': query,
+            'results': results,
+            'chembl_used': chembl_used,
+            'chembl_inserted': newly_inserted,
         })
-    
-    except Exception as e:
+
+    except Exception:
         import traceback
-        error_msg = str(e)
-        print(f"❌ Unexpected error in /search/drugs endpoint: {error_msg}")
-        print(traceback.format_exc())
+        logger.error(
+            "Unexpected error in /search/drugs endpoint (q=%r)\n%s",
+            request.args.get('q'),
+            traceback.format_exc(),
+        )
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal server error',
         }), 500
 
 
@@ -2927,6 +3022,632 @@ def find_similar_ligands():
         }), 500
 
 
+# =============================================================================
+# Cancer Research v2 — disease-first browse (Cancer Type → Subtype → Drugs)
+# Backed by cancer_types / cancer_subtypes / cancer_subtype_drugs tables.
+# =============================================================================
+
+
+def _parse_json_field(raw):
+    """Parse a JSON-encoded TEXT column; return [] on null or invalid."""
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+@app.route('/cancer-research/v2/cancer-types', methods=['GET'])
+def v2_list_cancer_types():
+    """
+    List curated cancer types with subtype counts.
+
+    Response (JSON):
+    {
+        "success": true,
+        "cancer_types": [
+            {"id": 1, "name": "...", "display_name": "...", "category": "...",
+             "mesh_id": "...", "icon": "...", "subtype_count": 5}
+        ]
+    }
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT ct.id, ct.name, ct.display_name, ct.category,
+                       ct.description, ct.mesh_id, ct.icon, ct.sort_order,
+                       (SELECT COUNT(*) FROM cancer_subtypes cs WHERE cs.cancer_type_id = ct.id) AS subtype_count
+                FROM cancer_types ct
+                ORDER BY ct.sort_order, ct.display_name
+                """
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        cancer_types = [
+            {
+                'id': r[0],
+                'name': r[1],
+                'display_name': r[2],
+                'category': r[3],
+                'description': r[4],
+                'mesh_id': r[5],
+                'icon': r[6],
+                'sort_order': r[7],
+                'subtype_count': r[8],
+            }
+            for r in rows
+        ]
+
+        return jsonify({
+            'success': True,
+            'cancer_types': cancer_types,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 list cancer types error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/cancer-types/seed', methods=['POST'])
+def v2_seed_cancer_types():
+    """
+    Idempotently re-seed the curated cancer taxonomy from cancer_taxonomy_seed.
+    Useful after editing the taxonomy without forcing a schema migration.
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+        from cancer_taxonomy_seed import seed_cancer_taxonomy
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            result = seed_cancer_taxonomy(conn)
+        finally:
+            conn.close()
+
+        return jsonify({
+            'success': True,
+            'types_seeded': result['types'],
+            'subtypes_seeded': result['subtypes'],
+        })
+    except Exception:
+        logger.exception("v2 seed cancer taxonomy error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/cancer-types/<int:type_id>/subtypes', methods=['GET'])
+def v2_list_subtypes(type_id: int):
+    """
+    List subtypes for a cancer type. Includes parsed marker chips and a
+    cached-drug count (0 until aggregator has run for that subtype).
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, display_name FROM cancer_types WHERE id = ?", (type_id,))
+            type_row = cursor.fetchone()
+            if not type_row:
+                return jsonify({'success': False, 'error': f'Cancer type {type_id} not found'}), 404
+
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, cs.short_name, cs.description, cs.mesh_id,
+                       cs.efo_id, cs.markers, cs.chembl_indication_terms, cs.prevalence_note,
+                       (SELECT COUNT(*) FROM cancer_subtype_drugs csd WHERE csd.subtype_id = cs.id) AS drug_count
+                FROM cancer_subtypes cs
+                WHERE cs.cancer_type_id = ?
+                ORDER BY cs.id
+                """,
+                (type_id,),
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        subtypes = [
+            {
+                'id': r[0],
+                'name': r[1],
+                'short_name': r[2],
+                'description': r[3],
+                'mesh_id': r[4],
+                'efo_id': r[5],
+                'markers': _parse_json_field(r[6]),
+                'chembl_indication_terms': _parse_json_field(r[7]),
+                'prevalence_note': r[8],
+                'drug_count': r[9],
+            }
+            for r in rows
+        ]
+
+        return jsonify({
+            'success': True,
+            'cancer_type': {'id': type_row[0], 'name': type_row[1], 'display_name': type_row[2]},
+            'subtypes': subtypes,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 list subtypes error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/top-drugs', methods=['GET'])
+def v2_subtype_top_drugs(subtype_id: int):
+    """
+    Return cached top drugs for a subtype, ranked by rank_score desc. If no
+    cache exists or the cache is older than 30 days, the aggregator fires
+    automatically. Pass `?refresh=1` to force a ChEMBL re-pull.
+    """
+    try:
+        from cancer_drug_aggregator import aggregate_top_drugs_for_subtype, get_top_drugs_for_subtype
+
+        limit = _int_arg('limit', default=25, lo=1, hi=100)
+        refresh = request.args.get('refresh', '0') == '1'
+
+        # Cheap path: read cache directly. The aggregator only fires when stale.
+        import sqlite3
+        from data_loader import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM cancer_subtypes WHERE id = ?", (subtype_id,))
+            if not cursor.fetchone():
+                return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+        finally:
+            conn.close()
+
+        if refresh:
+            result = aggregate_top_drugs_for_subtype(subtype_id, limit=limit, refresh=True)
+        else:
+            # Let the aggregator decide whether to refresh; it honors 30-day TTL.
+            result = aggregate_top_drugs_for_subtype(subtype_id, limit=limit, refresh=False)
+
+        if not result.get('success'):
+            return jsonify({'success': False, 'error': result.get('error', 'Aggregation failed')}), 500
+
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'drugs': result.get('drugs', []),
+            'drug_count': result.get('drug_count', 0),
+            'from_cache': result.get('from_cache', False),
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 subtype top-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/refresh-drugs', methods=['POST'])
+def v2_subtype_refresh_drugs(subtype_id: int):
+    """
+    Force a ChEMBL drug_indication re-pull for a subtype, replacing the cache.
+    Synchronous — typical pull is 5-30s. Returns the fresh count and breakdown.
+    """
+    try:
+        from cancer_drug_aggregator import aggregate_top_drugs_for_subtype
+        result = aggregate_top_drugs_for_subtype(subtype_id, limit=100, refresh=True)
+        if not result.get('success'):
+            err = result.get('error', 'Refresh failed')
+            # Mirror v2_subtype_top_drugs's 404 path so a missing subtype is a
+            # client error, not a server error.
+            status = 404 if 'not found' in err.lower() else 500
+            return jsonify({'success': False, 'error': err}), status
+        # Strip the heavy `drugs` payload from the refresh response — clients
+        # immediately re-fetch via top-drugs anyway.
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'drug_count': result.get('drug_count', 0),
+            'chembl_count': result.get('chembl_count', 0),
+            'mechanism_count': result.get('mechanism_count', 0),
+            'multi_api_count': result.get('multi_api_count', 0),
+        })
+    except Exception:
+        logger.exception("v2 subtype refresh-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/cancer-types/<int:type_id>/drug-search', methods=['GET'])
+def v2_cancer_type_drug_search(type_id: int):
+    """
+    Reverse lookup: given a drug name (or ChEMBL ID) substring, return the
+    subtypes within this cancer type whose cached drug list contains a match.
+    Searches the cancer_subtype_drugs cache only — subtypes that the user has
+    not yet visited won't appear unless their cache has been populated.
+
+    Query params:
+        q: search substring (required, minimum 2 chars)
+        limit: max matched drugs per subtype (default 5)
+
+    Response:
+    {
+        "success": true,
+        "query": "palbo",
+        "subtype_matches": [
+            {"subtype_id": 3, "subtype_name": "...",
+             "subtype_short_name": "HR+", "matched_drugs": [
+                {"drug_name": "PALBOCICLIB", "chembl_id": "CHEMBL189963", "max_phase": 4}
+             ]}
+        ],
+        "uncached_subtype_count": 2  // subtypes with no cached drugs yet
+    }
+    """
+    try:
+        query = (request.args.get('q') or '').strip()
+        if len(query) < 2:
+            return jsonify({
+                'success': True,
+                'query': query,
+                'subtype_matches': [],
+                'note': 'Type at least 2 characters to search.',
+            })
+        limit_per_subtype = _int_arg('limit', default=5, lo=1, hi=25)
+
+        import sqlite3
+        from data_loader import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM cancer_types WHERE id = ?", (type_id,))
+            if not cursor.fetchone():
+                return jsonify({'success': False, 'error': f'Cancer type {type_id} not found'}), 404
+
+            like_pattern = f"%{query.lower()}%"
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, cs.short_name,
+                       csd.drug_name, csd.chembl_id, csd.max_phase, csd.rank_score
+                FROM cancer_subtype_drugs csd
+                JOIN cancer_subtypes cs ON cs.id = csd.subtype_id
+                WHERE cs.cancer_type_id = ?
+                  AND (LOWER(csd.drug_name) LIKE ? OR LOWER(csd.chembl_id) LIKE ?)
+                ORDER BY cs.id, csd.rank_score DESC
+                """,
+                (type_id, like_pattern, like_pattern),
+            )
+            rows = cursor.fetchall()
+
+            # Count subtypes with no cached drugs at all — useful for a
+            # "Some subtypes haven't been indexed yet" hint in the UI.
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM cancer_subtypes cs
+                WHERE cs.cancer_type_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM cancer_subtype_drugs csd WHERE csd.subtype_id = cs.id
+                  )
+                """,
+                (type_id,),
+            )
+            uncached_count = cursor.fetchone()[0]
+        finally:
+            conn.close()
+
+        # Group by subtype, capping per-subtype matches at limit_per_subtype.
+        grouped: Dict[int, Dict] = {}
+        for r in rows:
+            sid = r[0]
+            entry = grouped.setdefault(sid, {
+                'subtype_id': sid,
+                'subtype_name': r[1],
+                'subtype_short_name': r[2],
+                'matched_drugs': [],
+            })
+            if len(entry['matched_drugs']) >= limit_per_subtype:
+                continue
+            entry['matched_drugs'].append({
+                'drug_name': r[3],
+                'chembl_id': r[4],
+                'max_phase': r[5],
+            })
+
+        return jsonify({
+            'success': True,
+            'query': query,
+            'cancer_type_id': type_id,
+            'subtype_matches': list(grouped.values()),
+            'uncached_subtype_count': uncached_count,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 cancer-type drug-search error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/drugs/<chembl_id>/trials', methods=['GET'])
+def v2_drug_trials(chembl_id: str):
+    """
+    Return clinical trials for a drug from ClinicalTrials.gov, parsed for the
+    drug detail page's "Clinical Trial Outcomes" section. Each trial carries
+    its arms (with intervention names) and primary outcome measures with
+    values per arm — surfaces the regimen-vs-regimen comparisons users care
+    about.
+
+    Trials with multi-arm reported outcomes are returned first.
+    Slow path: a fresh fetch hits ClinicalTrials.gov (one request per trial).
+    """
+    try:
+        from clinical_trials import fetch_trials_for_drug
+        max_trials = _int_arg('limit', default=15, lo=1, hi=30)
+        trials = fetch_trials_for_drug(chembl_id, max_trials=max_trials)
+        return jsonify({
+            'success': True,
+            'chembl_id': chembl_id,
+            'trials': trials,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 drug trials error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/drugs/<chembl_id>/detail', methods=['GET'])
+def v2_drug_detail(chembl_id: str):
+    """
+    Full ChEMBL drug detail (properties, synonyms, indications, SMILES).
+    Used by the cancer drug detail page to populate the structure image,
+    molecular properties panel, and indications list. See
+    chembl_drug_detail.fetch_drug_detail() for the payload shape.
+    """
+    try:
+        from chembl_drug_detail import fetch_drug_detail
+        payload = fetch_drug_detail(chembl_id)
+        if payload is None:
+            return jsonify({
+                'success': False,
+                'error': f'ChEMBL has no record for {chembl_id} (or ChEMBL is unreachable).',
+            }), 404
+        return jsonify({
+            'success': True,
+            **payload,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 drug detail error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/drugs/<chembl_id>/similar', methods=['GET'])
+def v2_drug_similar(chembl_id: str):
+    """
+    Find molecularly-similar drugs for a given ChEMBL ID using FAISS + RDKit
+    Morgan fingerprints. If the drug isn't in our local FAISS index, fall
+    back to fetching its SMILES from ChEMBL on-demand and running similarity
+    against that — so the feature works for any ChEMBL drug, not just the
+    pre-ingested subset.
+
+    Each result row's `name` is enriched with ChEMBL `pref_name` when a
+    chembl_id is present, so the UI shows recognizable names ("ANASTROZOLE")
+    rather than IUPAC strings from our local molecules table.
+    """
+    try:
+        top_k = _int_arg('top_k', default=20, lo=1, hi=100)
+        engine = get_engine()
+
+        results: list[dict] = []
+        fetched_from_chembl = False
+        not_in_local_index = False
+
+        # Fast path: drug already in local FAISS index.
+        try:
+            results = engine.search_by_chembl_id(chembl_id, top_k=top_k)
+        except ValueError:
+            # Fallback: pull SMILES from ChEMBL, then run search_similar.
+            not_in_local_index = True
+            from chembl_drug_detail import fetch_smiles
+            smiles = fetch_smiles(chembl_id)
+            if not smiles:
+                return jsonify({
+                    'success': True,
+                    'chembl_id': chembl_id,
+                    'similar': [],
+                    'fetched_from_chembl': False,
+                    'not_in_local_index': True,
+                    'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+                })
+            results = engine.search_similar(smiles, top_k=top_k)
+            fetched_from_chembl = True
+
+        # Enrich result names with ChEMBL pref_name (e.g. "ANASTROZOLE" vs.
+        # the IUPAC string stored in the local molecules table). The local
+        # FAISS index currently uses numeric placeholders for many molecules
+        # (e.g. chembl_id="2187") — only call ChEMBL for IDs that look real.
+        try:
+            import re
+            from chembl_drug_detail import fetch_pref_names
+            real_id_pattern = re.compile(r'^CHEMBL\d+$', re.IGNORECASE)
+            cids = [r.get('chembl_id') for r in results
+                    if r.get('chembl_id') and real_id_pattern.match(str(r['chembl_id']))]
+            if cids:
+                name_map = fetch_pref_names(cids)
+                for r in results:
+                    cid = r.get('chembl_id')
+                    pref = name_map.get(cid) if cid else None
+                    if pref:
+                        # Keep the original IUPAC for callers that want both.
+                        r['iupac_name'] = r.get('name')
+                        r['pref_name'] = pref
+                        r['name'] = pref
+        except Exception as e:
+            print(f"   ⚠️  pref_name enrichment skipped: {e}")
+
+        return jsonify({
+            'success': True,
+            'chembl_id': chembl_id,
+            'similar': results,
+            'fetched_from_chembl': fetched_from_chembl,
+            'not_in_local_index': not_in_local_index,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 drug similar error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/mechanisms', methods=['GET'])
+def v2_subtype_mechanisms(subtype_id: int):
+    """
+    Return cancer mechanisms relevant to a subtype. The mapping is at the
+    parent cancer type level (cancer_mechanisms.cancer_type free-text matched
+    against cancer_types.name OR display_name, case-insensitive).
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, ct.id, ct.name, ct.display_name
+                FROM cancer_subtypes cs
+                JOIN cancer_types ct ON ct.id = cs.cancer_type_id
+                WHERE cs.id = ?
+                """,
+                (subtype_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+
+            type_name = row[3] or ''
+            type_display = row[4] or ''
+
+            # cancer_mechanisms.cancer_type is free-text (e.g. "Non-small cell
+            # lung cancer") while cancer_types.name is shorter (e.g. "Lung
+            # cancer"). Match exact + bidirectional substring so curated
+            # mechanism mappings flow through to the v2 subtype browse without
+            # requiring an alias table.
+            cursor.execute(
+                """
+                SELECT cm.id, cm.cancer_type, cm.activity_level, cm.evidence_source,
+                       m.id, m.name, m.description, m.biological_summary
+                FROM cancer_mechanisms cm
+                JOIN mechanisms m ON m.id = cm.mechanism_id
+                WHERE LOWER(cm.cancer_type) = LOWER(?)
+                   OR LOWER(cm.cancer_type) = LOWER(?)
+                   OR LOWER(cm.cancer_type) LIKE '%' || LOWER(?) || '%'
+                   OR LOWER(?) LIKE '%' || LOWER(cm.cancer_type) || '%'
+                ORDER BY
+                    CASE LOWER(cm.activity_level)
+                        WHEN 'high' THEN 1
+                        WHEN 'moderate' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END,
+                    m.name
+                """,
+                (type_name, type_display, type_display or type_name, type_display or type_name),
+            )
+            mech_rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        mechanisms = [
+            {
+                'mapping_id': r[0],
+                'cancer_type': r[1],
+                'activity_level': r[2],
+                'evidence_source': r[3],
+                'mechanism_id': r[4],
+                'mechanism_name': r[5],
+                'description': r[6],
+                'biological_summary': r[7],
+            }
+            for r in mech_rows
+        ]
+
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'mechanisms': mechanisms,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 subtype mechanisms error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>', methods=['GET'])
+def v2_get_subtype(subtype_id: int):
+    """
+    Get full subtype detail, including parent cancer type and parsed markers.
+    """
+    try:
+        import sqlite3
+        from data_loader import DB_PATH
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT cs.id, cs.name, cs.short_name, cs.description, cs.mesh_id,
+                       cs.efo_id, cs.markers, cs.chembl_indication_terms, cs.prevalence_note,
+                       cs.cancer_type_id, ct.name, ct.display_name, ct.mesh_id, ct.category
+                FROM cancer_subtypes cs
+                JOIN cancer_types ct ON ct.id = cs.cancer_type_id
+                WHERE cs.id = ?
+                """,
+                (subtype_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM cancer_subtype_drugs WHERE subtype_id = ?",
+                (subtype_id,),
+            )
+            drug_count = cursor.fetchone()[0]
+        finally:
+            conn.close()
+
+        subtype = {
+            'id': row[0],
+            'name': row[1],
+            'short_name': row[2],
+            'description': row[3],
+            'mesh_id': row[4],
+            'efo_id': row[5],
+            'markers': _parse_json_field(row[6]),
+            'chembl_indication_terms': _parse_json_field(row[7]),
+            'prevalence_note': row[8],
+            'drug_count': drug_count,
+            'cancer_type': {
+                'id': row[9],
+                'name': row[10],
+                'display_name': row[11],
+                'mesh_id': row[12],
+                'category': row[13],
+            },
+        }
+
+        return jsonify({
+            'success': True,
+            'subtype': subtype,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 get subtype error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 def handle_stdin_request():
     """
     Handle a single JSON request from stdin.
@@ -3077,6 +3798,15 @@ def run_http_server(host: str = '127.0.0.1', port: int = 5000, debug: bool = Fal
     print("   GET  /cancer-research/workspaces - List workspaces")
     print("   POST /cancer-research/workspaces - Create workspace")
     print("   PUT  /cancer-research/workspaces/<id> - Update workspace")
+    print("   GET  /cancer-research/v2/cancer-types - v2 disease-first browse: list cancer types")
+    print("   GET  /cancer-research/v2/cancer-types/<id>/subtypes - v2: list subtypes for a cancer type")
+    print("   GET  /cancer-research/v2/subtypes/<id> - v2: subtype detail with markers")
+    print("   GET  /cancer-research/v2/subtypes/<id>/top-drugs - v2: ranked drugs (ChEMBL+mechanism+multi-API, 30-day cache)")
+    print("   POST /cancer-research/v2/subtypes/<id>/refresh-drugs - v2: force ChEMBL re-pull")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/detail - v2: ChEMBL drug detail (properties, synonyms, indications)")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/trials - v2: ClinicalTrials.gov arm + outcome data")
+    print("   GET  /cancer-research/v2/drugs/<chembl_id>/similar - v2: molecularly similar drugs via FAISS (with ChEMBL SMILES fallback)")
+    print("   GET  /cancer-research/v2/subtypes/<id>/mechanisms - v2: mechanisms relevant to subtype")
     app.run(host=host, port=port, debug=debug_enabled)
 
 

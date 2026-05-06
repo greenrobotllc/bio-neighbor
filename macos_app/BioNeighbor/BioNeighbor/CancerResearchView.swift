@@ -2,12 +2,62 @@
 //  CancerResearchView.swift
 //  BioNeighbor
 //
-//  Main Cancer Research tab view
+//  Main Cancer Research tab view.
+//
+//  v2 disease-first browse is the default surface (Cancer Type → Subtype →
+//  Drugs → Similar). The original mechanism-first sidebar/workspace is
+//  preserved as `LegacyMechanismBrowseView`, reachable via a toolbar button
+//  so saved workspaces in the `workspaces` table aren't orphaned.
 //
 
 import SwiftUI
 
 struct CancerResearchView: View {
+    @State private var showLegacyMechanisms = false
+
+    var body: some View {
+        NavigationStack {
+            CancerTypePickerView()
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            showLegacyMechanisms = true
+                        } label: {
+                            Label("Browse by Mechanism", systemImage: "atom")
+                        }
+                        .help("Open the original mechanism workspace (Adenosine, PD-1/PD-L1, …)")
+                    }
+                }
+        }
+        .sheet(isPresented: $showLegacyMechanisms) {
+            LegacyMechanismBrowseSheet(isPresented: $showLegacyMechanisms)
+        }
+    }
+}
+
+private struct LegacyMechanismBrowseSheet: View {
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Mechanism Workspace")
+                    .appFont(.headline)
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            Divider()
+
+            LegacyMechanismBrowseView()
+        }
+        .frame(minWidth: 900, minHeight: 600)
+    }
+}
+
+struct LegacyMechanismBrowseView: View {
     @StateObject private var backendService = BackendService.shared
     @State private var mechanisms: [Mechanism] = []
     @State private var selectedMechanism: Mechanism?
@@ -30,9 +80,9 @@ struct CancerResearchView: View {
                         .font(.system(size: 32))
                         .foregroundColor(.orange)
                     Text("Error loading mechanisms")
-                        .font(.headline)
+                        .appFont(.headline)
                     Text(error)
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
@@ -50,9 +100,9 @@ struct CancerResearchView: View {
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
                     Text("No mechanisms found")
-                        .font(.headline)
+                        .appFont(.headline)
                     Text("Initialize mechanisms to begin loading cancer research data")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
@@ -98,34 +148,34 @@ struct CancerResearchView: View {
                                         HStack(spacing: 8) {
                                             if counts.targets > 0 {
                                                 Label("\(counts.targets)", systemImage: "target")
-                                                    .font(.caption2)
+                                                    .appFont(.caption2)
                                                     .foregroundColor(selectedMechanism?.id == mechanism.id ? .white.opacity(0.8) : .secondary)
                                             }
                                             if counts.ligands > 0 {
                                                 Label("\(counts.ligands)", systemImage: "molecule")
-                                                    .font(.caption2)
+                                                    .appFont(.caption2)
                                                     .foregroundColor(selectedMechanism?.id == mechanism.id ? .white.opacity(0.8) : .secondary)
                                             }
                                             if counts.assays > 0 {
                                                 Label("\(counts.assays)", systemImage: "flask")
-                                                    .font(.caption2)
+                                                    .appFont(.caption2)
                                                     .foregroundColor(selectedMechanism?.id == mechanism.id ? .white.opacity(0.8) : .secondary)
                                             }
                                             if counts.outcomes > 0 {
                                                 Label("\(counts.outcomes)", systemImage: "chart.bar")
-                                                    .font(.caption2)
+                                                    .appFont(.caption2)
                                                     .foregroundColor(selectedMechanism?.id == mechanism.id ? .white.opacity(0.8) : .secondary)
                                             }
                                             
                                             if counts.targets == 0 && counts.ligands == 0 && counts.assays == 0 && counts.outcomes == 0 {
                                                 Text("No data")
-                                                    .font(.caption2)
+                                                    .appFont(.caption2)
                                                     .foregroundColor(selectedMechanism?.id == mechanism.id ? .white.opacity(0.8) : .orange)
                                             }
                                         }
                                     } else {
                                         Text("Loading status...")
-                                            .font(.caption2)
+                                            .appFont(.caption2)
                                             .foregroundColor(selectedMechanism?.id == mechanism.id ? .white.opacity(0.8) : .secondary)
                                     }
                                 }
@@ -153,13 +203,13 @@ struct CancerResearchView: View {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
                             Text(success)
-                                .font(.caption)
+                                .appFont(.caption)
                             Spacer()
                             Button("Dismiss") {
                                 successMessage = nil
                             }
                             .buttonStyle(.plain)
-                            .font(.caption)
+                            .appFont(.caption)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -197,7 +247,7 @@ struct CancerResearchView: View {
                         
                         HStack {
                             Text("\(mechanisms.count) mechanism\(mechanisms.count == 1 ? "" : "s")")
-                                .font(.caption)
+                                .appFont(.caption)
                                 .foregroundColor(.secondary)
                             Spacer()
                         }
@@ -221,16 +271,16 @@ struct CancerResearchView: View {
                         .font(.system(size: 64))
                         .foregroundColor(.secondary)
                     Text("Select a mechanism to begin")
-                        .font(.title2)
+                        .appFont(.title2)
                         .foregroundColor(.secondary)
                     if !mechanisms.isEmpty {
                         Text("Click on a mechanism in the sidebar to explore it")
-                            .font(.caption)
+                            .appFont(.caption)
                             .foregroundColor(.secondary)
                             .padding(.top, 4)
                     }
                     Text("Research Tool Only - Not for Medical Diagnosis or Treatment")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundColor(.secondary)
                         .padding(.top, 8)
                 }

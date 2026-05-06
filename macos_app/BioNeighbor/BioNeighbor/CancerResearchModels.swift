@@ -460,11 +460,526 @@ struct SimilarLigandsResponse: Codable {
     let similarLigands: [Ligand]?
     let disclaimer: String?
     let error: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case success
         case similarLigands = "similar_ligands"
         case disclaimer
         case error
     }
+}
+
+// MARK: - v2 Disease-First Browse (Cancer Type → Subtype → Drugs)
+
+struct CancerType: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let displayName: String?
+    let category: String?
+    let description: String?
+    let meshId: String?
+    let icon: String?
+    let sortOrder: Int?
+    let subtypeCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case displayName = "display_name"
+        case category
+        case description
+        case meshId = "mesh_id"
+        case icon
+        case sortOrder = "sort_order"
+        case subtypeCount = "subtype_count"
+    }
+}
+
+struct CancerSubtype: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let shortName: String?
+    let description: String?
+    let meshId: String?
+    let efoId: String?
+    let markers: [String]?
+    let chemblIndicationTerms: [String]?
+    let prevalenceNote: String?
+    let drugCount: Int?
+    let cancerType: CancerType?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case shortName = "short_name"
+        case description
+        case meshId = "mesh_id"
+        case efoId = "efo_id"
+        case markers
+        case chemblIndicationTerms = "chembl_indication_terms"
+        case prevalenceNote = "prevalence_note"
+        case drugCount = "drug_count"
+        case cancerType = "cancer_type"
+    }
+}
+
+struct CancerTypesResponse: Codable {
+    let success: Bool
+    let cancerTypes: [CancerType]?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case cancerTypes = "cancer_types"
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypesResponse: Codable {
+    let success: Bool
+    let cancerType: CancerType?
+    let subtypes: [CancerSubtype]?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case cancerType = "cancer_type"
+        case subtypes
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypeDetailResponse: Codable {
+    let success: Bool
+    let subtype: CancerSubtype?
+    let disclaimer: String?
+    let error: String?
+}
+
+struct SubtypeTopDrug: Codable, Identifiable, Hashable {
+    let id: Int
+    let subtypeId: Int
+    let drugId: Int?
+    let ligandId: Int?
+    let moleculeIndex: Int?
+    let chemblId: String?
+    let drugName: String
+    let maxPhase: Int?
+    let source: String?
+    let sourceCount: Int?
+    let trialCount: Int?
+    let rankScore: Double?
+    let cachedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case subtypeId = "subtype_id"
+        case drugId = "drug_id"
+        case ligandId = "ligand_id"
+        case moleculeIndex = "molecule_index"
+        case chemblId = "chembl_id"
+        case drugName = "drug_name"
+        case maxPhase = "max_phase"
+        case source
+        case sourceCount = "source_count"
+        case trialCount = "trial_count"
+        case rankScore = "rank_score"
+        case cachedAt = "cached_at"
+    }
+}
+
+struct SubtypeTopDrugsResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let drugs: [SubtypeTopDrug]?
+    let drugCount: Int?
+    let fromCache: Bool?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case drugs
+        case drugCount = "drug_count"
+        case fromCache = "from_cache"
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypeRefreshResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let drugCount: Int?
+    let chemblCount: Int?
+    let mechanismCount: Int?
+    let multiApiCount: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case drugCount = "drug_count"
+        case chemblCount = "chembl_count"
+        case mechanismCount = "mechanism_count"
+        case multiApiCount = "multi_api_count"
+        case error
+    }
+}
+
+struct SimilarDrugHit: Codable, Identifiable, Hashable {
+    let index: Int?
+    let name: String?
+    let smiles: String?
+    let chemblId: String?
+    let pubchemCid: String?
+    let similarity: Double?
+    let similarityScore: Double?
+
+    var id: String {
+        // Deterministic so SwiftUI can diff rows across renders. UUID() here
+        // would mint a new id every body call and force the row to remount.
+        if let cid = chemblId { return cid }
+        if let idx = index { return "idx-\(idx)" }
+        if let name { return "name-\(name)" }
+        return "unknown-\(smiles ?? "")"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case index
+        case name
+        case smiles
+        case chemblId = "chembl_id"
+        case pubchemCid = "pubchem_cid"
+        case similarity
+        case similarityScore = "similarity_score"
+    }
+}
+
+struct SimilarDrugsResponse: Codable {
+    let success: Bool
+    let chemblId: String?
+    let similar: [SimilarDrugHit]?
+    let notInLocalIndex: Bool?
+    /// Whether the backend resorted to the ChEMBL SMILES fallback (i.e. the
+    /// drug wasn't already in the local FAISS index). Drives the "via ChEMBL"
+    /// badge — heuristics like `!similar.isEmpty` falsely lit up the badge
+    /// for drugs that lived in the local index AND had neighbors.
+    let fetchedFromChEMBL: Bool?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case chemblId = "chembl_id"
+        case similar
+        case notInLocalIndex = "not_in_local_index"
+        case fetchedFromChEMBL = "fetched_from_chembl"
+        case disclaimer
+        case error
+    }
+}
+
+struct SubtypeMechanism: Codable, Identifiable, Hashable {
+    let mappingId: Int
+    let mechanismId: Int
+    let mechanismName: String
+    let cancerType: String?
+    let activityLevel: String?
+    let evidenceSource: String?
+    let description: String?
+    let biologicalSummary: String?
+
+    var id: Int { mappingId }
+
+    enum CodingKeys: String, CodingKey {
+        case mappingId = "mapping_id"
+        case mechanismId = "mechanism_id"
+        case mechanismName = "mechanism_name"
+        case cancerType = "cancer_type"
+        case activityLevel = "activity_level"
+        case evidenceSource = "evidence_source"
+        case description
+        case biologicalSummary = "biological_summary"
+    }
+}
+
+struct SubtypeMechanismsResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let mechanisms: [SubtypeMechanism]?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case mechanisms
+        case disclaimer
+        case error
+    }
+}
+
+// MARK: - Drug Search (reverse lookup: drug → subtypes within a cancer type)
+
+struct DrugSearchMatchedDrug: Codable, Hashable {
+    let drugName: String
+    let chemblId: String?
+    let maxPhase: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case drugName = "drug_name"
+        case chemblId = "chembl_id"
+        case maxPhase = "max_phase"
+    }
+}
+
+struct DrugSearchSubtypeMatch: Codable, Identifiable, Hashable {
+    let subtypeId: Int
+    let subtypeName: String
+    let subtypeShortName: String?
+    let matchedDrugs: [DrugSearchMatchedDrug]
+
+    var id: Int { subtypeId }
+
+    enum CodingKeys: String, CodingKey {
+        case subtypeId = "subtype_id"
+        case subtypeName = "subtype_name"
+        case subtypeShortName = "subtype_short_name"
+        case matchedDrugs = "matched_drugs"
+    }
+}
+
+struct DrugSearchResponse: Codable {
+    let success: Bool
+    let query: String?
+    let cancerTypeId: Int?
+    let subtypeMatches: [DrugSearchSubtypeMatch]?
+    let uncachedSubtypeCount: Int?
+    let note: String?
+    let disclaimer: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case query
+        case cancerTypeId = "cancer_type_id"
+        case subtypeMatches = "subtype_matches"
+        case uncachedSubtypeCount = "uncached_subtype_count"
+        case note
+        case disclaimer
+        case error
+    }
+}
+
+// MARK: - ChEMBL Drug Detail (structure, properties, synonyms, indications)
+
+struct ChEMBLSynonym: Codable, Hashable {
+    let name: String
+    let type: String
+}
+
+struct ChEMBLProperties: Codable, Hashable {
+    let molecularWeight: Double?
+    let alogp: Double?
+    let molecularFormula: String?
+    let hba: Int?
+    let hbd: Int?
+    let psa: Double?
+    let ro5Violations: Int?
+    let rotatableBonds: Int?
+    let qedWeighted: Double?
+    let aromaticRings: Int?
+    let heavyAtoms: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case molecularWeight = "molecular_weight"
+        case alogp
+        case molecularFormula = "molecular_formula"
+        case hba
+        case hbd
+        case psa
+        case ro5Violations = "ro5_violations"
+        case rotatableBonds = "rotatable_bonds"
+        case qedWeighted = "qed_weighted"
+        case aromaticRings = "aromatic_rings"
+        case heavyAtoms = "heavy_atoms"
+    }
+}
+
+struct ChEMBLIndication: Codable, Hashable, Identifiable {
+    let meshHeading: String?
+    let meshId: String?
+    let efoTerm: String?
+    let efoId: String?
+    let maxPhase: Int?
+    let refCount: Int?
+
+    var id: String {
+        // mesh_heading is the dedup key; fall back to efo_term, then to a
+        // composite of remaining stable fields. Avoid UUID() so SwiftUI can
+        // keep row identity stable across renders.
+        if let m = meshHeading { return "mesh:\(m)" }
+        if let e = efoTerm { return "efo:\(e)" }
+        return "ind:\(meshId ?? "")|\(efoId ?? "")|\(maxPhase ?? -1)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case meshHeading = "mesh_heading"
+        case meshId = "mesh_id"
+        case efoTerm = "efo_term"
+        case efoId = "efo_id"
+        case maxPhase = "max_phase"
+        case refCount = "ref_count"
+    }
+}
+
+struct ChEMBLDrugDetail: Codable, Hashable {
+    let chemblId: String
+    let parentChemblId: String?
+    let prefName: String?
+    let parentPrefName: String?
+    let moleculeType: String?
+    let maxPhase: Int?
+    let firstApproval: Int?
+    let smiles: String?
+    let synonyms: [ChEMBLSynonym]?
+    let properties: ChEMBLProperties?
+    let indications: [ChEMBLIndication]?
+
+    enum CodingKeys: String, CodingKey {
+        case chemblId = "chembl_id"
+        case parentChemblId = "parent_chembl_id"
+        case prefName = "pref_name"
+        case parentPrefName = "parent_pref_name"
+        case moleculeType = "molecule_type"
+        case maxPhase = "max_phase"
+        case firstApproval = "first_approval"
+        case smiles
+        case synonyms
+        case properties
+        case indications
+    }
+}
+
+/// Decoder helper: the backend returns ChEMBLDrugDetail fields at the top level
+/// of the response (alongside `success` + `disclaimer` + `error`). This wrapper
+/// lets us decode either the embedded detail or a top-level error.
+// MARK: - Clinical Trials (ClinicalTrials.gov v2)
+
+struct TrialArmResult: Codable, Hashable {
+    let armLabel: String?
+    let value: String?
+    let lower: String?
+    let upper: String?
+
+    enum CodingKeys: String, CodingKey {
+        case armLabel = "arm_label"
+        case value
+        case lower
+        case upper
+    }
+}
+
+struct ClinicalTrialOutcome: Codable, Hashable, Identifiable {
+    let title: String?
+    let paramType: String?
+    let unit: String?
+    let armResults: [TrialArmResult]?
+
+    // Deterministic composite — title alone isn't unique within a trial
+    // (e.g. two outcomes both named "Overall Survival" with different units).
+    var id: String { "\(title ?? "")|\(paramType ?? "")|\(unit ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case paramType = "param_type"
+        case unit
+        case armResults = "arm_results"
+    }
+}
+
+struct ClinicalTrialArm: Codable, Hashable, Identifiable {
+    let label: String?
+    let type: String?
+    let interventions: [String]?
+
+    // Composite avoids duplicate-id crashes when two arms share a label.
+    var id: String { "\(label ?? "")|\(type ?? "")|\(interventions?.joined(separator: ",") ?? "")" }
+}
+
+struct ClinicalTrial: Codable, Hashable, Identifiable {
+    let nctId: String
+    let title: String?
+    let status: String?
+    let phase: [String]?
+    let arms: [ClinicalTrialArm]?
+    let primaryOutcomes: [ClinicalTrialOutcome]?
+    let hasResults: Bool?
+
+    var id: String { nctId }
+
+    enum CodingKeys: String, CodingKey {
+        case nctId = "nct_id"
+        case title
+        case status
+        case phase
+        case arms
+        case primaryOutcomes = "primary_outcomes"
+        case hasResults = "has_results"
+    }
+}
+
+struct ClinicalTrialsResponse: Codable {
+    let success: Bool
+    let chemblId: String?
+    let trials: [ClinicalTrial]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case chemblId = "chembl_id"
+        case trials
+        case error
+    }
+}
+
+struct ChEMBLDrugDetailResponse: Codable {
+    let success: Bool
+    let error: String?
+    // Embedded detail fields (decoded via dynamic key fallthrough).
+    let detail: ChEMBLDrugDetail?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: GenericCodingKeys.self)
+        self.success = try container.decodeIfPresent(Bool.self, forKey: GenericCodingKeys(stringValue: "success")!) ?? false
+        self.error = try container.decodeIfPresent(String.self, forKey: GenericCodingKeys(stringValue: "error")!)
+        if success {
+            // Re-decode the same payload as ChEMBLDrugDetail (it shares the keys).
+            self.detail = try ChEMBLDrugDetail(from: decoder)
+        } else {
+            self.detail = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: GenericCodingKeys.self)
+        try container.encode(success, forKey: GenericCodingKeys(stringValue: "success")!)
+        try container.encodeIfPresent(error, forKey: GenericCodingKeys(stringValue: "error")!)
+        if let detail = detail {
+            try detail.encode(to: encoder)
+        }
+    }
+}
+
+private struct GenericCodingKeys: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
 }

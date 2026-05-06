@@ -200,6 +200,59 @@ struct DiseaseSearchResponse: Codable {
     let error: String?
 }
 
+/// One row in /search/drugs response — supports the live ChEMBL fallback
+/// where the same payload may carry locally-cached and ChEMBL-fetched rows
+/// distinguished by `source`.
+struct DrugSearchResult: Codable, Identifiable, Hashable {
+    /// DB primary key when available (local rows), nil for ChEMBL-only rows
+    /// that haven't been cached yet. Use this when you specifically need the
+    /// numeric drug id for navigation.
+    let localId: Int?
+    let name: String
+    let genericName: String?
+    let brandNames: [String]?
+    let chemblId: String?
+    let maxPhase: Int?
+    let source: String  // "local" | "chembl"
+
+    /// Stable, non-optional Identifiable id — chembl id when present, else a
+    /// composite that's deterministic across renders. Do NOT use this for
+    /// navigation; use `localId` or `chemblId` directly.
+    var id: String {
+        if let chemblId, !chemblId.isEmpty { return "chembl:\(chemblId)" }
+        if let localId { return "local:\(localId)" }
+        return "result:\(source)|\(name)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case localId = "id"
+        case name
+        case genericName = "generic_name"
+        case brandNames = "brand_names"
+        case chemblId = "chembl_id"
+        case maxPhase = "max_phase"
+        case source
+    }
+}
+
+struct DrugSearchEnvelope: Codable {
+    let success: Bool
+    let query: String?
+    let results: [DrugSearchResult]?
+    let chemblUsed: Bool?
+    let chemblInserted: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case query
+        case results
+        case chemblUsed = "chembl_used"
+        case chemblInserted = "chembl_inserted"
+        case error
+    }
+}
+
 struct Drug: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
@@ -207,13 +260,14 @@ struct Drug: Codable, Identifiable, Hashable {
     let brandNames: [String]?
     let pubchemCid: String?
     let drugbankId: String?
+    let chemblId: String?
     let description: String?
     let indication: String?
     let activeIngredientMoleculeIndices: [Int]?
     let inactiveIngredients: [String]?
     let dosageForm: String?
     let route: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case name
@@ -221,6 +275,7 @@ struct Drug: Codable, Identifiable, Hashable {
         case brandNames = "brand_names"
         case pubchemCid = "pubchem_cid"
         case drugbankId = "drugbank_id"
+        case chemblId = "chembl_id"
         case description
         case indication
         case activeIngredientMoleculeIndices = "active_ingredient_molecule_indices"
@@ -228,7 +283,7 @@ struct Drug: Codable, Identifiable, Hashable {
         case dosageForm = "dosage_form"
         case route
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(Int.self, forKey: .id)
@@ -237,6 +292,7 @@ struct Drug: Codable, Identifiable, Hashable {
         brandNames = try container.decodeIfPresent([String].self, forKey: .brandNames)
         pubchemCid = try container.decodeIfPresent(String.self, forKey: .pubchemCid)
         drugbankId = try container.decodeIfPresent(String.self, forKey: .drugbankId)
+        chemblId = try container.decodeIfPresent(String.self, forKey: .chemblId)
         description = try container.decodeIfPresent(String.self, forKey: .description)
         indication = try container.decodeIfPresent(String.self, forKey: .indication)
         inactiveIngredients = try container.decodeIfPresent([String].self, forKey: .inactiveIngredients)
@@ -264,6 +320,7 @@ struct Drug: Codable, Identifiable, Hashable {
         brandNames: [String]? = nil,
         pubchemCid: String? = nil,
         drugbankId: String? = nil,
+        chemblId: String? = nil,
         description: String? = nil,
         indication: String? = nil,
         activeIngredientMoleculeIndices: [Int]? = nil,
@@ -277,6 +334,7 @@ struct Drug: Codable, Identifiable, Hashable {
         self.brandNames = brandNames
         self.pubchemCid = pubchemCid
         self.drugbankId = drugbankId
+        self.chemblId = chemblId
         self.description = description
         self.indication = indication
         self.activeIngredientMoleculeIndices = activeIngredientMoleculeIndices

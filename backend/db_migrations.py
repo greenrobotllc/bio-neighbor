@@ -75,6 +75,68 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None
     ),
+    7: (
+        "Add cancer_types, cancer_subtypes, cancer_subtype_drugs tables and seed taxonomy",
+        [
+            # Handled by frozen DDL block in apply_migration() so the migration
+            # remains deterministic regardless of future db_schema.py edits.
+        ],
+        None
+    ),
+    8: (
+        "Add chembl_id column to drugs table (cross-ref for live ChEMBL search write-through cache)",
+        [
+            "ALTER TABLE drugs ADD COLUMN chembl_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_drug_chembl_id ON drugs(chembl_id)",
+        ],
+        None  # No rollback for ALTER TABLE ADD COLUMN in SQLite
+    ),
+    9: (
+        "Make drugs.chembl_id UNIQUE — dedupe existing rows (redirecting drug_id FKs to the lowest-id keeper) so INSERT OR IGNORE in chembl_drug_search is atomic",
+        [
+            # Build a temp loser→keeper map for every chembl_id with >1 row.
+            # Keeper is the lowest id; losers are everyone else with the same
+            # chembl_id.
+            """
+            CREATE TEMP TABLE _drug_dedupe_map AS
+            SELECT d.id AS loser_id, k.keep_id, d.chembl_id
+            FROM drugs d
+            JOIN (
+                SELECT chembl_id, MIN(id) AS keep_id
+                FROM drugs
+                WHERE chembl_id IS NOT NULL
+                GROUP BY chembl_id
+                HAVING COUNT(*) > 1
+            ) k ON d.chembl_id = k.chembl_id AND d.id != k.keep_id
+            """,
+            # Redirect FK references in every table that joins to drugs.id, so
+            # we don't strand rows when we delete the losers below.
+            """
+            UPDATE drug_diseases
+            SET drug_id = (SELECT keep_id FROM _drug_dedupe_map WHERE loser_id = drug_diseases.drug_id)
+            WHERE drug_id IN (SELECT loser_id FROM _drug_dedupe_map)
+            """,
+            """
+            UPDATE drug_outcomes
+            SET drug_id = (SELECT keep_id FROM _drug_dedupe_map WHERE loser_id = drug_outcomes.drug_id)
+            WHERE drug_id IN (SELECT loser_id FROM _drug_dedupe_map)
+            """,
+            """
+            UPDATE cancer_subtype_drugs
+            SET drug_id = (SELECT keep_id FROM _drug_dedupe_map WHERE loser_id = cancer_subtype_drugs.drug_id)
+            WHERE drug_id IN (SELECT loser_id FROM _drug_dedupe_map)
+            """,
+            # Now safe to delete the duplicate drug rows.
+            "DELETE FROM drugs WHERE id IN (SELECT loser_id FROM _drug_dedupe_map)",
+            # Replace the non-unique index with a UNIQUE one. SQLite requires
+            # the drop+recreate dance because you can't promote an index in
+            # place.
+            "DROP INDEX IF EXISTS idx_drug_chembl_id",
+            "CREATE UNIQUE INDEX idx_drug_chembl_id ON drugs(chembl_id)",
+            "DROP TABLE IF EXISTS _drug_dedupe_map",
+        ],
+        None  # No clean rollback — re-running is harmless (no dupes left).
+    ),
 }
 
 
@@ -327,7 +389,7 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                         cursor.execute(ddl)
                     except sqlite3.OperationalError as e:
                         if 'already exists' in str(e).lower():
-                            print(f"   ⚠️  Table already exists, skipping")
+                            print("   ⚠️  Table already exists, skipping")
                         else:
                             raise
                 for index_sql in migration_4_indexes:
@@ -342,7 +404,100 @@ def apply_migration(conn: sqlite3.Connection, from_version: int, to_version: int
                 set_schema_version(conn, version)
                 print(f"   ✅ Migration {version} applied successfully")
                 continue
-            
+
+            # Special handling for migration 7: cancer-type taxonomy + per-subtype
+            # drug cache. Frozen DDL keeps the migration deterministic.
+            if version == 7:
+                migration_7_ddl = [
+                    """CREATE TABLE IF NOT EXISTS cancer_types (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        display_name TEXT,
+                        category TEXT,
+                        description TEXT,
+                        mesh_id TEXT,
+                        icon TEXT,
+                        sort_order INTEGER DEFAULT 100,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS cancer_subtypes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cancer_type_id INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        short_name TEXT,
+                        description TEXT,
+                        mesh_id TEXT,
+                        efo_id TEXT,
+                        chembl_indication_terms TEXT,
+                        markers TEXT,
+                        prevalence_note TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (cancer_type_id) REFERENCES cancer_types(id)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS cancer_subtype_drugs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        subtype_id INTEGER NOT NULL,
+                        drug_id INTEGER,
+                        ligand_id INTEGER,
+                        molecule_index INTEGER,
+                        chembl_id TEXT,
+                        drug_name TEXT,
+                        max_phase INTEGER,
+                        source TEXT,
+                        source_count INTEGER DEFAULT 1,
+                        trial_count INTEGER,
+                        rank_score REAL,
+                        evidence TEXT,
+                        cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (subtype_id) REFERENCES cancer_subtypes(id),
+                        FOREIGN KEY (drug_id) REFERENCES drugs(id),
+                        FOREIGN KEY (ligand_id) REFERENCES ligands(id),
+                        FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)
+                    )""",
+                ]
+                migration_7_indexes = [
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_type_name ON cancer_types(name)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_type_sort ON cancer_types(sort_order)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_type ON cancer_subtypes(cancer_type_id)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cancer_subtype_unique ON cancer_subtypes(cancer_type_id, name)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_subtype ON cancer_subtype_drugs(subtype_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_chembl ON cancer_subtype_drugs(chembl_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_score ON cancer_subtype_drugs(subtype_id, rank_score)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cancer_subtype_drugs_unique ON cancer_subtype_drugs(subtype_id, chembl_id)",
+                ]
+                for ddl in migration_7_ddl:
+                    try:
+                        cursor.execute(ddl)
+                    except sqlite3.OperationalError as e:
+                        if 'already exists' in str(e).lower():
+                            print("   ⚠️  Table already exists, skipping")
+                        else:
+                            raise
+                for index_sql in migration_7_indexes:
+                    try:
+                        cursor.execute(index_sql)
+                    except sqlite3.OperationalError as e:
+                        if 'already exists' in str(e).lower():
+                            pass
+                        else:
+                            raise
+                conn.commit()
+
+                # Seed the curated cancer taxonomy. Import lazily so a missing
+                # seed module does not break older migrations. If seeding fails
+                # we let the exception propagate — the outer try/except will
+                # roll back and keep the schema version unchanged so the next
+                # run retries cleanly. Marking the migration applied here would
+                # leave the DB in a half-migrated state that subsequent code
+                # assumes is good.
+                from cancer_taxonomy_seed import seed_cancer_taxonomy
+                seeded = seed_cancer_taxonomy(conn)
+                print(f"   🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
+
+                set_schema_version(conn, version)
+                print(f"   ✅ Migration {version} applied successfully")
+                continue
+
             for sql in migration_sql:
                 if sql.strip():  # Skip empty statements
                     try:
@@ -429,10 +584,20 @@ def initialize_schema(conn: sqlite3.Connection, force_recreate: bool = False) ->
                     else:
                         print(f"   ⚠️  Warning: Could not create index: {index_sql[:50]}... ({e})")
         
-        # Set schema version
+        # Seed curated cancer taxonomy on a fresh DB so the v2 Cancer Research
+        # browse has data immediately. Idempotent — safe to re-run. If seeding
+        # fails we re-raise so the outer except rolls back and reports failure.
+        # CRITICAL: do NOT mark the schema as initialized before this succeeds —
+        # set_schema_version commits internally, so a failed seed would leave
+        # the DB stamped at SCHEMA_VERSION with critical data missing and the
+        # next startup would skip re-seeding.
+        from cancer_taxonomy_seed import seed_cancer_taxonomy
+        seeded = seed_cancer_taxonomy(conn)
+        print(f"🌱 Seeded {seeded['types']} cancer types, {seeded['subtypes']} subtypes")
+
+        # Only now is it safe to advertise the schema as fully initialized.
         set_schema_version(conn, SCHEMA_VERSION)
-        conn.commit()
-        
+
         print(f"✅ Schema initialized (version {SCHEMA_VERSION})")
         return True
         

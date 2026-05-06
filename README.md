@@ -30,7 +30,9 @@ BioNeighbor combines:
 - **Biological target awareness:** Incorporates pathway and protein target information (e.g., adenosine-related targets) when available.  
 - **Offline operation:** No server required — the Python engine for molecular similarity runs locally, called from a Mac app or other front-end.  
 - **Interactive visualization:** Molecule structures can be visualized in 2D or 3D using embedded viewers (e.g., 3Dmol.js, NGL Viewer, or SwiftUI wrapper).  
-- **CF-inspired neighbor recommendations:** Uses the concept of collaborative filtering applied to molecules and their activity profiles to prioritize promising candidates.  
+- **CF-inspired neighbor recommendations:** Uses the concept of collaborative filtering applied to molecules and their activity profiles to prioritize promising candidates.
+- **Cancer Research workspace:** Drill into a cancer type, pick a drug, and see synonyms, indications, structurally similar drugs, and a unified Clinical Trial Outcomes section pulled from ClinicalTrials.gov — multi-arm trials, primary outcomes, per-arm values with 95% CIs, and CI-overlap flags so you can spot likely-real differences vs noise.
+- **On-device AI trial summaries (optional):** Point the app at a local Ollama install and get a plain-English summary of every clinical trial listed for a drug. Runs entirely on your machine — no data leaves the device. Default model is `gemma4:26b`; configurable in Settings.
 
 ---
 
@@ -50,6 +52,9 @@ BioNeighbor combines:
 
 ![Screen 5](images/screen5.png)
 *Advanced Search tab - Search for similar molecules by SMILES or ChEMBL ID*
+
+![Cancer Research with AI summary](images/screen6_cancer_research_ai_summary.png)
+*Cancer Research tab - Drug detail with Clinical Trial Outcomes and an optional on-device AI summary (Ollama + Gemma 4) condensing every trial into a few paragraphs.*
 
 ---
 
@@ -108,10 +113,10 @@ BioNeighbor supports multiple data sources with automatic fallback and comprehen
    - Bulk SMILES file downloads
    - URL: [ZINC Database](https://zinc.docking.org/)
 
-4. **ChEMBL** (Legacy - Currently Unavailable)
-   - Note: ChEMBL API has been experiencing 500 errors since 2023
-   - Issue tracked: [chembl/chembl_webresource_client#134](https://github.com/chembl/chembl_webresource_client/issues/134)
-   - Will be tried but typically fails with server errors
+4. **ChEMBL** (Live)
+   - Powers the Cancer Research tab end-to-end: live drug-name search with write-through caching, full drug detail (synonyms, indications, structure, similar drugs), approved-drug ingestion, and NCT lookup via `drug_indication`.
+   - Accessed via `chembl_webresource_client` — the long-running 500-error outages tracked in [chembl/chembl_webresource_client#134](https://github.com/chembl/chembl_webresource_client/issues/134) have been resolved.
+   - Calls run through a small thread-pool helper with hard timeouts (5–20 s depending on endpoint) so a slow ChEMBL response never hangs the UI.
 
 **Drugs:**
 - **RxNorm API** - Standardized drug names and ingredients (bulk downloads)
@@ -227,6 +232,15 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
    - Build and run (⌘R)
    - The app will automatically start the backend if needed
 
+### Optional: On-device AI summaries for clinical trials
+
+The Cancer Research tab can summarize every clinical trial listed for a drug into a short, plain-English paragraph. Inference happens locally via [Ollama](https://ollama.com), so trial data never leaves your machine.
+
+1. **Install Ollama 0.20+** (`brew install ollama`, or download from [ollama.com](https://ollama.com)) and run `ollama serve` in a terminal.
+2. **Pull a Gemma 4 model.** On a 16 GB Mac use `ollama pull gemma4` (≈9.6 GB E4B). On a 32 GB+ Mac use `ollama pull gemma4:26b` (≈18 GB MoE) for noticeably better summaries.
+3. **Enable the feature in BioNeighbor.** Open the app, go to **BioNeighbor → Settings → AI Assistant (Ollama)**, flip on *Enable on-device AI summaries*, set the model name (default `gemma4:26b`), and click *Test connection*.
+4. **Use it.** In the Cancer Research tab, open a drug with clinical trials and click the **✨ Summarize with AI** button next to the trials count. Output is summary-only — never medical advice — and is derived from the same ClinicalTrials.gov data already shown on the page.
+
 ### Backend API
 
 The backend provides a comprehensive REST API on `http://127.0.0.1:5000`:
@@ -336,6 +350,7 @@ bio-neighbor/
 │       └── BioNeighbor/
 │           ├── BioNeighborApp.swift  # Main app entry point
 │           ├── BackendService.swift  # Python backend service integration
+│           ├── OllamaService.swift    # Local Ollama client (AI trial summaries)
 │           ├── BrowseView.swift      # Molecules tab
 │           ├── DiseaseBrowseView.swift # Diseases tab
 │           ├── DiseasesDownloadView.swift # Disease download view
