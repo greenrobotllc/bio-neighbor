@@ -113,10 +113,10 @@ BioNeighbor supports multiple data sources with automatic fallback and comprehen
    - Bulk SMILES file downloads
    - URL: [ZINC Database](https://zinc.docking.org/)
 
-4. **ChEMBL** (Legacy - Currently Unavailable)
-   - Note: ChEMBL API has been experiencing 500 errors since 2023
-   - Issue tracked: [chembl/chembl_webresource_client#134](https://github.com/chembl/chembl_webresource_client/issues/134)
-   - Will be tried but typically fails with server errors
+4. **ChEMBL** (Live)
+   - Powers the Cancer Research tab end-to-end: live drug-name search with write-through caching, full drug detail (synonyms, indications, structure, similar drugs), approved-drug ingestion, and NCT lookup via `drug_indication`.
+   - Accessed via `chembl_webresource_client` — the long-running 500-error outages tracked in [chembl/chembl_webresource_client#134](https://github.com/chembl/chembl_webresource_client/issues/134) have been resolved.
+   - Calls run through a small thread-pool helper with hard timeouts (5–20 s depending on endpoint) so a slow ChEMBL response never hangs the UI.
 
 **Drugs:**
 - **RxNorm API** - Standardized drug names and ingredients (bulk downloads)
