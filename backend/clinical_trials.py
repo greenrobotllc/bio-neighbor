@@ -178,6 +178,14 @@ _MODALITY_INTERVENTION_TERMS = {
     "targeted": "targeted therapy",
 }
 
+# Pagination knobs for the modality search. Surveying multiple pages lets the
+# multi-arm/has-results sort pick from a deeper pool than a single 20-row page
+# can offer; the hard cap keeps cost bounded when a condition has thousands of
+# hits (e.g. "breast cancer + chemotherapy").
+_MODALITY_PAGE_SIZE = 100
+_MODALITY_MAX_PAGES = 3
+_MODALITY_HARD_CAP = 300
+
 
 def fetch_modality_trials(
     condition: str,
@@ -189,35 +197,52 @@ def fetch_modality_trials(
     `fetch_trials_for_drug`, sorted with multi-arm comparable outcomes first.
 
     `modality` must be one of: radiation, surgery, chemotherapy, targeted.
+    Whitespace-only conditions and non-positive `max_trials` return [].
     """
     intervention = _MODALITY_INTERVENTION_TERMS.get((modality or "").strip().lower())
-    if not intervention or not condition:
+    condition_norm = (condition or "").strip()
+    if not intervention or not condition_norm:
+        return []
+    # Reject non-int / non-positive max_trials so downstream slicing
+    # (trials[:max_trials]) is well-defined.
+    if not isinstance(max_trials, int) or max_trials <= 0:
         return []
 
-    params = {
-        "query.cond": condition,
+    base_params = {
+        "query.cond": condition_norm,
         "query.intr": intervention,
         "fields": TRIAL_FIELDS,
-        "pageSize": str(max(max_trials * 2, 20)),
+        "pageSize": str(_MODALITY_PAGE_SIZE),
         # Prefer trials that have completed and reported results — the audit
         # cares about outcomes, not active recruitment.
         "filter.overallStatus": "COMPLETED|TERMINATED|ACTIVE_NOT_RECRUITING",
     }
-    # Let transport/HTTP/JSON errors propagate. The api.py route layer wraps
-    # every endpoint in a try/except that returns 500, which the iOS auditor
-    # then surfaces as a .failed step rather than the misleading .skipped
-    # ("no trials returned") that swallowing-then-returning-[] would produce.
-    resp = requests.get(CT_GOV_V2, params=params, timeout=PER_TRIAL_TIMEOUT)
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"ClinicalTrials.gov returned HTTP {resp.status_code} for "
-            f"condition={condition!r} modality={modality!r}"
-        )
-    payload = resp.json()
 
-    studies = payload.get("studies") or []
+    # Paginate so the sort picks from a deeper pool than CT.gov's default
+    # first-page relevance ordering. Stops early when (a) no more pages,
+    # (b) hit the hard cap, or (c) reached MAX_PAGES. Transport/HTTP/JSON
+    # errors propagate to the route layer as before — no swallowing.
+    all_studies: List[Dict] = []
+    next_token: Optional[str] = None
+    for _page in range(_MODALITY_MAX_PAGES):
+        params = dict(base_params)
+        if next_token:
+            params["pageToken"] = next_token
+        resp = requests.get(CT_GOV_V2, params=params, timeout=PER_TRIAL_TIMEOUT)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"ClinicalTrials.gov returned HTTP {resp.status_code} for "
+                f"condition={condition_norm!r} modality={modality!r}"
+            )
+        payload = resp.json()
+        page_studies = payload.get("studies") or []
+        all_studies.extend(page_studies)
+        next_token = payload.get("nextPageToken")
+        if not next_token or len(all_studies) >= _MODALITY_HARD_CAP:
+            break
+
     trials: List[Dict] = []
-    for raw in studies:
+    for raw in all_studies:
         try:
             trials.append(parse_trial(raw))
         except Exception as e:
@@ -228,7 +253,7 @@ def fetch_modality_trials(
                 ((raw or {}).get("protocolSection") or {})
                 .get("identificationModule") or {}
             ).get("nctId") or "unknown"
-            print(f"   ⚠️  Failed to parse trial {nct_id} ({condition} / {modality}): {e}")
+            print(f"   ⚠️  Failed to parse trial {nct_id} ({condition_norm} / {modality}): {e}")
             continue
 
     def _sort_key(t: Dict):
