@@ -10,6 +10,8 @@ Public API:
     fetch_trials_for_drug(chembl_id, max_trials=15) -> List[Dict]
 """
 
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
@@ -28,6 +30,89 @@ TRIAL_FIELDS = (
 )
 PER_TRIAL_TIMEOUT = 10  # seconds
 MAX_PARALLEL = 5  # concurrent CT.gov requests
+
+# Retry knobs for the modality search. CT.gov occasionally returns 5xx /
+# 429 under load; retrying with backoff converts a transient outage from a
+# failed audit step into a slightly slower one. Capped at 3 attempts so a
+# truly broken upstream still fails reasonably quickly.
+_RETRY_MAX_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 0.5  # seconds; multiplied by 2**attempt
+_RETRY_JITTER_MAX = 0.1  # seconds; uniform [0, this)
+
+
+def _ct_get_with_retries(
+    url: str,
+    *,
+    params: Dict,
+    timeout: int,
+    condition: str,
+    modality: str,
+) -> "requests.Response":
+    """GET `url` with bounded exponential-backoff retries on transient
+    failures (RequestException, HTTP 429, HTTP 5xx). Returns a 200
+    `requests.Response`; raises `RuntimeError` for any non-200 outcome —
+    permanent (other 4xx) immediately, transient after retries are exhausted.
+
+    Kept private to this module — the modality search is the only caller
+    that needs retry semantics; `fetch_trial` deliberately swallows errors
+    per its own contract."""
+    last_exc: Optional[BaseException] = None
+    last_resp: Optional["requests.Response"] = None
+
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            last_resp = None
+        else:
+            if resp.status_code == 200:
+                return resp
+            # Permanent failure (other 4xx) — fail fast, no retries.
+            if resp.status_code != 429 and not (500 <= resp.status_code < 600):
+                raise RuntimeError(
+                    f"ClinicalTrials.gov returned HTTP {resp.status_code} for "
+                    f"condition={condition!r} modality={modality!r}"
+                )
+            last_resp = resp
+            last_exc = None
+
+        if attempt + 1 < _RETRY_MAX_ATTEMPTS:
+            delay = _RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, _RETRY_JITTER_MAX)
+            time.sleep(delay)
+
+    # Exhausted retries.
+    if last_resp is not None:
+        raise RuntimeError(
+            f"ClinicalTrials.gov returned HTTP {last_resp.status_code} for "
+            f"condition={condition!r} modality={modality!r}"
+            f" (after {_RETRY_MAX_ATTEMPTS} attempts)"
+        )
+    # last_exc must be set: every attempt either returned a response or
+    # raised a RequestException.
+    raise RuntimeError(
+        f"ClinicalTrials.gov request failed for "
+        f"condition={condition!r} modality={modality!r}"
+        f" after {_RETRY_MAX_ATTEMPTS} attempts: {last_exc}"
+    ) from last_exc
+
+
+def _trial_sort_key(t: Dict):
+    """Shared ordering for fetched trials. Surfaces the most informative
+    first: trials with reported numeric outcomes across multiple arms (true
+    apples-to-apples regimen comparisons), then any-results, then trials with
+    more arms, with a stable NCT-ID tiebreak."""
+    outcomes = t.get("primary_outcomes") or []
+    is_comparable = any(
+        len(o.get("arm_results") or []) >= 2 for o in outcomes
+    )
+    n_armed = len(t.get("arms") or [])
+    return (
+        not is_comparable,        # comparable trials first
+        not t.get("has_results"), # then any-results
+        -n_armed,                 # then more arms = more interesting
+        t.get("nct_id") or "",
+    )
 
 
 def _strip_intervention_prefix(name: str) -> str:
@@ -134,26 +219,7 @@ def fetch_trials_for_drug(chembl_id: str, max_trials: int = 15) -> List[Dict]:
             if parsed:
                 trials.append(parsed)
 
-    # Surface the most informative trials first: those with reported numeric
-    # outcomes for multiple arms (true treatment comparisons). Then trials
-    # with any results, then anything else. Stable by NCT ID within tier.
-    def _sort_key(t: Dict):
-        outcomes = t.get("primary_outcomes") or []
-        # A trial is "comparable" when at least one primary outcome has
-        # measurements for >=2 arms — that's the apples-to-apples comparison
-        # the user is after ("regimen X vs regimen X+Y").
-        is_comparable = any(
-            len(o.get("arm_results") or []) >= 2 for o in outcomes
-        )
-        n_armed = len(t.get("arms") or [])
-        return (
-            not is_comparable,        # comparable trials first
-            not t.get("has_results"), # then any-results
-            -n_armed,                 # then more arms = more interesting
-            t.get("nct_id") or "",
-        )
-
-    trials.sort(key=_sort_key)
+    trials.sort(key=_trial_sort_key)
     return trials[:max_trials]
 
 
@@ -220,20 +286,22 @@ def fetch_modality_trials(
 
     # Paginate so the sort picks from a deeper pool than CT.gov's default
     # first-page relevance ordering. Stops early when (a) no more pages,
-    # (b) hit the hard cap, or (c) reached MAX_PAGES. Transport/HTTP/JSON
-    # errors propagate to the route layer as before — no swallowing.
+    # (b) hit the hard cap, or (c) reached MAX_PAGES. Each page is fetched
+    # via _ct_get_with_retries so transient 429/5xx and transport blips
+    # don't fail the whole audit step; permanent errors still propagate.
     all_studies: List[Dict] = []
     next_token: Optional[str] = None
     for _page in range(_MODALITY_MAX_PAGES):
         params = dict(base_params)
         if next_token:
             params["pageToken"] = next_token
-        resp = requests.get(CT_GOV_V2, params=params, timeout=PER_TRIAL_TIMEOUT)
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"ClinicalTrials.gov returned HTTP {resp.status_code} for "
-                f"condition={condition_norm!r} modality={modality!r}"
-            )
+        resp = _ct_get_with_retries(
+            CT_GOV_V2,
+            params=params,
+            timeout=PER_TRIAL_TIMEOUT,
+            condition=condition_norm,
+            modality=modality,
+        )
         payload = resp.json()
         page_studies = payload.get("studies") or []
         all_studies.extend(page_studies)
@@ -267,20 +335,7 @@ def fetch_modality_trials(
             print(f"   ⚠️  Failed to parse trial {nct_id} ({condition_norm} / {modality}): {e}")
             continue
 
-    def _sort_key(t: Dict):
-        outcomes = t.get("primary_outcomes") or []
-        is_comparable = any(
-            len(o.get("arm_results") or []) >= 2 for o in outcomes
-        )
-        n_armed = len(t.get("arms") or [])
-        return (
-            not is_comparable,
-            not t.get("has_results"),
-            -n_armed,
-            t.get("nct_id") or "",
-        )
-
-    trials.sort(key=_sort_key)
+    trials.sort(key=_trial_sort_key)
     return trials[:max_trials]
 
 
