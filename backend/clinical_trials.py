@@ -217,7 +217,15 @@ def fetch_modality_trials(
     for raw in studies:
         try:
             trials.append(parse_trial(raw))
-        except Exception:
+        except Exception as e:
+            # Log so unexpected schema changes / bad records are diagnosable
+            # rather than invisibly dropped. Keeps `print` style consistent
+            # with the rest of this module (no logger configured here).
+            nct_id = (
+                ((raw or {}).get("protocolSection") or {})
+                .get("identificationModule") or {}
+            ).get("nctId") or "unknown"
+            print(f"   ⚠️  Failed to parse trial {nct_id} ({condition} / {modality}): {e}")
             continue
 
     def _sort_key(t: Dict):

@@ -198,8 +198,16 @@ def _score_section(
                 break
 
     if stage_detail:
-        # Match any 4+ char alpha token (bone, brain, liver, lymph, etc.).
-        for token in re.findall(r"[a-z]{4,}", stage_detail.lower()):
+        # Capture both prose tokens (bone, brain, liver, lymph) AND TNM-style
+        # atoms (t2, n1, m0, t2a). Two complementary patterns: the first
+        # matches 4+ char alpha words, the second matches letter+digit
+        # combinations anywhere in the string — important because "T2N1M0" is
+        # one continuous token with no word boundaries between T2, N1, M0.
+        detail_lc = stage_detail.lower()
+        tokens: set = set()
+        tokens.update(re.findall(r"[a-z]{4,}", detail_lc))
+        tokens.update(re.findall(r"[a-z]\d[a-z]?", detail_lc))
+        for token in tokens:
             if token in title_lc:
                 score += 5
             elif token in text_lc:
@@ -269,6 +277,13 @@ def fetch_pdq_summary(
             "parent": s.get("parent"),
             "text": text,
         })
+
+    if not selected:
+        # Page structure changed, slug pointed somewhere unexpected, or
+        # extraction returned no relevant content. Surface as pdq_unavailable
+        # so the caller renders a "skipped" step rather than success-with-
+        # empty-content, which the LLM has nothing to do with.
+        return None
 
     return {
         "slug": slug,

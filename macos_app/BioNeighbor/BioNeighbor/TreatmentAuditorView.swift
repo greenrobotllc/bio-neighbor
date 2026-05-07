@@ -55,6 +55,12 @@ struct TreatmentAuditorView: View {
     @State private var auditOutput: String = ""
     @State private var auditError: String?
     @State private var auditSteps: [AuditStep] = []
+    /// Identifies the in-flight audit run. Cancellation is cooperative —
+    /// stale background work (Ollama still flushing buffered chunks, an
+    /// in-flight modality fetch, etc.) can land *after* a new audit starts.
+    /// Every shared-state mutation guards on this token so an old run can't
+    /// clobber the new run's output, steps, or error state.
+    @State private var currentAuditRunID: UUID?
 
     var body: some View {
         ScrollView {
@@ -391,7 +397,10 @@ struct TreatmentAuditorView: View {
     // MARK: - Audit section
 
     private var canAudit: Bool {
-        selectedCancerType != nil && !prescribedDrugs.isEmpty && !isAuditing
+        selectedCancerType != nil
+            && selectedSubtype != nil   // v2 deep audit endpoints (PDQ, modality trials) key on subtype id
+            && !prescribedDrugs.isEmpty
+            && !isAuditing
     }
 
     private var auditSection: some View {
@@ -462,6 +471,9 @@ struct TreatmentAuditorView: View {
 
     private var disabledReason: String {
         if selectedCancerType == nil { return "Select a cancer type to enable auditing." }
+        if selectedSubtype == nil {
+            return "Select a subtype — the deep audit needs it for the NCI PDQ and modality-trial searches."
+        }
         if prescribedDrugs.isEmpty { return "Add at least one prescribed drug." }
         return ""
     }
@@ -555,8 +567,12 @@ struct TreatmentAuditorView: View {
     ///   - For each non-empty source, stream a per-source mini-summary
     ///   - Stream the final synthesis combining all summaries
     /// Each step appends to `auditSteps` so the UI can render live progress.
+    /// Every state mutation is guarded by a per-run UUID so a cancelled run
+    /// can't clobber the new run's output mid-flight.
     private func runDeepAudit() {
         auditTask?.cancel()
+        // The audit button is disabled when these are nil (`canAudit`), so
+        // these guards are belt-and-suspenders.
         guard let cancerType = selectedCancerType,
               let subtype = selectedSubtype else { return }
 
@@ -570,16 +586,29 @@ struct TreatmentAuditorView: View {
         let stageSnapshot = selectedStage.promptValue
         let stageDetailSnapshot = stageDetail.trimmingCharacters(in: .whitespaces)
 
+        let runID = UUID()
+        currentAuditRunID = runID
         auditOutput = ""
         auditError = nil
         isAuditing = true
         auditSteps = []
 
         auditTask = Task { @MainActor in
-            defer { isAuditing = false }
+            defer {
+                // Only the active run owns the isAuditing/UI state. A stale
+                // run finishing late must not flip isAuditing back to false
+                // mid-way through a fresh run.
+                if self.currentAuditRunID == runID {
+                    self.isAuditing = false
+                    self.currentAuditRunID = nil
+                }
+            }
 
             // 1. PDQ
-            let pdq = await runStep(label: "Pulling NCI PDQ for \(cancerType.displayName ?? cancerType.name)") {
+            let pdq = await runStep(
+                runID: runID,
+                label: "Pulling NCI PDQ for \(cancerType.displayName ?? cancerType.name)"
+            ) {
                 try await BackendService.shared.fetchPDQSummary(
                     subtypeId: subtype.id,
                     stage: stageSnapshot,
@@ -591,15 +620,18 @@ struct TreatmentAuditorView: View {
                 }
                 return nil
             }
-            if Task.isCancelled { return }
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
 
             // 2. Modality trials (4 in parallel).
-            let modalityTrials = await fetchModalityTrialsParallel(subtypeId: subtype.id)
-            if Task.isCancelled { return }
+            let modalityTrials = await fetchModalityTrialsParallel(
+                subtypeId: subtype.id,
+                runID: runID
+            )
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
 
             // 3. Per-drug trials (cap 5).
-            let drugTrials = await fetchTrialsForDrugs(drugsSnapshot)
-            if Task.isCancelled { return }
+            let drugTrials = await fetchTrialsForDrugs(drugsSnapshot, runID: runID)
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
 
             // 4. Build the plan that gets passed to the LLM helpers.
             let plan = TreatmentAuditPlan(
@@ -620,9 +652,7 @@ struct TreatmentAuditorView: View {
 
             let planContext = OllamaService.planContextSummary(plan)
 
-            // 5. Per-source mini-summaries. Each non-empty source becomes one
-            //    LLM streaming call. Stream into a per-step "summary" buffer
-            //    we'll feed into the final synthesis.
+            // 5. Per-source mini-summaries.
             var summaries: [(label: String, summary: String)] = []
 
             // PDQ mini-summary
@@ -630,13 +660,14 @@ struct TreatmentAuditorView: View {
                 let body = OllamaService.compressPDQ(pdq)
                 let label = "NCI PDQ — \(pdq.slug.capitalized)"
                 let summary = await runSummaryStep(
+                    runID: runID,
                     label: "Summarizing \(label)",
                     sourceLabel: label,
                     sourceBody: body,
                     planContext: planContext
                 )
                 if let summary { summaries.append((label, summary)) }
-                if Task.isCancelled { return }
+                if Task.isCancelled || self.currentAuditRunID != runID { return }
             }
 
             // Modality summaries
@@ -646,47 +677,56 @@ struct TreatmentAuditorView: View {
                 let body = OllamaService.compressTrials(entry.trials, header: header)
                 let label = "\(entry.modality.capitalized) trials"
                 let summary = await runSummaryStep(
+                    runID: runID,
                     label: "Summarizing \(label)",
                     sourceLabel: label,
                     sourceBody: body,
                     planContext: planContext
                 )
                 if let summary { summaries.append((label, summary)) }
-                if Task.isCancelled { return }
+                if Task.isCancelled || self.currentAuditRunID != runID { return }
             }
 
-            // Per-drug summaries (one per drug with non-empty trials).
+            // Per-drug summaries
             for entry in drugTrials where !entry.trials.isEmpty {
                 let header = "Trials linked to \(entry.drugName)" +
                     (entry.chemblId.map { " [\($0)]" } ?? "")
                 let body = OllamaService.compressTrials(entry.trials, header: header)
                 let label = "\(entry.drugName) trials"
                 let summary = await runSummaryStep(
+                    runID: runID,
                     label: "Summarizing \(label)",
                     sourceLabel: label,
                     sourceBody: body,
                     planContext: planContext
                 )
                 if let summary { summaries.append((label, summary)) }
-                if Task.isCancelled { return }
+                if Task.isCancelled || self.currentAuditRunID != runID { return }
             }
 
-            // 6. Final synthesis — streamed into the AISummaryCard.
-            let synthesisStepIndex = appendStep(label: "Synthesizing final audit", state: .running)
+            // 6. Final synthesis.
+            let synthesisStepIndex = appendStep(
+                runID: runID,
+                label: "Synthesizing final audit",
+                state: .running
+            )
             do {
                 let stream = OllamaService.shared.synthesizeAuditFromSummaries(
                     plan: plan,
                     sourceSummaries: summaries
                 )
                 for try await chunk in stream {
-                    if Task.isCancelled { return }
-                    auditOutput += chunk
+                    if Task.isCancelled || self.currentAuditRunID != runID { return }
+                    self.auditOutput += chunk
                 }
-                updateStep(at: synthesisStepIndex, state: .done)
+                if let idx = synthesisStepIndex {
+                    updateStep(runID: runID, at: idx, state: .done)
+                }
             } catch {
-                if !Task.isCancelled {
-                    auditError = error.localizedDescription
-                    updateStep(at: synthesisStepIndex, state: .failed(error.localizedDescription))
+                guard !Task.isCancelled, self.currentAuditRunID == runID else { return }
+                self.auditError = error.localizedDescription
+                if let idx = synthesisStepIndex {
+                    updateStep(runID: runID, at: idx, state: .failed(error.localizedDescription))
                 }
             }
         }
@@ -694,16 +734,27 @@ struct TreatmentAuditorView: View {
 
     // MARK: - Step helpers
 
+    /// Returns true when the supplied run is still the active audit. Used by
+    /// every shared-state mutator to guard against stale work landing after
+    /// the user kicked off a new audit.
+    private func isActiveRun(_ runID: UUID) -> Bool {
+        currentAuditRunID == runID
+    }
+
+    /// Returns the new step's index, or nil if the supplied run is no longer
+    /// active (in which case the caller should bail out — the array it's
+    /// indexing into has been reset by a fresh run).
     @MainActor
     @discardableResult
-    private func appendStep(label: String, state: AuditStep.State) -> Int {
+    private func appendStep(runID: UUID, label: String, state: AuditStep.State) -> Int? {
+        guard isActiveRun(runID) else { return nil }
         auditSteps.append(AuditStep(label: label, state: state))
         return auditSteps.count - 1
     }
 
     @MainActor
-    private func updateStep(at index: Int, state: AuditStep.State) {
-        guard auditSteps.indices.contains(index) else { return }
+    private func updateStep(runID: UUID, at index: Int, state: AuditStep.State) {
+        guard isActiveRun(runID), auditSteps.indices.contains(index) else { return }
         auditSteps[index] = AuditStep(label: auditSteps[index].label, state: state)
     }
 
@@ -713,23 +764,26 @@ struct TreatmentAuditorView: View {
     /// cancers — expected, not a failure).
     @MainActor
     private func runStep<T>(
+        runID: UUID,
         label: String,
         operation: () async throws -> T,
         skipReason: (Error) -> String? = { _ in nil }
     ) async -> T? {
-        let index = appendStep(label: label, state: .running)
+        guard let index = appendStep(runID: runID, label: label, state: .running) else {
+            return nil
+        }
         do {
             let value = try await operation()
-            updateStep(at: index, state: .done)
+            updateStep(runID: runID, at: index, state: .done)
             return value
         } catch is CancellationError {
-            updateStep(at: index, state: .failed("Cancelled"))
+            updateStep(runID: runID, at: index, state: .failed("Cancelled"))
             return nil
         } catch {
             if let reason = skipReason(error) {
-                updateStep(at: index, state: .skipped(reason))
+                updateStep(runID: runID, at: index, state: .skipped(reason))
             } else {
-                updateStep(at: index, state: .failed(error.localizedDescription))
+                updateStep(runID: runID, at: index, state: .failed(error.localizedDescription))
             }
             return nil
         }
@@ -741,12 +795,15 @@ struct TreatmentAuditorView: View {
     /// remaining sources).
     @MainActor
     private func runSummaryStep(
+        runID: UUID,
         label: String,
         sourceLabel: String,
         sourceBody: String,
         planContext: String
     ) async -> String? {
-        let index = appendStep(label: label, state: .running)
+        guard let index = appendStep(runID: runID, label: label, state: .running) else {
+            return nil
+        }
         var accumulated = ""
         do {
             let stream = OllamaService.shared.summarizeAuditSource(
@@ -755,37 +812,47 @@ struct TreatmentAuditorView: View {
                 planContext: planContext
             )
             for try await chunk in stream {
-                if Task.isCancelled { break }
+                if Task.isCancelled || !isActiveRun(runID) { break }
                 accumulated += chunk
             }
-            if Task.isCancelled {
-                updateStep(at: index, state: .failed("Cancelled"))
+            if Task.isCancelled || !isActiveRun(runID) {
+                updateStep(runID: runID, at: index, state: .failed("Cancelled"))
                 return nil
             }
-            updateStep(at: index, state: .done)
+            updateStep(runID: runID, at: index, state: .done)
             return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            updateStep(at: index, state: .failed(error.localizedDescription))
+            updateStep(runID: runID, at: index, state: .failed(error.localizedDescription))
             return nil
         }
     }
 
     // MARK: - Fetch helpers
 
-    /// Fetches trials per modality (radiation, surgery, chemotherapy, targeted)
-    /// in parallel, capped at MAX_PARALLEL=4. Each modality is its own progress
-    /// step. Failures degrade to empty trial lists rather than aborting.
+    /// Per-modality fetch outcome — keeps the trial list and any error
+    /// returned by the backend so the step UI can distinguish a true
+    /// no-results response from a backend failure.
+    private struct ModalityFetchOutcome {
+        let modality: String
+        let trials: [ClinicalTrial]
+        let error: Error?
+    }
+
+    /// Fetches trials per modality (radiation, surgery, chemotherapy,
+    /// targeted) in parallel. Each modality is its own progress step; a
+    /// network/backend failure now surfaces as `.failed` (with the original
+    /// error message) rather than being mis-reported as "no trials".
     @MainActor
     private func fetchModalityTrialsParallel(
-        subtypeId: Int
+        subtypeId: Int,
+        runID: UUID
     ) async -> [TreatmentAuditPlan.ModalityTrials] {
         let modalities = ["radiation", "surgery", "chemotherapy", "targeted"]
-        // Pre-create step indices so concurrent updates land in the right rows.
-        let stepIndices: [Int] = modalities.map {
-            appendStep(label: "Searching \($0) trials", state: .running)
+        let stepIndices: [Int?] = modalities.map {
+            appendStep(runID: runID, label: "Searching \($0) trials", state: .running)
         }
 
-        return await withTaskGroup(of: (Int, TreatmentAuditPlan.ModalityTrials).self) { group in
+        return await withTaskGroup(of: (Int, ModalityFetchOutcome).self) { group in
             var results = Array<TreatmentAuditPlan.ModalityTrials?>(
                 repeating: nil, count: modalities.count
             )
@@ -797,26 +864,29 @@ struct TreatmentAuditorView: View {
                             modality: modality,
                             limit: 8
                         )
-                        return (i, TreatmentAuditPlan.ModalityTrials(
-                            modality: modality,
-                            condition: nil,
-                            trials: trials
-                        ))
+                        return (i, ModalityFetchOutcome(modality: modality, trials: trials, error: nil))
                     } catch {
-                        return (i, TreatmentAuditPlan.ModalityTrials(
-                            modality: modality,
-                            condition: nil,
-                            trials: []
-                        ))
+                        return (i, ModalityFetchOutcome(modality: modality, trials: [], error: error))
                     }
                 }
             }
-            while let (i, payload) = await group.next() {
-                results[i] = payload
-                let state: AuditStep.State = payload.trials.isEmpty
-                    ? .skipped("No \(payload.modality) trials returned")
-                    : .done
-                updateStep(at: stepIndices[i], state: state)
+            while let (i, outcome) = await group.next() {
+                results[i] = TreatmentAuditPlan.ModalityTrials(
+                    modality: outcome.modality,
+                    condition: nil,
+                    trials: outcome.trials
+                )
+                let state: AuditStep.State
+                if let err = outcome.error {
+                    state = .failed(err.localizedDescription)
+                } else if outcome.trials.isEmpty {
+                    state = .skipped("No \(outcome.modality) trials returned")
+                } else {
+                    state = .done
+                }
+                if let stepIndex = stepIndices[i] {
+                    updateStep(runID: runID, at: stepIndex, state: state)
+                }
             }
             return results.compactMap { $0 }
         }
@@ -827,11 +897,13 @@ struct TreatmentAuditorView: View {
     /// the prompt acknowledges them. Capped at 5 concurrent requests.
     @MainActor
     private func fetchTrialsForDrugs(
-        _ drugs: [PrescribedDrug]
+        _ drugs: [PrescribedDrug],
+        runID: UUID
     ) async -> [TreatmentAuditPlan.DrugTrials] {
         // One progress step covers the whole drug-trial fetch — per-drug
         // rows would explode the step list when many drugs are listed.
         let stepIndex = appendStep(
+            runID: runID,
             label: "Fetching trials for \(drugs.count) drug\(drugs.count == 1 ? "" : "s")",
             state: .running
         )
@@ -878,12 +950,15 @@ struct TreatmentAuditorView: View {
             return results.compactMap { $0 }
         }
         let nonEmpty = collected.filter { !$0.trials.isEmpty }.count
-        updateStep(
-            at: stepIndex,
-            state: nonEmpty == 0
-                ? .skipped("No trials returned for any prescribed drug")
-                : .done
-        )
+        if let stepIndex = stepIndex {
+            updateStep(
+                runID: runID,
+                at: stepIndex,
+                state: nonEmpty == 0
+                    ? .skipped("No trials returned for any prescribed drug")
+                    : .done
+            )
+        }
         return collected
     }
 }

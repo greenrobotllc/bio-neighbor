@@ -8,7 +8,7 @@ import logging
 import sys
 import os
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -3650,13 +3650,15 @@ def v2_get_subtype(subtype_id: int):
 
 def _condition_term_for_subtype(row) -> str:
     """Build a condition string for CT.gov / PDQ from a (subtype_row, type_row).
-    Prefer the subtype's first chembl_indication_term, else its short_name,
-    else the parent cancer-type's name."""
+    Prefer the subtype's first chembl_indication_term, else its full
+    subtype_name (e.g. "HER2-positive breast cancer" — better CT.gov match
+    than the bare short_name "HER2+"), else short_name, else the parent
+    cancer-type's name."""
     chembl_terms = _parse_json_field(row.get('chembl_indication_terms')) or []
     if chembl_terms:
         return chembl_terms[0]
-    return (row.get('short_name')
-            or row.get('subtype_name')
+    return (row.get('subtype_name')
+            or row.get('short_name')
             or row.get('cancer_type_name')
             or '').strip()
 
@@ -3730,12 +3732,28 @@ def v2_subtype_treatment_summary(subtype_id: int):
         stage = request.args.get('stage', '', type=str).strip() or None
         stage_detail = request.args.get('stage_detail', '', type=str).strip() or None
 
-        result = fetch_pdq_summary(
-            cancer_type_name=subtype['cancer_type_name'],
-            stage=stage,
-            stage_detail=stage_detail,
-            markers=subtype['markers'],
-        )
+        # Try the subtype's full name first so subtypes that have their own
+        # PDQ page (e.g. "Non-small cell lung cancer") get the more specific
+        # slug match before we fall back to the parent cancer type. Both calls
+        # share an LRU-cached HTTP fetch in pdq_fetcher, so an unmapped first
+        # candidate is just a dictionary lookup with no network cost.
+        candidates: List[str] = []
+        if subtype.get('subtype_name'):
+            candidates.append(subtype['subtype_name'])
+        if subtype['cancer_type_name'] and subtype['cancer_type_name'] not in candidates:
+            candidates.append(subtype['cancer_type_name'])
+
+        result = None
+        for candidate in candidates:
+            result = fetch_pdq_summary(
+                cancer_type_name=candidate,
+                stage=stage,
+                stage_detail=stage_detail,
+                markers=subtype['markers'],
+            )
+            if result is not None:
+                break
+
         if result is None:
             return jsonify({
                 'success': False,
