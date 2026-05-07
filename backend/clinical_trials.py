@@ -157,6 +157,86 @@ def fetch_trials_for_drug(chembl_id: str, max_trials: int = 15) -> List[Dict]:
     return trials[:max_trials]
 
 
+"""
+Modality-keyed search.
+
+For the Treatment Auditor v2: instead of (or in addition to) fetching trials
+linked to a specific drug via ChEMBL drug_indication, search ClinicalTrials.gov
+by condition + intervention. This surfaces multi-arm modality trials for a
+cancer subtype regardless of the patient's drug list.
+
+Public API: fetch_modality_trials(condition, modality, max_trials=10)
+"""
+
+# Maps the Treatment Auditor's modality keys to the intervention strings that
+# CT.gov's `query.intr=` accepts. Kept short and concrete so the search isn't
+# diluted by overly-broad terms.
+_MODALITY_INTERVENTION_TERMS = {
+    "radiation": "radiation therapy",
+    "surgery": "surgery",
+    "chemotherapy": "chemotherapy",
+    "targeted": "targeted therapy",
+}
+
+
+def fetch_modality_trials(
+    condition: str,
+    modality: str,
+    max_trials: int = 10,
+) -> List[Dict]:
+    """Search CT.gov v2 for trials matching `condition` + the intervention
+    term mapped from `modality`. Returns parsed trials in the same shape as
+    `fetch_trials_for_drug`, sorted with multi-arm comparable outcomes first.
+
+    `modality` must be one of: radiation, surgery, chemotherapy, targeted.
+    """
+    intervention = _MODALITY_INTERVENTION_TERMS.get((modality or "").strip().lower())
+    if not intervention or not condition:
+        return []
+
+    params = {
+        "query.cond": condition,
+        "query.intr": intervention,
+        "fields": TRIAL_FIELDS,
+        "pageSize": str(max(max_trials * 2, 20)),
+        # Prefer trials that have completed and reported results — the audit
+        # cares about outcomes, not active recruitment.
+        "filter.overallStatus": "COMPLETED|TERMINATED|ACTIVE_NOT_RECRUITING",
+    }
+    try:
+        resp = requests.get(CT_GOV_V2, params=params, timeout=PER_TRIAL_TIMEOUT)
+        if resp.status_code != 200:
+            return []
+        payload = resp.json()
+    except Exception as e:
+        print(f"   ⚠️  CT.gov modality search error ({condition} / {modality}): {e}")
+        return []
+
+    studies = payload.get("studies") or []
+    trials: List[Dict] = []
+    for raw in studies:
+        try:
+            trials.append(parse_trial(raw))
+        except Exception:
+            continue
+
+    def _sort_key(t: Dict):
+        outcomes = t.get("primary_outcomes") or []
+        is_comparable = any(
+            len(o.get("arm_results") or []) >= 2 for o in outcomes
+        )
+        n_armed = len(t.get("arms") or [])
+        return (
+            not is_comparable,
+            not t.get("has_results"),
+            -n_armed,
+            t.get("nct_id") or "",
+        )
+
+    trials.sort(key=_sort_key)
+    return trials[:max_trials]
+
+
 if __name__ == "__main__":
     import argparse
     import json

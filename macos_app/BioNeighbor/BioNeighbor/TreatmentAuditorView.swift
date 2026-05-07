@@ -2,16 +2,22 @@
 //  TreatmentAuditorView.swift
 //  BioNeighbor
 //
-//  Treatment Auditor (issue #45). Single-screen workflow where the user
-//  describes their cancer treatment plan — disease/subtype, prescribed
+//  Treatment Auditor (issue #45 + #49 + multi-source modality search).
+//  Single-screen workflow where the user describes their cancer treatment
+//  plan — disease/subtype, stage + free-text stage detail, prescribed
 //  drugs, scheduled treatments, symptoms/side effects — and the on-device
-//  AI cross-references ClinicalTrials.gov data to flag efficacy signals,
-//  alternative regimens, and gaps.
+//  AI runs a multi-pass audit:
+//    1. Fetches NCI PDQ standard-of-care text for the cancer type.
+//    2. Searches ClinicalTrials.gov for radiation / surgery / chemo /
+//       targeted-therapy trials in the subtype (independent of the
+//       prescribed drugs).
+//    3. Fetches per-drug trials for each prescribed drug.
+//    4. Streams a per-source mini-summary from Ollama for each source.
+//    5. Streams a final synthesis combining all summaries with explicit
+//       "Further reading" citations.
 //
-//  v1 is ephemeral (state lives in @State; nothing persists across launches)
-//  and cancer-only. Reuses the v2 cancer-types/subtypes endpoints, the
-//  /search/drugs autocomplete, and the existing per-drug trials endpoint.
-//  AI streaming goes through OllamaService.auditTreatmentPlan.
+//  Each step is shown as a progress row so the wait feels like work.
+//  State is ephemeral (@State); nothing persists across launches.
 //
 
 import SwiftUI
@@ -24,6 +30,10 @@ struct TreatmentAuditorView: View {
     @State private var selectedCancerType: CancerType?
     @State private var selectedSubtype: CancerSubtype?
     @State private var showDiseasePicker = false
+
+    // Stage (v2)
+    @State private var selectedStage: StageOption = .unspecified
+    @State private var stageDetail: String = ""
 
     // Drug selection
     @State private var drugQuery: String = ""
@@ -44,7 +54,7 @@ struct TreatmentAuditorView: View {
     @State private var isAuditing = false
     @State private var auditOutput: String = ""
     @State private var auditError: String?
-    @State private var trialFetchProgress: String?
+    @State private var auditSteps: [AuditStep] = []
 
     var body: some View {
         ScrollView {
@@ -94,7 +104,7 @@ struct TreatmentAuditorView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "info.circle")
                 .foregroundColor(.secondary)
-            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. v1 uses ClinicalTrials.gov data only — adverse-event databases and drug-interaction sources are planned follow-ups.")
+            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches). Adverse-event databases, drug-interaction sources, and tumor-mutation matching are planned follow-ups.")
                 .appFont(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -112,7 +122,7 @@ struct TreatmentAuditorView: View {
     private var diseaseSection: some View {
         sectionCard(title: "1. Disease", systemImage: "cross.case") {
             if let type = selectedCancerType {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(type.displayName ?? type.name)
@@ -135,6 +145,9 @@ struct TreatmentAuditorView: View {
                     if let markers = selectedSubtype?.markers, !markers.isEmpty {
                         FlowChips(items: markers)
                     }
+
+                    Divider()
+                    stageEntry
                 }
             } else {
                 Button {
@@ -144,6 +157,40 @@ struct TreatmentAuditorView: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    /// Stage Picker + free-text "Stage details" field. The free-text field is
+    /// always editable (regardless of the picker) so users can describe
+    /// metastasis sites, T/N/M codes, recurrence timing, etc. — anything the
+    /// picker's coarse buckets can't capture. Both feed the audit prompt.
+    private var stageEntry: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Stage")
+                    .appFont(.subheadline, weight: .semibold)
+                Spacer()
+                Picker("Stage", selection: $selectedStage) {
+                    ForEach(StageOption.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 220)
+                .labelsHidden()
+            }
+
+            TextField(
+                "Stage details (e.g. metastasized to bone, T2N1M0, recurrent after 3 years)",
+                text: $stageDetail,
+                axis: .vertical
+            )
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(1...3)
+
+            Text("Both fields are passed to the audit. Leave them blank if unknown — the audit still runs but with weaker stage-specific guidance.")
+                .appFont(.caption)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -352,9 +399,9 @@ struct TreatmentAuditorView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Button {
-                        runAudit()
+                        runDeepAudit()
                     } label: {
-                        Label(isAuditing ? "Auditing…" : "Run audit", systemImage: "sparkles")
+                        Label(isAuditing ? "Auditing…" : "Run deep audit", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canAudit)
@@ -377,31 +424,35 @@ struct TreatmentAuditorView: View {
                     }
                 }
 
-                if let progress = trialFetchProgress {
-                    Text(progress)
-                        .appFont(.caption)
-                        .foregroundColor(.secondary)
+                if !auditSteps.isEmpty {
+                    AuditStepList(steps: auditSteps)
                 }
 
                 if !auditOutput.isEmpty || isAuditing || auditError != nil {
                     AISummaryCard(
                         summary: auditOutput,
-                        isStreaming: isAuditing,
+                        isStreaming: isAuditing && auditOutput.isEmpty == false,
                         error: auditError,
-                        onRegenerate: { runAudit() },
+                        onRegenerate: { runDeepAudit() },
                         onDismiss: {
                             auditTask?.cancel()
                             auditTask = nil
                             auditOutput = ""
                             auditError = nil
                             isAuditing = false
-                            trialFetchProgress = nil
+                            auditSteps = []
                         }
                     )
                 }
 
                 if !canAudit && !isAuditing {
                     Text(disabledReason)
+                        .appFont(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if isAuditing {
+                    Text("This deep audit can take a few minutes — it's running multiple searches and on-device AI passes per source.")
                         .appFont(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -497,69 +548,295 @@ struct TreatmentAuditorView: View {
         }
     }
 
-    private func runAudit() {
+    /// Multi-pass audit orchestrator. Runs in this order:
+    ///   - Fetch NCI PDQ summary for the parent cancer type (1 call)
+    ///   - Fetch modality trials × 4 in parallel (radiation/surgery/chemo/targeted)
+    ///   - Fetch per-drug trials in parallel (capped at 5 concurrent)
+    ///   - For each non-empty source, stream a per-source mini-summary
+    ///   - Stream the final synthesis combining all summaries
+    /// Each step appends to `auditSteps` so the UI can render live progress.
+    private func runDeepAudit() {
         auditTask?.cancel()
-        guard let cancerType = selectedCancerType else { return }
+        guard let cancerType = selectedCancerType,
+              let subtype = selectedSubtype else { return }
 
+        // Snapshot inputs at run-start so edits during the audit don't
+        // mutate the in-flight prompt.
         let drugsSnapshot = prescribedDrugs
         let treatmentsSnapshot = treatments.map(\.text)
         let symptomsSnapshot = symptoms.map {
             TreatmentAuditPlan.Symptom(text: $0.text, severity: $0.severity.label)
         }
-        let subtypeSnapshot = selectedSubtype
+        let stageSnapshot = selectedStage.promptValue
+        let stageDetailSnapshot = stageDetail.trimmingCharacters(in: .whitespaces)
 
         auditOutput = ""
         auditError = nil
         isAuditing = true
-        trialFetchProgress = "Fetching clinical trials for \(drugsSnapshot.count) drug\(drugsSnapshot.count == 1 ? "" : "s")…"
+        auditSteps = []
 
         auditTask = Task { @MainActor in
-            defer {
-                isAuditing = false
-                trialFetchProgress = nil
-            }
+            defer { isAuditing = false }
 
-            // 1. Fetch trials per drug in parallel (cap concurrency at 5,
-            //    matching backend MAX_PARALLEL).
+            // 1. PDQ
+            let pdq = await runStep(label: "Pulling NCI PDQ for \(cancerType.displayName ?? cancerType.name)") {
+                try await BackendService.shared.fetchPDQSummary(
+                    subtypeId: subtype.id,
+                    stage: stageSnapshot,
+                    stageDetail: stageDetailSnapshot.isEmpty ? nil : stageDetailSnapshot
+                )
+            } skipReason: { error in
+                if case BackendError.pdqUnavailable(let cancerType) = error {
+                    return "PDQ summary not available for \(cancerType)"
+                }
+                return nil
+            }
+            if Task.isCancelled { return }
+
+            // 2. Modality trials (4 in parallel).
+            let modalityTrials = await fetchModalityTrialsParallel(subtypeId: subtype.id)
+            if Task.isCancelled { return }
+
+            // 3. Per-drug trials (cap 5).
             let drugTrials = await fetchTrialsForDrugs(drugsSnapshot)
             if Task.isCancelled { return }
 
-            trialFetchProgress = nil
-
-            // 2. Build the audit plan and stream the model output.
+            // 4. Build the plan that gets passed to the LLM helpers.
             let plan = TreatmentAuditPlan(
                 cancerTypeName: cancerType.displayName ?? cancerType.name,
-                subtypeName: subtypeSnapshot.map { $0.shortName ?? $0.name },
-                subtypeMarkers: subtypeSnapshot?.markers,
+                subtypeName: subtype.shortName ?? subtype.name,
+                subtypeMarkers: subtype.markers,
+                stage: stageSnapshot,
+                stageDetail: stageDetailSnapshot.isEmpty ? nil : stageDetailSnapshot,
                 drugs: drugsSnapshot.map {
                     TreatmentAuditPlan.Drug(name: $0.name, chemblId: $0.chemblId)
                 },
                 treatments: treatmentsSnapshot,
                 symptoms: symptomsSnapshot,
-                drugTrials: drugTrials
+                drugTrials: drugTrials,
+                modalityTrials: modalityTrials,
+                pdqSummary: pdq
             )
 
+            let planContext = OllamaService.planContextSummary(plan)
+
+            // 5. Per-source mini-summaries. Each non-empty source becomes one
+            //    LLM streaming call. Stream into a per-step "summary" buffer
+            //    we'll feed into the final synthesis.
+            var summaries: [(label: String, summary: String)] = []
+
+            // PDQ mini-summary
+            if let pdq = pdq, !pdq.sections.isEmpty {
+                let body = OllamaService.compressPDQ(pdq)
+                let label = "NCI PDQ — \(pdq.slug.capitalized)"
+                let summary = await runSummaryStep(
+                    label: "Summarizing \(label)",
+                    sourceLabel: label,
+                    sourceBody: body,
+                    planContext: planContext
+                )
+                if let summary { summaries.append((label, summary)) }
+                if Task.isCancelled { return }
+            }
+
+            // Modality summaries
+            for entry in modalityTrials where !entry.trials.isEmpty {
+                let header = "Modality: \(entry.modality.capitalized) trials" +
+                    (entry.condition.map { " — condition: \($0)" } ?? "")
+                let body = OllamaService.compressTrials(entry.trials, header: header)
+                let label = "\(entry.modality.capitalized) trials"
+                let summary = await runSummaryStep(
+                    label: "Summarizing \(label)",
+                    sourceLabel: label,
+                    sourceBody: body,
+                    planContext: planContext
+                )
+                if let summary { summaries.append((label, summary)) }
+                if Task.isCancelled { return }
+            }
+
+            // Per-drug summaries (one per drug with non-empty trials).
+            for entry in drugTrials where !entry.trials.isEmpty {
+                let header = "Trials linked to \(entry.drugName)" +
+                    (entry.chemblId.map { " [\($0)]" } ?? "")
+                let body = OllamaService.compressTrials(entry.trials, header: header)
+                let label = "\(entry.drugName) trials"
+                let summary = await runSummaryStep(
+                    label: "Summarizing \(label)",
+                    sourceLabel: label,
+                    sourceBody: body,
+                    planContext: planContext
+                )
+                if let summary { summaries.append((label, summary)) }
+                if Task.isCancelled { return }
+            }
+
+            // 6. Final synthesis — streamed into the AISummaryCard.
+            let synthesisStepIndex = appendStep(label: "Synthesizing final audit", state: .running)
             do {
-                let stream = OllamaService.shared.auditTreatmentPlan(plan: plan)
+                let stream = OllamaService.shared.synthesizeAuditFromSummaries(
+                    plan: plan,
+                    sourceSummaries: summaries
+                )
                 for try await chunk in stream {
                     if Task.isCancelled { return }
                     auditOutput += chunk
                 }
+                updateStep(at: synthesisStepIndex, state: .done)
             } catch {
                 if !Task.isCancelled {
                     auditError = error.localizedDescription
+                    updateStep(at: synthesisStepIndex, state: .failed(error.localizedDescription))
                 }
             }
+        }
+    }
+
+    // MARK: - Step helpers
+
+    @MainActor
+    @discardableResult
+    private func appendStep(label: String, state: AuditStep.State) -> Int {
+        auditSteps.append(AuditStep(label: label, state: state))
+        return auditSteps.count - 1
+    }
+
+    @MainActor
+    private func updateStep(at index: Int, state: AuditStep.State) {
+        guard auditSteps.indices.contains(index) else { return }
+        auditSteps[index] = AuditStep(label: auditSteps[index].label, state: state)
+    }
+
+    /// Runs an async fetch as one progress-tracked step. `skipReason`, when
+    /// non-nil, lets the caller convert specific errors into a "skipped"
+    /// state instead of "failed" (e.g. PDQ unavailable for hematologic
+    /// cancers — expected, not a failure).
+    @MainActor
+    private func runStep<T>(
+        label: String,
+        operation: () async throws -> T,
+        skipReason: (Error) -> String? = { _ in nil }
+    ) async -> T? {
+        let index = appendStep(label: label, state: .running)
+        do {
+            let value = try await operation()
+            updateStep(at: index, state: .done)
+            return value
+        } catch is CancellationError {
+            updateStep(at: index, state: .failed("Cancelled"))
+            return nil
+        } catch {
+            if let reason = skipReason(error) {
+                updateStep(at: index, state: .skipped(reason))
+            } else {
+                updateStep(at: index, state: .failed(error.localizedDescription))
+            }
+            return nil
+        }
+    }
+
+    /// Runs one mini-summary LLM streaming call as a progress-tracked step.
+    /// Returns the accumulated text on success; nil on failure (the failure
+    /// is recorded as a step state, but the audit continues with the
+    /// remaining sources).
+    @MainActor
+    private func runSummaryStep(
+        label: String,
+        sourceLabel: String,
+        sourceBody: String,
+        planContext: String
+    ) async -> String? {
+        let index = appendStep(label: label, state: .running)
+        var accumulated = ""
+        do {
+            let stream = OllamaService.shared.summarizeAuditSource(
+                sourceLabel: sourceLabel,
+                sourceBody: sourceBody,
+                planContext: planContext
+            )
+            for try await chunk in stream {
+                if Task.isCancelled { break }
+                accumulated += chunk
+            }
+            if Task.isCancelled {
+                updateStep(at: index, state: .failed("Cancelled"))
+                return nil
+            }
+            updateStep(at: index, state: .done)
+            return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            updateStep(at: index, state: .failed(error.localizedDescription))
+            return nil
+        }
+    }
+
+    // MARK: - Fetch helpers
+
+    /// Fetches trials per modality (radiation, surgery, chemotherapy, targeted)
+    /// in parallel, capped at MAX_PARALLEL=4. Each modality is its own progress
+    /// step. Failures degrade to empty trial lists rather than aborting.
+    @MainActor
+    private func fetchModalityTrialsParallel(
+        subtypeId: Int
+    ) async -> [TreatmentAuditPlan.ModalityTrials] {
+        let modalities = ["radiation", "surgery", "chemotherapy", "targeted"]
+        // Pre-create step indices so concurrent updates land in the right rows.
+        let stepIndices: [Int] = modalities.map {
+            appendStep(label: "Searching \($0) trials", state: .running)
+        }
+
+        return await withTaskGroup(of: (Int, TreatmentAuditPlan.ModalityTrials).self) { group in
+            var results = Array<TreatmentAuditPlan.ModalityTrials?>(
+                repeating: nil, count: modalities.count
+            )
+            for (i, modality) in modalities.enumerated() {
+                group.addTask {
+                    do {
+                        let trials = try await BackendService.shared.fetchModalityTrials(
+                            subtypeId: subtypeId,
+                            modality: modality,
+                            limit: 8
+                        )
+                        return (i, TreatmentAuditPlan.ModalityTrials(
+                            modality: modality,
+                            condition: nil,
+                            trials: trials
+                        ))
+                    } catch {
+                        return (i, TreatmentAuditPlan.ModalityTrials(
+                            modality: modality,
+                            condition: nil,
+                            trials: []
+                        ))
+                    }
+                }
+            }
+            while let (i, payload) = await group.next() {
+                results[i] = payload
+                let state: AuditStep.State = payload.trials.isEmpty
+                    ? .skipped("No \(payload.modality) trials returned")
+                    : .done
+                updateStep(at: stepIndices[i], state: state)
+            }
+            return results.compactMap { $0 }
         }
     }
 
     /// Fetches trials for each prescribed drug that has a ChEMBL ID. Drugs
     /// without a ChEMBL ID are still included with an empty trials list so
     /// the prompt acknowledges them. Capped at 5 concurrent requests.
+    @MainActor
     private func fetchTrialsForDrugs(
         _ drugs: [PrescribedDrug]
     ) async -> [TreatmentAuditPlan.DrugTrials] {
-        await withTaskGroup(of: (Int, TreatmentAuditPlan.DrugTrials).self) { group in
+        // One progress step covers the whole drug-trial fetch — per-drug
+        // rows would explode the step list when many drugs are listed.
+        let stepIndex = appendStep(
+            label: "Fetching trials for \(drugs.count) drug\(drugs.count == 1 ? "" : "s")",
+            state: .running
+        )
+
+        let collected = await withTaskGroup(of: (Int, TreatmentAuditPlan.DrugTrials).self) { group in
             let maxParallel = 5
             var results = Array<TreatmentAuditPlan.DrugTrials?>(repeating: nil, count: drugs.count)
             var nextIndex = 0
@@ -600,6 +877,14 @@ struct TreatmentAuditorView: View {
             }
             return results.compactMap { $0 }
         }
+        let nonEmpty = collected.filter { !$0.trials.isEmpty }.count
+        updateStep(
+            at: stepIndex,
+            state: nonEmpty == 0
+                ? .skipped("No trials returned for any prescribed drug")
+                : .done
+        )
+        return collected
     }
 }
 
@@ -614,6 +899,115 @@ private struct PrescribedDrug: Identifiable, Hashable {
 private struct ScheduledTreatment: Identifiable, Hashable {
     let id = UUID()
     let text: String
+}
+
+/// Coarse stage Picker options. The free-text "Stage details" field captures
+/// anything finer (substages, metastasis sites, recurrence timing). Both are
+/// passed into the audit prompt; PDQ section selection uses the Picker value
+/// for keyword matching against headings, and the free-text for token-level
+/// matching against headings + section text.
+private enum StageOption: String, CaseIterable, Identifiable, Hashable {
+    case unspecified
+    case stageI
+    case stageII
+    case stageIII
+    case stageIV
+    case recurrent
+    case metastatic
+    case otherCustom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .unspecified: return "Unspecified / Unknown"
+        case .stageI: return "Stage I"
+        case .stageII: return "Stage II"
+        case .stageIII: return "Stage III"
+        case .stageIV: return "Stage IV"
+        case .recurrent: return "Recurrent"
+        case .metastatic: return "Metastatic"
+        case .otherCustom: return "Other / Custom"
+        }
+    }
+
+    /// String fed into PDQ search and the audit prompt. `unspecified` and
+    /// `otherCustom` return nil so the free-text field becomes authoritative.
+    var promptValue: String? {
+        switch self {
+        case .unspecified, .otherCustom: return nil
+        default: return label
+        }
+    }
+}
+
+/// One row in the audit progress list. Each fetch / per-source mini-summary /
+/// final synthesis step writes its state here so the user can watch the deep
+/// audit make progress instead of staring at a spinner.
+struct AuditStep: Identifiable, Hashable {
+    let id = UUID()
+    let label: String
+    let state: State
+
+    enum State: Hashable {
+        case running
+        case done
+        case skipped(String)
+        case failed(String)
+    }
+}
+
+private struct AuditStepList: View {
+    let steps: [AuditStep]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(steps) { step in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    icon(for: step.state)
+                    Text(step.label)
+                        .appFont(.caption)
+                        .foregroundColor(.primary)
+                    if let detail = stateDetail(step.state) {
+                        Text("— \(detail)")
+                            .appFont(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+
+    @ViewBuilder
+    private func icon(for state: AuditStep.State) -> some View {
+        switch state {
+        case .running:
+            ProgressView().controlSize(.small)
+        case .done:
+            Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+        case .skipped:
+            Image(systemName: "minus.circle").foregroundColor(.secondary)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+        }
+    }
+
+    private func stateDetail(_ state: AuditStep.State) -> String? {
+        switch state {
+        case .skipped(let reason): return reason
+        case .failed(let message): return message
+        case .running, .done: return nil
+        }
+    }
 }
 
 private struct SymptomEntry: Identifiable, Hashable {

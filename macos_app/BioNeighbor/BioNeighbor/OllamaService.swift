@@ -125,18 +125,53 @@ final class OllamaService {
         }
     }
 
-    /// Streams a treatment-plan audit. Caller has already gathered the user's
-    /// disease/subtype, drugs, scheduled treatments, symptoms/side effects,
-    /// and per-drug clinical trials. We bundle those into a single prompt and
-    /// stream the model's recommendations.
-    func auditTreatmentPlan(
-        plan: TreatmentAuditPlan
+    /// Streams a per-source mini-summary used in multi-pass audits.
+    /// Caller passes a self-contained `sourceBody` string (e.g. a PDQ
+    /// section excerpt or a trial digest) plus a short `planContext` that
+    /// tells the model what the user's plan looks like, so the mini-summary
+    /// can be relevance-filtered against the plan rather than summarizing
+    /// the source in the abstract.
+    func summarizeAuditSource(
+        sourceLabel: String,
+        sourceBody: String,
+        planContext: String
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     guard self.isEnabled else { throw OllamaError.disabled }
-                    let prompt = Self.buildAuditPrompt(plan: plan)
+                    let prompt = Self.buildSourceSummaryPrompt(
+                        sourceLabel: sourceLabel,
+                        sourceBody: sourceBody,
+                        planContext: planContext
+                    )
+                    for try await chunk in self.generate(prompt: prompt) {
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Final synthesis pass. Given the user's plan plus the keyed
+    /// mini-summaries from `summarizeAuditSource`, produces the long-form
+    /// audit shown in the UI.
+    func synthesizeAuditFromSummaries(
+        plan: TreatmentAuditPlan,
+        sourceSummaries: [(label: String, summary: String)]
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard self.isEnabled else { throw OllamaError.disabled }
+                    let prompt = Self.buildSynthesisPrompt(
+                        plan: plan,
+                        sourceSummaries: sourceSummaries
+                    )
                     for try await chunk in self.generate(prompt: prompt) {
                         continuation.yield(chunk)
                     }
@@ -277,124 +312,200 @@ final class OllamaService {
         return lines.joined(separator: "\n")
     }
 
-    // MARK: - Treatment audit prompt
+    // MARK: - Treatment audit prompts (multi-pass)
 
-    static func buildAuditPrompt(plan: TreatmentAuditPlan) -> String {
+    /// Compact representation of the user's plan, included with every
+    /// per-source mini-summary so the model can filter the source for what's
+    /// relevant to *this* patient (right subtype, right stage, etc.) rather
+    /// than summarizing the source in the abstract.
+    static func planContextSummary(_ plan: TreatmentAuditPlan) -> String {
         var lines: [String] = []
-        lines.append("You are reviewing a cancer treatment plan for a researcher / patient advocate.")
-        lines.append("Be specific and cite trial NCT IDs when you reference outcomes. Use plain English; flag uncertainty when trial data is sparse or absent. Do not invent trial data.")
-        lines.append("")
-
-        lines.append("== Disease ==")
-        lines.append("Cancer type: \(plan.cancerTypeName)")
+        lines.append("Cancer: \(plan.cancerTypeName)")
         if let subtype = plan.subtypeName, !subtype.isEmpty {
             lines.append("Subtype: \(subtype)")
         }
         if let markers = plan.subtypeMarkers, !markers.isEmpty {
             lines.append("Markers: \(markers.joined(separator: ", "))")
         }
+        if let stage = plan.stage, !stage.isEmpty {
+            lines.append("Stage: \(stage)")
+        }
+        if let detail = plan.stageDetail, !detail.isEmpty {
+            lines.append("Stage detail: \(detail)")
+        }
+        if !plan.drugs.isEmpty {
+            let drugList = plan.drugs.map(\.name).joined(separator: ", ")
+            lines.append("Prescribed drugs: \(drugList)")
+        }
+        if !plan.treatments.isEmpty {
+            lines.append("Scheduled treatments: \(plan.treatments.joined(separator: "; "))")
+        }
+        if !plan.symptoms.isEmpty {
+            let formatted = plan.symptoms.map { sym -> String in
+                if let severity = sym.severity, !severity.isEmpty {
+                    return "\(sym.text) (\(severity))"
+                }
+                return sym.text
+            }
+            lines.append("Symptoms / side effects: \(formatted.joined(separator: "; "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Builds the prompt for one mini-summary pass. The model gets a
+    /// self-contained source body plus the plan context, and is asked for a
+    /// short, factual digest pointed at the audit's downstream synthesis.
+    static func buildSourceSummaryPrompt(
+        sourceLabel: String,
+        sourceBody: String,
+        planContext: String
+    ) -> String {
+        var lines: [String] = []
+        lines.append("You are summarizing one evidence source for a multi-source cancer treatment audit.")
+        lines.append("Be concise and factual. Do not invent data — only summarize what's in the source below.")
+        lines.append("")
+        lines.append("== Patient plan (for relevance) ==")
+        lines.append(planContext)
+        lines.append("")
+        lines.append("== Source: \(sourceLabel) ==")
+        lines.append(sourceBody)
+        lines.append("")
+        lines.append("Write a 120-180 word digest covering:")
+        lines.append("- What this source says that's relevant to *this* patient's subtype/stage.")
+        lines.append("- Specific findings worth surfacing in the final audit (cite NCT IDs if the source is trial data, or section titles if it's a guideline/PDQ).")
+        lines.append("- Anything notably missing — modalities or drug classes the source mentions that the patient's plan doesn't include.")
+        lines.append("")
+        lines.append("Plain prose, no preamble, no headings.")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Final synthesis prompt. Inputs: the user's plan + the per-source
+    /// mini-summaries already produced. Output is the audit shown in the UI.
+    static func buildSynthesisPrompt(
+        plan: TreatmentAuditPlan,
+        sourceSummaries: [(label: String, summary: String)]
+    ) -> String {
+        var lines: [String] = []
+        lines.append("You are writing the final audit of a cancer treatment plan, drawing on per-source summaries already produced.")
+        lines.append("Be specific. Cite NCT IDs and the PDQ source URL inline when the answer rests on those sources. Use plain English. Flag uncertainty when evidence is thin. Do not invent trials, NCT IDs, or guidelines.")
         lines.append("")
 
-        lines.append("== Prescribed drugs (\(plan.drugs.count)) ==")
-        if plan.drugs.isEmpty {
-            lines.append("(none provided)")
+        lines.append("== Patient plan ==")
+        lines.append(planContextSummary(plan))
+        lines.append("")
+
+        if let pdq = plan.pdqSummary {
+            lines.append("== Citation hint ==")
+            lines.append("PDQ source URL (use this when citing standard-of-care text): \(pdq.sourceURL)")
+            lines.append("")
+        }
+
+        lines.append("== Per-source summaries (\(sourceSummaries.count)) ==")
+        if sourceSummaries.isEmpty {
+            lines.append("(none — proceed with caution and explicitly note the lack of supporting evidence)")
         } else {
-            for drug in plan.drugs {
-                let chembl = drug.chemblId.map { " [\($0)]" } ?? ""
-                lines.append("- \(drug.name)\(chembl)")
+            for entry in sourceSummaries {
+                lines.append("--- \(entry.label) ---")
+                lines.append(entry.summary)
+                lines.append("")
             }
         }
         lines.append("")
 
-        lines.append("== Scheduled treatments / procedures ==")
-        if plan.treatments.isEmpty {
-            lines.append("(none provided)")
-        } else {
-            for t in plan.treatments { lines.append("- \(t)") }
+        lines.append("Write a treatment-plan audit (350-550 words) addressing, in numbered sections:")
+        lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
+        lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
+        lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs?")
+        lines.append("4. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
+        lines.append("5. Uncertainty: where is evidence thin? What would you ask the oncology team?")
+        lines.append("")
+        lines.append("Then add a final \"Further reading\" block listing:")
+        if let pdq = plan.pdqSummary {
+            lines.append("- NCI PDQ summary: \(pdq.sourceURL)")
         }
+        lines.append("- Up to 3 key NCT IDs from the summaries above, formatted as https://clinicaltrials.gov/study/{NCT}.")
         lines.append("")
-
-        lines.append("== Symptoms / side effects ==")
-        if plan.symptoms.isEmpty {
-            lines.append("(none provided)")
-        } else {
-            for s in plan.symptoms {
-                if let severity = s.severity, !severity.isEmpty {
-                    lines.append("- \(s.text) (severity: \(severity))")
-                } else {
-                    lines.append("- \(s.text)")
-                }
-            }
-        }
-        lines.append("")
-
-        lines.append("== Clinical trial digest (per drug) ==")
-        if plan.drugTrials.isEmpty {
-            lines.append("(no trials retrieved)")
-        } else {
-            for entry in plan.drugTrials {
-                lines.append("--- Drug: \(entry.drugName)\(entry.chemblId.map { " [\($0)]" } ?? "") ---")
-                if entry.trials.isEmpty {
-                    lines.append("No linked trials found.")
-                    continue
-                }
-                // Cap per-drug trials to avoid blowing context — keep the
-                // first 6, which the backend already orders so multi-arm
-                // outcome trials come first.
-                let trials = Array(entry.trials.prefix(6))
-                for trial in trials {
-                    lines.append("NCT: \(trial.nctId)")
-                    if let title = trial.title { lines.append("  Title: \(title)") }
-                    if let status = trial.status { lines.append("  Status: \(status)") }
-                    if let phases = trial.phase, !phases.isEmpty {
-                        lines.append("  Phase: \(phases.joined(separator: ", "))")
-                    }
-                    if let arms = trial.arms, !arms.isEmpty {
-                        lines.append("  Arms:")
-                        for arm in arms {
-                            let label = arm.label ?? "—"
-                            let interventions = arm.interventions?.joined(separator: " + ") ?? ""
-                            lines.append("    - \(label): \(interventions)")
-                        }
-                    }
-                    if let outcomes = trial.primaryOutcomes, !outcomes.isEmpty {
-                        lines.append("  Primary outcomes:")
-                        for outcome in outcomes {
-                            let title = outcome.title ?? "(unnamed)"
-                            let unit = outcome.unit.map { " [\($0)]" } ?? ""
-                            lines.append("    • \(title)\(unit)")
-                            for r in outcome.armResults ?? [] {
-                                let arm = r.armLabel ?? "?"
-                                let val = r.value ?? "?"
-                                lines.append("      \(arm): \(val)")
-                            }
-                        }
-                    } else if !(trial.hasResults ?? false) {
-                        lines.append("  Results: not yet reported")
-                    }
-                }
-            }
-        }
-        lines.append("")
-
-        lines.append("Write a treatment-plan audit (300–500 words) addressing, in numbered sections:")
-        lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this cancer subtype?")
-        lines.append("2. Alternative or adjunct regimens: are there trial arms that showed clearly better outcomes than what's prescribed? Reference NCT IDs. When the trial digest contains arms that combine the prescribed drug(s) with chemotherapy, radiation, surgery, or other targeted agents, compare those arms' outcomes to drug-only arms in the same trial and call out the delta.")
-        lines.append("3. Symptom & side-effect concerns: any of the symptoms/side effects above that are notably associated with the listed drugs and worth flagging to the prescriber?")
-        lines.append("4. Plan gaps: any treatments listed that don't appear in any trial arm — or any standard-of-care components for this subtype that appear missing? Check both drug classes AND treatment modalities (chemotherapy, radiation, surgery, targeted therapy) — even if the user's scheduled-treatments list is empty, explicitly assess whether the subtype's standard of care typically involves any of those modalities and flag the absence with \"discuss with your oncology team\" framing.")
-        lines.append("5. Uncertainty: where is the evidence thin, and what would you ask the oncology team?")
-        lines.append("")
-        lines.append("Conclude with EXACTLY two final lines:")
-        lines.append("Source: ClinicalTrials.gov.")
+        lines.append("End with EXACTLY this line as the final line:")
         lines.append("Not medical advice. Discuss any plan changes with your oncologist.")
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Source-body builders (pure helpers used by the auditor view)
+
+    /// Compresses a `PDQSummary` into a prompt-ready text body. Includes the
+    /// source URL up top so the model can cite it.
+    static func compressPDQ(_ pdq: PDQSummary) -> String {
+        var lines: [String] = []
+        lines.append("NCI PDQ — \(pdq.slug.capitalized) (Health Professional)")
+        lines.append("Source URL: \(pdq.sourceURL)")
+        if let stage = pdq.stage, !stage.isEmpty {
+            lines.append("Filtered for stage: \(stage)")
+        }
+        if let detail = pdq.stageDetail, !detail.isEmpty {
+            lines.append("Stage detail filter: \(detail)")
+        }
+        lines.append("")
+        for section in pdq.sections {
+            lines.append("### \(section.title)")
+            if let parent = section.parent, !parent.isEmpty, parent != section.title {
+                lines.append("(under: \(parent))")
+            }
+            lines.append(section.text)
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Compresses a list of trials into the same digest format the old
+    /// single-pass prompt used. `header` is a free-form description of the
+    /// query that produced the list (e.g. "Radiation trials for HER2+ breast
+    /// cancer" or "Trials linked to Anastrozole").
+    static func compressTrials(_ trials: [ClinicalTrial], header: String) -> String {
+        var lines: [String] = []
+        lines.append(header)
+        lines.append("\(trials.count) trial\(trials.count == 1 ? "" : "s") below.")
+        lines.append("")
+        // Cap to avoid context blow-up; backend already orders most-informative first.
+        for trial in trials.prefix(6) {
+            lines.append("NCT: \(trial.nctId)")
+            if let title = trial.title { lines.append("  Title: \(title)") }
+            if let status = trial.status { lines.append("  Status: \(status)") }
+            if let phases = trial.phase, !phases.isEmpty {
+                lines.append("  Phase: \(phases.joined(separator: ", "))")
+            }
+            if let arms = trial.arms, !arms.isEmpty {
+                lines.append("  Arms:")
+                for arm in arms {
+                    let label = arm.label ?? "—"
+                    let interventions = arm.interventions?.joined(separator: " + ") ?? ""
+                    lines.append("    - \(label): \(interventions)")
+                }
+            }
+            if let outcomes = trial.primaryOutcomes, !outcomes.isEmpty {
+                lines.append("  Primary outcomes:")
+                for outcome in outcomes {
+                    let title = outcome.title ?? "(unnamed)"
+                    let unit = outcome.unit.map { " [\($0)]" } ?? ""
+                    lines.append("    • \(title)\(unit)")
+                    for r in outcome.armResults ?? [] {
+                        let arm = r.armLabel ?? "?"
+                        let val = r.value ?? "?"
+                        lines.append("      \(arm): \(val)")
+                    }
+                }
+            } else if !(trial.hasResults ?? false) {
+                lines.append("  Results: not yet reported")
+            }
+            lines.append("")
+        }
         return lines.joined(separator: "\n")
     }
 }
 
 // MARK: - Treatment audit input shapes
 
-/// Inputs the auditor view passes to OllamaService. Kept here (next to
-/// `buildAuditPrompt`) so the prompt and its data contract live together.
+/// Inputs the auditor view passes to OllamaService. Kept here so the
+/// prompt builders and their data contract live together.
 struct TreatmentAuditPlan {
     struct Drug {
         let name: String
@@ -409,12 +520,23 @@ struct TreatmentAuditPlan {
         let chemblId: String?
         let trials: [ClinicalTrial]
     }
+    /// Trials retrieved by `BackendService.fetchModalityTrials` keyed by the
+    /// modality (radiation / surgery / chemotherapy / targeted).
+    struct ModalityTrials {
+        let modality: String
+        let condition: String?
+        let trials: [ClinicalTrial]
+    }
 
     let cancerTypeName: String
     let subtypeName: String?
     let subtypeMarkers: [String]?
+    let stage: String?
+    let stageDetail: String?
     let drugs: [Drug]
     let treatments: [String]
     let symptoms: [Symptom]
     let drugTrials: [DrugTrials]
+    let modalityTrials: [ModalityTrials]
+    let pdqSummary: PDQSummary?
 }
