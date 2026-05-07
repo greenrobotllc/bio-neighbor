@@ -203,8 +203,13 @@ def fetch_trials_for_drug(chembl_id: str, max_trials: int = 15) -> List[Dict]:
     Pull NCT IDs from ChEMBL drug_indication for this drug and fetch each
     from ClinicalTrials.gov v2 in parallel. Returns trials sorted with
     "results posted" first (most informative), then by NCT ID. Capped at
-    max_trials so the page doesn't drown in 50+ trials.
+    max_trials so the page doesn't drown in 50+ trials. Non-positive or
+    non-int max_trials returns [] — mirrors the guard in
+    fetch_modality_trials so negative values can't tail-slice candidates.
     """
+    if not isinstance(max_trials, int) or max_trials <= 0:
+        return []
+
     nct_ids = fetch_nct_ids_for_drug(chembl_id)
     if not nct_ids:
         return []
