@@ -253,10 +253,17 @@ def fetch_modality_trials(
             # Log so unexpected schema changes / bad records are diagnosable
             # rather than invisibly dropped. Keeps `print` style consistent
             # with the rest of this module (no logger configured here).
-            nct_id = (
-                ((raw or {}).get("protocolSection") or {})
-                .get("identificationModule") or {}
-            ).get("nctId") or "unknown"
+            #
+            # Drill into the nested NCT ID with isinstance guards at every
+            # level — a non-dict at any step (string, list, None, …) would
+            # otherwise raise inside this except handler and abort the whole
+            # parse loop. We'd rather log "unknown" and keep going.
+            nct_id = "unknown"
+            proto = raw.get("protocolSection") if isinstance(raw, dict) else None
+            ident = proto.get("identificationModule") if isinstance(proto, dict) else None
+            candidate = ident.get("nctId") if isinstance(ident, dict) else None
+            if isinstance(candidate, str) and candidate:
+                nct_id = candidate
             print(f"   ⚠️  Failed to parse trial {nct_id} ({condition_norm} / {modality}): {e}")
             continue
 
