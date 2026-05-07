@@ -949,6 +949,77 @@ struct ClinicalTrialsResponse: Codable {
     }
 }
 
+// MARK: - PDQ (NCI treatment summary)
+
+struct PDQSection: Codable, Hashable, Identifiable {
+    let title: String
+    let level: Int
+    let parent: String?
+    let text: String
+
+    var id: String { "\(level)|\(title)" }
+}
+
+struct PDQSummary: Codable, Hashable {
+    let slug: String
+    let sourceURL: String
+    let stage: String?
+    let stageDetail: String?
+    let sections: [PDQSection]
+
+    enum CodingKeys: String, CodingKey {
+        case slug
+        case sourceURL = "source_url"
+        case stage
+        case stageDetail = "stage_detail"
+        case sections
+    }
+}
+
+struct PDQSummaryResponse: Codable {
+    let success: Bool
+    let slug: String?
+    let sourceURL: String?
+    let stage: String?
+    let stageDetail: String?
+    let sections: [PDQSection]?
+    let reason: String?
+    let cancerType: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case slug
+        case sourceURL = "source_url"
+        case stage
+        case stageDetail = "stage_detail"
+        case sections
+        case reason
+        case cancerType = "cancer_type"
+        case error
+    }
+}
+
+// MARK: - Modality trials (subtype-keyed CT.gov search)
+
+struct ModalityTrialsResponse: Codable {
+    let success: Bool
+    let subtypeId: Int?
+    let condition: String?
+    let modality: String?
+    let trials: [ClinicalTrial]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case subtypeId = "subtype_id"
+        case condition
+        case modality
+        case trials
+        case error
+    }
+}
+
 struct ChEMBLDrugDetailResponse: Codable {
     let success: Bool
     let error: String?

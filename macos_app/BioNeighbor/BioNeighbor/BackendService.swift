@@ -16,7 +16,10 @@ enum BackendError: LocalizedError {
     case networkError(String)
     case invalidResponse
     case unknownError(String)
-    
+    /// NCI PDQ summary not mapped for this cancer type. Carries the cancer
+    /// type's display name so callers can show a precise "skipped" message.
+    case pdqUnavailable(cancerType: String)
+
     var errorDescription: String? {
         switch self {
         case .invalidSMILES:
@@ -29,6 +32,8 @@ enum BackendError: LocalizedError {
             return "Invalid response from backend"
         case .unknownError(let message):
             return "Error: \(message)"
+        case .pdqUnavailable(let cancerType):
+            return "No NCI PDQ summary mapped for \(cancerType)."
         }
     }
 }
@@ -1802,6 +1807,88 @@ class BackendService: ObservableObject {
         let decoded = try JSONDecoder().decode(ClinicalTrialsResponse.self, from: data)
         guard decoded.success else {
             throw BackendError.unknownError(decoded.error ?? "Failed to fetch clinical trials")
+        }
+        return decoded.trials ?? []
+    }
+
+    /// Fetch the NCI PDQ treatment-summary sections for a subtype. Throws
+    /// `BackendError.pdqUnavailable(cancerType:)` when the parent cancer type
+    /// isn't in pdq_fetcher's slug map (hematologic / rare cancers) so the
+    /// auditor can render a "skipped" step instead of a generic error.
+    func fetchPDQSummary(
+        subtypeId: Int,
+        stage: String?,
+        stageDetail: String?
+    ) async throws -> PDQSummary {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/treatment-summary")
+        var query: [URLQueryItem] = []
+        if let stage, !stage.isEmpty {
+            query.append(URLQueryItem(name: "stage", value: stage))
+        }
+        if let stageDetail, !stageDetail.isEmpty {
+            query.append(URLQueryItem(name: "stage_detail", value: stageDetail))
+        }
+        components?.queryItems = query.isEmpty ? nil : query
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        // PDQ fetch hits cancer.gov once on cold cache, then cached for the
+        // server lifetime; 20s covers the worst case.
+        request.timeoutInterval = 20.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        // Decode first — a 404 with reason="pdq_unavailable" carries useful
+        // payload that we want to surface as a typed error.
+        let decoded = try JSONDecoder().decode(PDQSummaryResponse.self, from: data)
+        if decoded.success,
+           let slug = decoded.slug,
+           let sourceURL = decoded.sourceURL,
+           let sections = decoded.sections {
+            return PDQSummary(
+                slug: slug,
+                sourceURL: sourceURL,
+                stage: decoded.stage,
+                stageDetail: decoded.stageDetail,
+                sections: sections
+            )
+        }
+        if decoded.reason == "pdq_unavailable" {
+            throw BackendError.pdqUnavailable(cancerType: decoded.cancerType ?? "this cancer type")
+        }
+        // Fall through to generic HTTP/error handling.
+        try ensureOK(response, data: data, fallback: "Failed to fetch PDQ summary")
+        throw BackendError.unknownError(decoded.error ?? "Failed to fetch PDQ summary")
+    }
+
+    /// Fetch CT.gov trials matching a subtype's condition + a modality
+    /// (radiation / surgery / chemotherapy / targeted). Returns `[]` on
+    /// no-results or when CT.gov fails — a single failed modality should not
+    /// block the rest of the audit.
+    func fetchModalityTrials(
+        subtypeId: Int,
+        modality: String,
+        limit: Int = 8
+    ) async throws -> [ClinicalTrial] {
+        var components = URLComponents(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/modality-trials")
+        components?.queryItems = [
+            URLQueryItem(name: "modality", value: modality),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        guard let url = components?.url else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30.0
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to fetch modality trials")
+
+        let decoded = try JSONDecoder().decode(ModalityTrialsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Failed to fetch modality trials")
         }
         return decoded.trials ?? []
     }

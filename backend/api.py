@@ -8,7 +8,7 @@ import logging
 import sys
 import os
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -3645,6 +3645,179 @@ def v2_get_subtype(subtype_id: int):
         })
     except Exception:
         logger.exception("v2 get subtype error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+def _condition_term_for_subtype(row) -> str:
+    """Build a condition string for CT.gov / PDQ from a (subtype_row, type_row).
+    Prefer the subtype's first chembl_indication_term, else its full
+    subtype_name (e.g. "HER2-positive breast cancer" — better CT.gov match
+    than the bare short_name "HER2+"), else short_name, else the parent
+    cancer-type's name."""
+    chembl_terms = _parse_json_field(row.get('chembl_indication_terms')) or []
+    if chembl_terms:
+        return chembl_terms[0]
+    return (row.get('subtype_name')
+            or row.get('short_name')
+            or row.get('cancer_type_name')
+            or '').strip()
+
+
+def _load_subtype_for_lookup(subtype_id: int):
+    """Load just enough of a subtype row to drive PDQ + modality lookups.
+    Returns dict or None when the subtype doesn't exist."""
+    import sqlite3
+    from data_loader import DB_PATH
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT cs.name, cs.short_name, cs.markers, cs.chembl_indication_terms,
+                   ct.name, ct.display_name
+            FROM cancer_subtypes cs
+            JOIN cancer_types ct ON ct.id = cs.cancer_type_id
+            WHERE cs.id = ?
+            """,
+            (subtype_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            'subtype_name': row[0],
+            'short_name': row[1],
+            'markers': _parse_json_field(row[2]) or [],
+            'chembl_indication_terms': row[3],  # raw JSON for the helper above
+            'cancer_type_name': row[4],
+            'cancer_type_display': row[5] or row[4],
+        }
+    finally:
+        conn.close()
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/treatment-summary', methods=['GET'])
+def v2_subtype_treatment_summary(subtype_id: int):
+    """
+    Return an NCI PDQ "Health Professional" treatment summary for the
+    subtype's parent cancer type, scoped to the user's stage / stage detail
+    and biased toward sections matching the subtype's markers.
+
+    Query parameters:
+    - stage (string, optional): e.g. "Stage IV", "Metastatic", "Recurrent".
+    - stage_detail (string, optional): free-text descriptor — "metastasized
+      to bone", "T2N1M0", etc. Tokens 4+ chars are matched against PDQ
+      headings and section text to surface metastasis-site-specific subsections.
+
+    Response:
+        {
+            "success": true,
+            "slug": "breast",
+            "source_url": "https://www.cancer.gov/...",
+            "stage": <echoed>,
+            "sections": [{"title", "level", "parent", "text"}, ...]
+        }
+
+    When the parent cancer type isn't in pdq_fetcher's slug map (hematologic,
+    rare cancers, …) returns 404 with a clear "no PDQ available" payload so
+    the iOS auditor can render a "skipped" step instead of an error.
+    """
+    try:
+        subtype = _load_subtype_for_lookup(subtype_id)
+        if subtype is None:
+            return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+
+        from pdq_fetcher import fetch_pdq_summary
+        stage = request.args.get('stage', '', type=str).strip() or None
+        stage_detail = request.args.get('stage_detail', '', type=str).strip() or None
+
+        # Try the subtype's full name first so subtypes that have their own
+        # PDQ page (e.g. "Non-small cell lung cancer") get the more specific
+        # slug match before we fall back to the parent cancer type. Both calls
+        # share an LRU-cached HTTP fetch in pdq_fetcher, so an unmapped first
+        # candidate is just a dictionary lookup with no network cost.
+        candidates: List[str] = []
+        if subtype.get('subtype_name'):
+            candidates.append(subtype['subtype_name'])
+        if subtype['cancer_type_name'] and subtype['cancer_type_name'] not in candidates:
+            candidates.append(subtype['cancer_type_name'])
+
+        result = None
+        for candidate in candidates:
+            result = fetch_pdq_summary(
+                cancer_type_name=candidate,
+                stage=stage,
+                stage_detail=stage_detail,
+                markers=subtype['markers'],
+            )
+            if result is not None:
+                break
+
+        if result is None:
+            return jsonify({
+                'success': False,
+                'reason': 'pdq_unavailable',
+                'cancer_type': subtype['cancer_type_display'],
+                'error': f"No NCI PDQ summary mapped for cancer type \"{subtype['cancer_type_display']}\".",
+            }), 404
+
+        return jsonify({
+            'success': True,
+            **result,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 subtype treatment-summary error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/subtypes/<int:subtype_id>/modality-trials', methods=['GET'])
+def v2_subtype_modality_trials(subtype_id: int):
+    """
+    Search ClinicalTrials.gov v2 for trials matching the subtype's
+    condition term + a modality (radiation / surgery / chemotherapy /
+    targeted). Returns the same parsed shape as the per-drug trials endpoint
+    so the iOS ClinicalTrial decoder is reused unchanged.
+
+    Query parameters:
+    - modality (string, required): one of "radiation", "surgery",
+      "chemotherapy", "targeted".
+    - limit (int, optional): max trials to return (default 8, hi 20).
+    """
+    try:
+        modality = request.args.get('modality', '', type=str).strip().lower()
+        if modality not in ('radiation', 'surgery', 'chemotherapy', 'targeted'):
+            return jsonify({
+                'success': False,
+                'error': "modality must be one of: radiation, surgery, chemotherapy, targeted",
+            }), 400
+
+        limit = _int_arg('limit', default=8, lo=1, hi=20)
+
+        subtype = _load_subtype_for_lookup(subtype_id)
+        if subtype is None:
+            return jsonify({'success': False, 'error': f'Subtype {subtype_id} not found'}), 404
+
+        condition = _condition_term_for_subtype(subtype)
+        if not condition:
+            return jsonify({
+                'success': False,
+                'error': f'Subtype {subtype_id} has no usable condition term for trial search.',
+            }), 422
+
+        from clinical_trials import fetch_modality_trials
+        trials = fetch_modality_trials(condition=condition, modality=modality, max_trials=limit)
+        return jsonify({
+            'success': True,
+            'subtype_id': subtype_id,
+            'condition': condition,
+            'modality': modality,
+            'trials': trials,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 subtype modality-trials error")
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 
