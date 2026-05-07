@@ -21,6 +21,7 @@ except ImportError:
     from data_loader import load_from_database
 import sqlite3
 import json
+import threading
 
 # Configuration
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -1333,7 +1334,6 @@ class SearchEngine:
 
 # Global search engine instance (lazy loading)
 _search_engine = None
-import threading
 _search_engine_lock = threading.Lock()
 
 
