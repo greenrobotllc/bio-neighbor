@@ -1893,6 +1893,181 @@ class BackendService: ObservableObject {
         return decoded.trials ?? []
     }
 
+    /// Outcome of `fetchAdverseEventPanel` — top FAERS reactions per drug
+    /// plus the symptom→reaction match list (issue #46).
+    struct FAERSPanelOutcome {
+        let perDrug: [FAERSDrugPanel]
+        let symptomMatches: [FAERSSymptomMatch]
+    }
+
+    /// Fetch top OpenFDA FAERS reactions for each prescribed drug and
+    /// match user-reported symptoms against those reactions (issue #46).
+    /// Cached server-side for 7 days. Best-effort — the audit continues
+    /// when this throws.
+    func fetchAdverseEventPanel(
+        drugs: [(name: String, chemblId: String?)],
+        symptoms: [String]
+    ) async throws -> FAERSPanelOutcome {
+        guard !drugs.isEmpty else {
+            return FAERSPanelOutcome(perDrug: [], symptomMatches: [])
+        }
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/treatment-auditor/adverse-events") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Cold cache: 2 OpenFDA calls per drug × N drugs. Budget for ~5
+        // drugs worst-case.
+        request.timeoutInterval = 60.0
+        let body = FAERSRequest(
+            drugs: drugs.map { FAERSRequestDrug(name: $0.name, chemblId: $0.chemblId) },
+            symptoms: symptoms
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to fetch adverse events")
+
+        let decoded = try JSONDecoder().decode(FAERSResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Adverse-event lookup failed")
+        }
+        return FAERSPanelOutcome(
+            perDrug: decoded.perDrug ?? [],
+            symptomMatches: decoded.symptomMatches ?? []
+        )
+    }
+
+    /// Outcome of `fetchTargetOverlap` — bundles the per-drug target list
+    /// with the pairwise overlaps so the UI can render both
+    /// (deterministic facts) without a second round-trip.
+    struct TargetOverlapOutcome {
+        let targetsByDrug: [DrugTargetsByDrug]
+        let unmatched: [String]
+        let overlaps: [DrugTargetOverlap]
+    }
+
+    /// Fetch mechanism-of-action target overlap among the supplied drugs
+    /// (issue #53). Backed by ChEMBL `mechanism` + `target` resources,
+    /// cached server-side. Cold cache for ~5 drugs takes 5-15s; warm
+    /// cache is near-instant.
+    func fetchTargetOverlap(_ drugs: [(name: String, chemblId: String?)]) async throws -> TargetOverlapOutcome {
+        guard !drugs.isEmpty else {
+            return TargetOverlapOutcome(targetsByDrug: [], unmatched: [], overlaps: [])
+        }
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/treatment-auditor/target-overlap") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Cold-cache cost dominated by ChEMBL — budget generously.
+        request.timeoutInterval = 60.0
+        let body = TargetOverlapRequest(
+            drugs: drugs.map { TargetOverlapRequestEntry(name: $0.name, chemblId: $0.chemblId) }
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to fetch target overlap")
+
+        let decoded = try JSONDecoder().decode(TargetOverlapResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Target overlap lookup failed")
+        }
+        return TargetOverlapOutcome(
+            targetsByDrug: decoded.targetsByDrug ?? [],
+            unmatched: decoded.unmatched ?? [],
+            overlaps: decoded.overlaps ?? []
+        )
+    }
+
+    /// Outcome of `fetchDrugInteractions`. The `drugbankLoaded` flag is
+    /// the load-bearing one — when false, the UI must render a "DrugBank
+    /// XML not loaded" hint rather than "no interactions found", because
+    /// the absence of data is meaningfully different from an empty result.
+    struct DrugInteractionsOutcome {
+        let drugbankLoaded: Bool
+        let matched: [DrugInteractionMatch]
+        let unmatched: [String]
+        let interactions: [DrugInteraction]
+    }
+
+    /// Fetch pairwise DrugBank drug-drug interactions among the supplied
+    /// drugs (issue #47). Best-effort: the Treatment Auditor falls back
+    /// to "no interactions surfaced" when this throws.
+    func fetchDrugInteractions(_ drugs: [(name: String, chemblId: String?, drugbankId: String?)]) async throws -> DrugInteractionsOutcome {
+        guard !drugs.isEmpty else {
+            return DrugInteractionsOutcome(drugbankLoaded: false, matched: [], unmatched: [], interactions: [])
+        }
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/treatment-auditor/drug-interactions") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Pure local SQL — fast unless the parser is mid-bulk-load. 15s
+        // is plenty.
+        request.timeoutInterval = 15.0
+        let body = DrugInteractionsRequest(
+            drugs: drugs.map {
+                DrugInteractionsRequestEntry(name: $0.name, chemblId: $0.chemblId, drugbankId: $0.drugbankId)
+            }
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to fetch drug interactions")
+
+        let decoded = try JSONDecoder().decode(DrugInteractionsResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Drug interaction lookup failed")
+        }
+        return DrugInteractionsOutcome(
+            drugbankLoaded: decoded.drugbankLoaded ?? false,
+            matched: decoded.matched ?? [],
+            unmatched: decoded.unmatched ?? [],
+            interactions: decoded.interactions ?? []
+        )
+    }
+
+    /// Normalize a batch of drug names via RxNorm (issue #55). The
+    /// Treatment Auditor uses the returned `groupKey` to dedupe
+    /// brand-vs-generic entries before fanning out per-drug fetches.
+    /// Best-effort: a backend failure should not block the audit, so
+    /// callers typically fall back to "treat each input as its own group"
+    /// when this throws.
+    func normalizeDrugs(_ drugs: [(name: String, chemblId: String?)]) async throws -> [DrugNormalization] {
+        guard !drugs.isEmpty else { return [] }
+        guard let url = URL(string: "\(baseURL)/cancer-research/v2/treatment-auditor/normalize-drugs") else {
+            throw BackendError.backendNotAvailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Live RxNorm calls take ~200-500ms each on cache miss; budget
+        // generously for first-run audits where every drug is uncached.
+        request.timeoutInterval = 30.0
+        let body = DrugNormalizationRequest(
+            drugs: drugs.map { DrugNormalizationRequestEntry(name: $0.name, chemblId: $0.chemblId) }
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try ensureOK(response, data: data, fallback: "Failed to normalize drug names")
+
+        let decoded = try JSONDecoder().decode(DrugNormalizationResponse.self, from: data)
+        guard decoded.success else {
+            throw BackendError.unknownError(decoded.error ?? "Drug normalization failed")
+        }
+        return decoded.normalizations ?? []
+    }
+
     func fetchChEMBLDrugDetail(chemblId: String) async throws -> ChEMBLDrugDetail {
         guard let url = URL(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/detail") else {
             throw BackendError.backendNotAvailable

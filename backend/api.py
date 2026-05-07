@@ -3821,6 +3821,288 @@ def v2_subtype_modality_trials(subtype_id: int):
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 
+@app.route('/cancer-research/v2/treatment-auditor/adverse-events', methods=['POST'])
+def v2_treatment_auditor_adverse_events():
+    """
+    Return per-drug top FAERS adverse events plus matches against the
+    user's self-reported symptoms (issue #46). Surfaced by the Treatment
+    Auditor so the model can flag "fatigue is the #2 reported reaction
+    for this drug, with N reports".
+
+    Request body (JSON):
+        {
+            "drugs": [{"name": "tamoxifen", "chembl_id": "..."}, ...],
+            "symptoms": ["fatigue", "hot flashes"]
+        }
+
+    Response:
+        {
+            "success": true,
+            "per_drug": [
+                {"drug_name", "total_reports",
+                 "top_events": [{"term", "count"}, ...]}
+            ],
+            "symptom_matches": [
+                {"drug_name", "symptom", "matched_term",
+                 "count", "rank_in_top", "total_reports"}
+            ]
+        }
+
+    Backed by openFDA `/drug/event.json`, cached locally for 7 days
+    (FAERS itself updates quarterly).
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        drugs_raw = body.get('drugs')
+        symptoms_raw = body.get('symptoms') or []
+        if not isinstance(drugs_raw, list):
+            return jsonify({
+                'success': False,
+                'error': "Request body must include {\"drugs\": [...], \"symptoms\": [...]}",
+            }), 400
+        if len(drugs_raw) > 50:
+            return jsonify({'success': False, 'error': 'Too many drugs (max 50)'}), 400
+
+        cleaned_drugs: List[Dict[str, Any]] = []
+        for entry in drugs_raw:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('name')
+            if not isinstance(name, str) or not name.strip():
+                continue
+            cleaned_drugs.append({
+                'name': name.strip(),
+                'chembl_id': entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None,
+            })
+
+        symptoms = [s.strip() for s in symptoms_raw if isinstance(s, str) and s.strip()]
+
+        from openfda_faers import get_drug_event_panel
+        result = get_drug_event_panel(cleaned_drugs, symptoms)
+        return jsonify({
+            'success': True,
+            **result,
+            'disclaimer': 'Research tool only - FAERS reports are voluntary, association is not causation.',
+        })
+    except Exception:
+        logger.exception("v2 treatment-auditor adverse-events error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/treatment-auditor/target-overlap', methods=['POST'])
+def v2_treatment_auditor_target_overlap():
+    """
+    Compute pairwise mechanism-of-action target overlap among the
+    supplied drugs (issue #53). Surfaced by the Treatment Auditor as a
+    deterministic callout — flags when two prescribed drugs hit the same
+    molecular target (could be intentional combo therapy, could be
+    redundant, but worth raising with the prescriber).
+
+    Request body (JSON):
+        {
+            "drugs": [
+                {"name": "anastrozole", "chembl_id": "CHEMBL1399"},
+                {"name": "letrozole",   "chembl_id": "CHEMBL1444"}
+            ]
+        }
+
+    Response:
+        {
+            "success": true,
+            "targets_by_drug": [{"name", "chembl_id", "targets": [...]}],
+            "unmatched": ["drug names without a ChEMBL ID"],
+            "overlaps": [
+                {"drug_a", "drug_b",
+                 "shared_targets": [{"target_chembl_id", "gene_symbol", ...}]}
+            ]
+        }
+
+    Backed by ChEMBL `mechanism` + `target` resources, cached locally.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({
+                'success': False,
+                'error': "Request body must be {\"drugs\": [{\"name\": str, \"chembl_id\": str?}, ...]}",
+            }), 400
+        if len(drugs_raw) > 50:
+            return jsonify({'success': False, 'error': 'Too many drugs (max 50 per request)'}), 400
+
+        cleaned = []
+        for entry in drugs_raw:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('name')
+            if not isinstance(name, str) or not name.strip():
+                continue
+            chembl_id = entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None
+            cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
+
+        from drug_targets import find_target_overlap
+        result = find_target_overlap(cleaned)
+        return jsonify({
+            'success': True,
+            **result,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 treatment-auditor target-overlap error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/treatment-auditor/drug-interactions', methods=['POST'])
+def v2_treatment_auditor_drug_interactions():
+    """
+    Return pairwise DrugBank drug-drug interactions among the supplied
+    drug list (issue #47). Surfaced by the Treatment Auditor as a
+    deterministic safety callout — factual rows from DrugBank, not
+    LLM-inferred.
+
+    Request body (JSON):
+        {
+            "drugs": [
+                {"name": "warfarin", "chembl_id": "CHEMBL1464", "drugbank_id": "DB00682"},
+                {"name": "aspirin",  "chembl_id": "CHEMBL25"}
+            ]
+        }
+
+    Response:
+        {
+            "success": true,
+            "drugbank_loaded": true,
+            "matched": [{"input_name": "...", "drugbank_id": "...", "drugbank_name": "..."}],
+            "unmatched": ["..."],
+            "interactions": [
+                {"drug_a_name": "...", "drug_b_name": "...",
+                 "drug_a_id": "DB...", "drug_b_id": "DB...",
+                 "description": "...", "severity": "severe|moderate|minor|null"}
+            ]
+        }
+
+    When the DrugBank XML hasn't been loaded into the local
+    `drug_interactions` table, `drugbank_loaded` is false and the client
+    should render a "DrugBank XML not loaded" hint instead of an empty
+    "no interactions found" message — those are very different statements.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({
+                'success': False,
+                'error': "Request body must be {\"drugs\": [{\"name\": str, ...}, ...]}",
+            }), 400
+        if len(drugs_raw) > 50:
+            return jsonify({
+                'success': False,
+                'error': 'Too many drugs (max 50 per request)',
+            }), 400
+
+        cleaned = []
+        for entry in drugs_raw:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('name')
+            if not isinstance(name, str) or not name.strip():
+                continue
+            chembl_id = entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None
+            drugbank_id = entry.get('drugbank_id') if isinstance(entry.get('drugbank_id'), str) else None
+            cleaned.append({
+                'name': name.strip(),
+                'chembl_id': chembl_id,
+                'drugbank_id': drugbank_id,
+            })
+
+        from drugbank_interactions import get_pairwise_interactions
+        result = get_pairwise_interactions(cleaned)
+        return jsonify({
+            'success': True,
+            **result,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 treatment-auditor drug-interactions error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/treatment-auditor/normalize-drugs', methods=['POST'])
+def v2_treatment_auditor_normalize_drugs():
+    """
+    Normalize a batch of drug names via RxNorm so the Treatment Auditor can
+    dedupe brand-vs-generic entries before fanning out per-drug fetches
+    (issue #55). "Taxol" + "paclitaxel" collapse to a single ingredient row.
+
+    Request body (JSON):
+        {
+            "drugs": [
+                {"name": "Taxol", "chembl_id": "CHEMBL428647"},
+                {"name": "paclitaxel", "chembl_id": "CHEMBL428647"}
+            ]
+        }
+
+    Response:
+        {
+            "success": true,
+            "normalizations": [
+                {
+                    "input_name": "Taxol",
+                    "input_chembl_id": "CHEMBL428647",
+                    "rxcui": "...",
+                    "normalized_name": "Paclitaxel",
+                    "ingredient_rxcui": "56946",
+                    "ingredient_name": "Paclitaxel",
+                    "matched": true,
+                    "group_key": "rxcui:56946"
+                }
+            ]
+        }
+
+    `group_key` is the dedupe key the client should use. Unmatched inputs
+    fall back to `name:<lowercased>` so they still appear as distinct rows.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({
+                'success': False,
+                'error': "Request body must be {\"drugs\": [{\"name\": str, \"chembl_id\": str?}, ...]}",
+            }), 400
+        if len(drugs_raw) > 50:
+            # The Treatment Auditor only ever passes a small handful of
+            # drugs; cap defensively so a malformed client can't hammer
+            # RxNorm via this endpoint.
+            return jsonify({
+                'success': False,
+                'error': 'Too many drugs (max 50 per request)',
+            }), 400
+
+        cleaned = []
+        for entry in drugs_raw:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('name')
+            if not isinstance(name, str) or not name.strip():
+                continue
+            chembl_id = entry.get('chembl_id')
+            if chembl_id is not None and not isinstance(chembl_id, str):
+                chembl_id = None
+            cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
+
+        from rxnorm_normalize import normalize_drugs
+        normalizations = normalize_drugs(cleaned)
+        return jsonify({
+            'success': True,
+            'normalizations': normalizations,
+            'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
+        })
+    except Exception:
+        logger.exception("v2 treatment-auditor normalize-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
 def handle_stdin_request():
     """
     Handle a single JSON request from stdin.

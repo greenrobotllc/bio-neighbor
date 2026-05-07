@@ -72,6 +72,32 @@ struct TreatmentAuditorView: View {
     @State private var isExportingPDF: Bool = false
     @State private var pdfExportError: String?
 
+    /// Result of the most recent RxNorm dedupe pass (issue #55) — drives
+    /// the "Combined" callout above the audit output. Cleared when the
+    /// audit is dismissed or a new audit run starts.
+    @State private var drugMergeNotes: [DrugMergeNote] = []
+
+    /// Result of the DrugBank pairwise drug-drug interaction lookup
+    /// (issue #47). Drives a deterministic safety callout above the AI
+    /// output. `drugbankAvailable` distinguishes "no interactions found"
+    /// from "DrugBank XML wasn't loaded" — those need very different
+    /// UI treatment.
+    @State private var drugInteractions: [DrugInteraction] = []
+    @State private var drugInteractionUnmatched: [String] = []
+    @State private var drugInteractionDataAvailable: Bool = true
+
+    /// Result of the mechanism-of-action target overlap pass (issue #53).
+    /// Drives a deterministic callout above the audit output and feeds
+    /// the LLM prompt.
+    @State private var targetOverlaps: [DrugTargetOverlap] = []
+    @State private var targetsByDrug: [DrugTargetsByDrug] = []
+
+    /// Result of the OpenFDA FAERS adverse-event lookup (issue #46) —
+    /// per-drug top reactions and symptom→reaction matches. Drives a
+    /// UI callout above the audit output and feeds the LLM prompt.
+    @State private var faersPanels: [FAERSDrugPanel] = []
+    @State private var faersSymptomMatches: [FAERSSymptomMatch] = []
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -120,7 +146,7 @@ struct TreatmentAuditorView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "info.circle")
                 .foregroundColor(.secondary)
-            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches). Adverse-event databases, drug-interaction sources, and tumor-mutation matching are planned follow-ups.")
+            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches), RxNorm (brand→generic dedupe), DrugBank (pairwise drug-drug interactions, when XML is loaded locally), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS (post-market adverse-event reporting). Tumor-mutation matching is a planned follow-up.")
                 .appFont(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -447,6 +473,29 @@ struct TreatmentAuditorView: View {
                     AuditStepList(steps: auditSteps)
                 }
 
+                if !drugMergeNotes.isEmpty {
+                    DrugMergeNotesCallout(notes: drugMergeNotes)
+                }
+
+                if !drugInteractions.isEmpty || (!drugInteractionDataAvailable && prescribedDrugs.count >= 2) {
+                    DrugInteractionsCallout(
+                        interactions: drugInteractions,
+                        dataAvailable: drugInteractionDataAvailable,
+                        unmatched: drugInteractionUnmatched
+                    )
+                }
+
+                if !targetOverlaps.isEmpty {
+                    TargetOverlapCallout(overlaps: targetOverlaps)
+                }
+
+                if !faersPanels.isEmpty || !faersSymptomMatches.isEmpty {
+                    FAERSCallout(
+                        panels: faersPanels,
+                        symptomMatches: faersSymptomMatches
+                    )
+                }
+
                 if !auditOutput.isEmpty || isAuditing || auditError != nil {
                     AISummaryCard(
                         summary: auditOutput,
@@ -462,6 +511,14 @@ struct TreatmentAuditorView: View {
                             auditSteps = []
                             completedAudit = nil
                             pdfExportError = nil
+                            drugMergeNotes = []
+                            drugInteractions = []
+                            drugInteractionUnmatched = []
+                            drugInteractionDataAvailable = true
+                            targetOverlaps = []
+                            targetsByDrug = []
+                            faersPanels = []
+                            faersSymptomMatches = []
                         }
                     )
                 }
@@ -634,6 +691,14 @@ struct TreatmentAuditorView: View {
         auditSteps = []
         completedAudit = nil
         pdfExportError = nil
+        drugMergeNotes = []
+        drugInteractions = []
+        drugInteractionUnmatched = []
+        drugInteractionDataAvailable = true
+        targetOverlaps = []
+        targetsByDrug = []
+        faersPanels = []
+        faersSymptomMatches = []
 
         auditTask = Task { @MainActor in
             defer {
@@ -671,18 +736,50 @@ struct TreatmentAuditorView: View {
             )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
+            // 2.5. RxNorm normalize + dedupe brand-vs-generic entries
+            //      (issue #55). Best-effort: on backend failure we treat
+            //      every input as its own group so the audit keeps running.
+            let dedupedDrugs = await normalizeAndDedupeDrugs(drugsSnapshot, runID: runID)
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
+
+            // 2.6. DrugBank pairwise interactions among the deduped drugs
+            //      (issue #47). Deterministic safety callout — runs in the
+            //      foreground because it blocks the prompt assembly we
+            //      want it included in.
+            await fetchDrugInteractionsStep(dedupedDrugs, runID: runID)
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
+
+            // 2.7. Mechanism-of-action target overlap (issue #53).
+            //      Deterministic findings — same treatment as
+            //      interactions: surfaced as a callout AND fed into the
+            //      prompt context.
+            await fetchTargetOverlapStep(dedupedDrugs, runID: runID)
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
+
+            // 2.8. OpenFDA FAERS adverse-event frequencies (issue #46).
+            //      Surfaces real-world reporting data so the audit can say
+            //      "your fatigue matches the #1 reported reaction for X".
+            await fetchAdverseEventStep(
+                drugs: dedupedDrugs,
+                symptoms: symptomsSnapshot.map { $0.text },
+                runID: runID
+            )
+            if Task.isCancelled || self.currentAuditRunID != runID { return }
+
             // 3. Per-drug trials (cap 5).
-            let drugTrials = await fetchTrialsForDrugs(drugsSnapshot, runID: runID)
+            let drugTrials = await fetchTrialsForDrugs(dedupedDrugs, runID: runID)
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
             // 4. Build the plan that gets passed to the LLM helpers.
-            let plan = TreatmentAuditPlan(
+            //    `dedupedDrugs` (post-RxNorm) drives the prompt so the LLM
+            //    doesn't see duplicate brand/generic rows.
+            var plan = TreatmentAuditPlan(
                 cancerTypeName: cancerType.displayName ?? cancerType.name,
                 subtypeName: subtype.shortName ?? subtype.name,
                 subtypeMarkers: subtype.markers,
                 stage: stageSnapshot,
                 stageDetail: stageDetailSnapshot.isEmpty ? nil : stageDetailSnapshot,
-                drugs: drugsSnapshot.map {
+                drugs: dedupedDrugs.map {
                     TreatmentAuditPlan.Drug(name: $0.name, chemblId: $0.chemblId)
                 },
                 treatments: treatmentsSnapshot,
@@ -691,6 +788,39 @@ struct TreatmentAuditorView: View {
                 modalityTrials: modalityTrials,
                 pdqSummary: pdq
             )
+            plan.drugInteractions = self.drugInteractions.map {
+                TreatmentAuditPlan.InteractionRow(
+                    drugA: $0.drugAName,
+                    drugB: $0.drugBName,
+                    severity: $0.severity,
+                    description: $0.description
+                )
+            }
+            plan.drugInteractionDataAvailable = self.drugInteractionDataAvailable
+            // Flatten each pairwise overlap into one prompt row per shared
+            // target so the LLM can speak to each gene specifically.
+            plan.targetOverlaps = self.targetOverlaps.flatMap { overlap in
+                overlap.sharedTargets.map { shared in
+                    TreatmentAuditPlan.TargetOverlapRow(
+                        drugA: overlap.drugA,
+                        drugB: overlap.drugB,
+                        geneSymbol: shared.geneSymbol,
+                        proteinName: shared.proteinName,
+                        actionTypeA: shared.actionTypeA,
+                        actionTypeB: shared.actionTypeB
+                    )
+                }
+            }
+            plan.faersSymptomMatches = self.faersSymptomMatches.map {
+                TreatmentAuditPlan.FAERSSymptomMatchRow(
+                    drugName: $0.drugName,
+                    symptom: $0.symptom,
+                    matchedTerm: $0.matchedTerm,
+                    count: $0.count,
+                    rankInTop: $0.rankInTop,
+                    totalReports: $0.totalReports
+                )
+            }
 
             let planContext = OllamaService.planContextSummary(plan)
 
@@ -767,7 +897,7 @@ struct TreatmentAuditorView: View {
                 // Snapshot for PDF export (issue #58). Built after the
                 // synthesis step is marked .done so the captured step list
                 // mirrors the final UI state.
-                self.completedAudit = CompletedAuditSnapshot(
+                var snapshot = CompletedAuditSnapshot(
                     plan: plan,
                     sourceSummaries: summaries.map {
                         AuditSourceSummary(label: $0.label, summary: $0.summary)
@@ -776,6 +906,12 @@ struct TreatmentAuditorView: View {
                     steps: self.auditSteps,
                     generatedAt: Date()
                 )
+                // Carry the deterministic-finding extras the plan can't
+                // hold (merges happen pre-plan; FAERS top-events panels
+                // are PDF-only context the LLM doesn't need).
+                snapshot.mergeNotes = self.drugMergeNotes
+                snapshot.faersPanels = self.faersPanels
+                self.completedAudit = snapshot
             } catch {
                 guard !Task.isCancelled, self.currentAuditRunID == runID else { return }
                 self.auditError = error.localizedDescription
@@ -913,6 +1049,271 @@ struct TreatmentAuditorView: View {
     }
 
     // MARK: - Fetch helpers
+
+    /// Normalizes prescribed drugs via RxNorm and collapses brand-vs-generic
+    /// entries onto a single representative (issue #55). The returned list is
+    /// what every downstream fetch (trials, modality, AE, …) sees, so we
+    /// don't pay 2× the API cost for "Taxol" + "paclitaxel".
+    ///
+    /// Best-effort: a normalization failure surfaces as a `.failed` step but
+    /// doesn't block the audit — we fall back to the raw input list so the
+    /// rest of the pipeline still runs.
+    @MainActor
+    private func normalizeAndDedupeDrugs(
+        _ drugs: [PrescribedDrug],
+        runID: UUID
+    ) async -> [PrescribedDrug] {
+        guard drugs.count > 0 else { return drugs }
+        // Skip the RxNorm round-trip when there's nothing to dedupe — the
+        // step would just confuse the user with "Normalizing 1 drug".
+        guard drugs.count >= 2 else { return drugs }
+
+        let stepIndex = appendStep(
+            runID: runID,
+            label: "Normalizing drug names (RxNorm)",
+            state: .running
+        )
+
+        let payload = drugs.map { (name: $0.name, chemblId: $0.chemblId) }
+        let normalizations: [DrugNormalization]
+        do {
+            normalizations = try await BackendService.shared.normalizeDrugs(payload)
+        } catch is CancellationError {
+            if let i = stepIndex { updateStep(runID: runID, at: i, state: .failed("Cancelled")) }
+            return drugs
+        } catch {
+            // RxNorm is best-effort — every other audit pass still runs on
+            // the raw input list.
+            if let i = stepIndex {
+                updateStep(runID: runID, at: i, state: .failed(error.localizedDescription))
+            }
+            return drugs
+        }
+
+        guard !Task.isCancelled, isActiveRun(runID) else { return drugs }
+
+        // Pair each prescribed drug to its normalization row, lining them up
+        // by index. The backend preserves order; pad with nil for safety.
+        let paired: [(PrescribedDrug, DrugNormalization?)] = drugs.enumerated().map { (i, drug) in
+            i < normalizations.count ? (drug, normalizations[i]) : (drug, nil)
+        }
+
+        // Group by groupKey, preserving first-seen order so the chip layout
+        // doesn't reshuffle when a brand entry merges with a generic.
+        var groupOrder: [String] = []
+        var groups: [String: [(PrescribedDrug, DrugNormalization?)]] = [:]
+        for entry in paired {
+            // Drugs with no normalization match (or empty group_key) fall
+            // back to a per-drug key so they remain distinct rows.
+            let key = entry.1?.groupKey ?? "name:\(entry.0.name.lowercased())"
+            if groups[key] == nil {
+                groups[key] = []
+                groupOrder.append(key)
+            }
+            groups[key]?.append(entry)
+        }
+
+        var deduped: [PrescribedDrug] = []
+        var notes: [DrugMergeNote] = []
+        for key in groupOrder {
+            let bucket = groups[key] ?? []
+            // Single-row groups pass through untouched.
+            if bucket.count == 1 {
+                deduped.append(bucket[0].0)
+                continue
+            }
+            // Multi-row group: pick a representative row. Prefer one with a
+            // ChEMBL ID so the downstream trial fetch still has a valid key.
+            let representative = bucket.first(where: { $0.0.chemblId != nil })?.0 ?? bucket[0].0
+            // Display name: prefer the RxNorm ingredient name (the canonical
+            // generic) so the chip reads "Paclitaxel" instead of either of
+            // the original inputs.
+            let ingredientName = bucket.compactMap { $0.1?.ingredientName }
+                .first(where: { !$0.isEmpty })
+            let displayName = ingredientName?.capitalized ?? representative.name
+            deduped.append(PrescribedDrug(
+                name: displayName,
+                chemblId: representative.chemblId
+            ))
+            notes.append(DrugMergeNote(
+                ingredientName: displayName,
+                originalNames: bucket.map { $0.0.name }
+            ))
+        }
+
+        self.drugMergeNotes = notes
+        if let i = stepIndex {
+            let merged = drugs.count - deduped.count
+            let state: AuditStep.State
+            if merged > 0 {
+                state = .done
+            } else {
+                state = .skipped("No duplicates found")
+            }
+            updateStep(runID: runID, at: i, state: state)
+        }
+        return deduped
+    }
+
+    /// Fetches pairwise DrugBank drug-drug interactions for the deduped
+    /// drug list (issue #47) and stashes the result in `drugInteractions`
+    /// for the UI callout + the LLM prompt context. Best-effort: on
+    /// failure we mark the step `.failed` but the audit keeps running.
+    @MainActor
+    private func fetchDrugInteractionsStep(
+        _ drugs: [PrescribedDrug],
+        runID: UUID
+    ) async {
+        // Single drug = no pairs to flag. Skip silently — adding a step
+        // here would just be noise.
+        guard drugs.count >= 2 else { return }
+
+        let stepIndex = appendStep(
+            runID: runID,
+            label: "Checking pairwise drug interactions (DrugBank)",
+            state: .running
+        )
+
+        let payload: [(name: String, chemblId: String?, drugbankId: String?)] = drugs.map {
+            ($0.name, $0.chemblId, nil)
+        }
+
+        let outcome: BackendService.DrugInteractionsOutcome
+        do {
+            outcome = try await BackendService.shared.fetchDrugInteractions(payload)
+        } catch is CancellationError {
+            if let i = stepIndex { updateStep(runID: runID, at: i, state: .failed("Cancelled")) }
+            return
+        } catch {
+            if let i = stepIndex {
+                updateStep(runID: runID, at: i, state: .failed(error.localizedDescription))
+            }
+            return
+        }
+
+        guard !Task.isCancelled, isActiveRun(runID) else { return }
+
+        self.drugInteractions = outcome.interactions
+        self.drugInteractionUnmatched = outcome.unmatched
+        self.drugInteractionDataAvailable = outcome.drugbankLoaded
+
+        if let i = stepIndex {
+            let state: AuditStep.State
+            if !outcome.drugbankLoaded {
+                state = .skipped("DrugBank XML not loaded")
+            } else if outcome.interactions.isEmpty {
+                state = .skipped("No interactions among prescribed drugs")
+            } else {
+                state = .done
+            }
+            updateStep(runID: runID, at: i, state: state)
+        }
+    }
+
+    /// Fetches mechanism-of-action target overlap among the deduped
+    /// drugs (issue #53) and stashes the result for the UI callout +
+    /// LLM prompt. Best-effort: failure marks the step `.failed` but
+    /// the audit continues.
+    @MainActor
+    private func fetchTargetOverlapStep(
+        _ drugs: [PrescribedDrug],
+        runID: UUID
+    ) async {
+        guard drugs.count >= 2 else { return }
+
+        let stepIndex = appendStep(
+            runID: runID,
+            label: "Checking mechanism/target overlap (ChEMBL)",
+            state: .running
+        )
+
+        let payload: [(name: String, chemblId: String?)] = drugs.map { ($0.name, $0.chemblId) }
+
+        let outcome: BackendService.TargetOverlapOutcome
+        do {
+            outcome = try await BackendService.shared.fetchTargetOverlap(payload)
+        } catch is CancellationError {
+            if let i = stepIndex { updateStep(runID: runID, at: i, state: .failed("Cancelled")) }
+            return
+        } catch {
+            if let i = stepIndex {
+                updateStep(runID: runID, at: i, state: .failed(error.localizedDescription))
+            }
+            return
+        }
+
+        guard !Task.isCancelled, isActiveRun(runID) else { return }
+
+        self.targetsByDrug = outcome.targetsByDrug
+        self.targetOverlaps = outcome.overlaps
+
+        if let i = stepIndex {
+            let state: AuditStep.State
+            if outcome.overlaps.isEmpty {
+                let coverage = outcome.targetsByDrug.filter { !$0.targets.isEmpty }.count
+                if coverage == 0 {
+                    state = .skipped("No target data found in ChEMBL for these drugs")
+                } else {
+                    state = .skipped("No target overlap among prescribed drugs")
+                }
+            } else {
+                state = .done
+            }
+            updateStep(runID: runID, at: i, state: state)
+        }
+    }
+
+    /// Fetches OpenFDA FAERS adverse-event panels for the deduped drug
+    /// list and matches the user's symptoms against the top reactions
+    /// (issue #46). Best-effort: failure marks the step `.failed` but
+    /// the audit continues.
+    @MainActor
+    private func fetchAdverseEventStep(
+        drugs: [PrescribedDrug],
+        symptoms: [String],
+        runID: UUID
+    ) async {
+        guard !drugs.isEmpty else { return }
+
+        let stepIndex = appendStep(
+            runID: runID,
+            label: "Pulling FAERS adverse-event reports (OpenFDA)",
+            state: .running
+        )
+
+        let payload: [(name: String, chemblId: String?)] = drugs.map { ($0.name, $0.chemblId) }
+
+        let outcome: BackendService.FAERSPanelOutcome
+        do {
+            outcome = try await BackendService.shared.fetchAdverseEventPanel(
+                drugs: payload, symptoms: symptoms
+            )
+        } catch is CancellationError {
+            if let i = stepIndex { updateStep(runID: runID, at: i, state: .failed("Cancelled")) }
+            return
+        } catch {
+            if let i = stepIndex {
+                updateStep(runID: runID, at: i, state: .failed(error.localizedDescription))
+            }
+            return
+        }
+
+        guard !Task.isCancelled, isActiveRun(runID) else { return }
+
+        self.faersPanels = outcome.perDrug
+        self.faersSymptomMatches = outcome.symptomMatches
+
+        if let i = stepIndex {
+            let coverage = outcome.perDrug.filter { !$0.topEvents.isEmpty }.count
+            let state: AuditStep.State
+            if coverage == 0 {
+                state = .skipped("No FAERS reports for these drugs")
+            } else {
+                state = .done
+            }
+            updateStep(runID: runID, at: i, state: state)
+        }
+    }
 
     /// Per-modality fetch outcome — keeps the trial list and any error
     /// returned by the backend so the step UI can distinguish a true
@@ -1108,6 +1509,15 @@ private struct PrescribedDrug: Identifiable, Hashable {
     let chemblId: String?
 }
 
+/// One brand→generic merge surfaced by the RxNorm dedupe step (issue #55).
+/// Drives the "Combined" callout above the audit output so the user sees
+/// when their inputs were collapsed.
+struct DrugMergeNote: Identifiable, Hashable {
+    let id = UUID()
+    let ingredientName: String
+    let originalNames: [String]
+}
+
 private struct ScheduledTreatment: Identifiable, Hashable {
     let id = UUID()
     let text: String
@@ -1219,6 +1629,323 @@ private struct AuditStepList: View {
         case .failed(let message): return message
         case .running, .done: return nil
         }
+    }
+}
+
+/// Renders a small callout above the audit output explaining which inputs
+/// were collapsed onto a single ingredient by the RxNorm dedupe step
+/// (issue #55). Deterministic and factual — surfaced as its own block,
+/// distinct from the AI-inferred audit text below.
+private struct DrugMergeNotesCallout: View {
+    let notes: [DrugMergeNote]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.merge")
+                    .foregroundColor(.accentColor)
+                Text("Combined brand-vs-generic entries")
+                    .appFont(.caption, weight: .semibold)
+            }
+            ForEach(notes) { note in
+                let originals = note.originalNames.joined(separator: " + ")
+                Text("\(originals) → \(note.ingredientName)")
+                    .appFont(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("RxNorm normalized these to the same active ingredient. Per-drug fetches use the merged entry.")
+                .appFont(.caption2)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.accentColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
+/// Renders pairwise DrugBank drug-drug interactions as a deterministic
+/// safety callout (issue #47). Distinct from the AI-inferred audit text
+/// — these rows are factual lookups from DrugBank, sorted severe →
+/// moderate → minor → unknown by the backend.
+///
+/// When `dataAvailable=false` the view renders a "DrugBank XML not loaded"
+/// hint instead of "no interactions" — those are very different
+/// statements and conflating them would be a safety hazard.
+private struct DrugInteractionsCallout: View {
+    let interactions: [DrugInteraction]
+    let dataAvailable: Bool
+    let unmatched: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: dataAvailable ? "exclamationmark.triangle.fill" : "questionmark.circle")
+                    .foregroundColor(dataAvailable && hasSevere ? .red : .orange)
+                Text(headerText)
+                    .appFont(.caption, weight: .semibold)
+            }
+
+            if !dataAvailable {
+                Text("DrugBank XML hasn't been loaded into the local database, so interactions can't be checked. Run `python backend/load_drugbank_interactions.py` after dropping the DrugBank XML at `data/drugbank_cache/drugbank.xml` (free academic registration at go.drugbank.com).")
+                    .appFont(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(interactions) { row in
+                    interactionRow(row)
+                }
+                if !unmatched.isEmpty {
+                    Text("Couldn't match in DrugBank: \(unmatched.joined(separator: ", "))")
+                        .appFont(.caption2)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Source: DrugBank. Severity is heuristic from the description text — confirm with the prescribing clinician.")
+                    .appFont(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(calloutColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(calloutColor.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private var hasSevere: Bool {
+        interactions.contains { $0.severity?.lowercased() == "severe" }
+    }
+
+    private var calloutColor: Color {
+        if !dataAvailable { return .secondary }
+        return hasSevere ? .red : .orange
+    }
+
+    private var headerText: String {
+        if !dataAvailable {
+            return "Drug-drug interactions: data unavailable"
+        }
+        if interactions.isEmpty {
+            return "Drug-drug interactions: none found"
+        }
+        let severeCount = interactions.filter { $0.severity?.lowercased() == "severe" }.count
+        if severeCount > 0 {
+            return "Drug-drug interactions (\(interactions.count) found, \(severeCount) severe)"
+        }
+        return "Drug-drug interactions (\(interactions.count) found)"
+    }
+
+    @ViewBuilder
+    private func interactionRow(_ row: DrugInteraction) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(row.drugAName) ↔ \(row.drugBName)")
+                    .appFont(.caption, weight: .semibold)
+                if let sev = row.severity, !sev.isEmpty {
+                    Text(sev.uppercased())
+                        .appFont(.caption2, weight: .semibold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(severityColor(sev).opacity(0.18))
+                        .foregroundColor(severityColor(sev))
+                        .clipShape(Capsule())
+                }
+            }
+            if let desc = row.description, !desc.isEmpty {
+                Text(desc)
+                    .appFont(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func severityColor(_ severity: String) -> Color {
+        switch severity.lowercased() {
+        case "severe": return .red
+        case "moderate": return .orange
+        case "minor": return .yellow
+        default: return .secondary
+        }
+    }
+}
+
+/// Renders mechanism-of-action target overlap pairs as a deterministic
+/// callout (issue #53). Distinct from the AI-inferred audit text — these
+/// rows come from ChEMBL's `mechanism` resource. Could be intentional
+/// combination therapy or redundant — the audit text below should
+/// disambiguate.
+private struct TargetOverlapCallout: View {
+    let overlaps: [DrugTargetOverlap]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "scope")
+                    .foregroundColor(.purple)
+                Text("Mechanism / target overlap")
+                    .appFont(.caption, weight: .semibold)
+            }
+
+            ForEach(overlaps) { overlap in
+                ForEach(Array(overlap.sharedTargets.enumerated()), id: \.offset) { _, shared in
+                    overlapRow(overlap: overlap, shared: shared)
+                }
+            }
+
+            Text("Source: ChEMBL mechanism-of-action data. Overlap doesn't imply a problem — combo therapy is often intentional. Confirm with the prescribing clinician.")
+                .appFont(.caption2)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.purple.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.purple.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func overlapRow(
+        overlap: DrugTargetOverlap,
+        shared: DrugTargetOverlap.SharedTarget
+    ) -> some View {
+        let target = shared.geneSymbol ?? shared.proteinName ?? "shared target"
+        let actionA = shared.actionTypeA?.lowercased() ?? "—"
+        let actionB = shared.actionTypeB?.lowercased() ?? "—"
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(overlap.drugA) ↔ \(overlap.drugB)")
+                    .appFont(.caption, weight: .semibold)
+                Text(target)
+                    .appFont(.caption2, weight: .semibold)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.purple.opacity(0.18))
+                    .foregroundColor(.purple)
+                    .clipShape(Capsule())
+            }
+            Text("\(overlap.drugA): \(actionA) — \(overlap.drugB): \(actionB)")
+                .appFont(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// Renders OpenFDA FAERS post-market adverse-event data (issue #46) as
+/// two stacked sections: the symptom→reaction matches first (the
+/// load-bearing finding for an audit), then a short per-drug top-events
+/// list for context. Source labelled — these are *reports*, not
+/// causation.
+private struct FAERSCallout: View {
+    let panels: [FAERSDrugPanel]
+    let symptomMatches: [FAERSSymptomMatch]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                    .foregroundColor(.teal)
+                Text("OpenFDA post-market reporting (FAERS)")
+                    .appFont(.caption, weight: .semibold)
+            }
+
+            if !symptomMatches.isEmpty {
+                Text("Your symptoms vs. top reported reactions:")
+                    .appFont(.caption2, weight: .semibold)
+                    .foregroundColor(.secondary)
+                ForEach(symptomMatches) { match in
+                    matchRow(match)
+                }
+            }
+
+            if !panels.isEmpty {
+                Divider().padding(.vertical, 2)
+                Text("Top reactions per drug (any source):")
+                    .appFont(.caption2, weight: .semibold)
+                    .foregroundColor(.secondary)
+                ForEach(panels) { panel in
+                    panelSummary(panel)
+                }
+            }
+
+            Text("Source: openFDA FAERS. Reports are voluntary and do not establish causation; counts reflect what's been reported, not actual incidence.")
+                .appFont(.caption2)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.teal.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.teal.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func matchRow(_ m: FAERSSymptomMatch) -> some View {
+        let rankText: String = {
+            if let rank = m.rankInTop { return "#\(rank) of top reactions" }
+            return "in reports"
+        }()
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(m.drugName): \(m.symptom)")
+                    .appFont(.caption, weight: .semibold)
+                Text("→ \(m.matchedTerm)")
+                    .appFont(.caption2, weight: .semibold)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.teal.opacity(0.18))
+                    .foregroundColor(.teal)
+                    .clipShape(Capsule())
+            }
+            Text("\(rankText) — \(m.count.formatted()) of \(m.totalReports.formatted()) reports")
+                .appFont(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func panelSummary(_ p: FAERSDrugPanel) -> some View {
+        let preview = p.topEvents.prefix(5).map { "\($0.term.lowercased()) (\($0.count.formatted()))" }
+            .joined(separator: ", ")
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(p.drugName) — \(p.totalReports.formatted()) total reports")
+                .appFont(.caption, weight: .semibold)
+            Text(preview.isEmpty ? "No reports found in FAERS." : preview)
+                .appFont(.caption2)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
     }
 }
 

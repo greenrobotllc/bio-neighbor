@@ -682,3 +682,296 @@ struct CompareMoleculesRequest: Codable {
     let index2: Int?
 }
 
+// MARK: - Treatment Auditor RxNorm normalization (issue #55)
+
+/// One row of RxNorm-normalized output from
+/// `/cancer-research/v2/treatment-auditor/normalize-drugs`. The Treatment
+/// Auditor uses `groupKey` to dedupe brand-vs-generic entries before
+/// fanning out per-drug fetches; `ingredientName` drives the "merged"
+/// callout in the UI.
+struct DrugNormalization: Codable, Hashable {
+    let inputName: String
+    let inputChemblId: String?
+    let rxcui: String?
+    let normalizedName: String?
+    let ingredientRxcui: String?
+    let ingredientName: String?
+    let matched: Bool
+    /// Stable dedupe key: `rxcui:<ingredientRxcui>` when matched, else
+    /// `name:<lowercased input>` so unmatched names still render as their
+    /// own row instead of all collapsing together.
+    let groupKey: String
+
+    enum CodingKeys: String, CodingKey {
+        case inputName = "input_name"
+        case inputChemblId = "input_chembl_id"
+        case rxcui
+        case normalizedName = "normalized_name"
+        case ingredientRxcui = "ingredient_rxcui"
+        case ingredientName = "ingredient_name"
+        case matched
+        case groupKey = "group_key"
+    }
+}
+
+struct DrugNormalizationRequestEntry: Codable {
+    let name: String
+    let chemblId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case chemblId = "chembl_id"
+    }
+}
+
+struct DrugNormalizationRequest: Codable {
+    let drugs: [DrugNormalizationRequestEntry]
+}
+
+struct DrugNormalizationResponse: Codable {
+    let success: Bool
+    let normalizations: [DrugNormalization]?
+    let error: String?
+}
+
+// MARK: - Treatment Auditor DrugBank pairwise interactions (issue #47)
+
+/// One pairwise drug-drug interaction returned from
+/// `/cancer-research/v2/treatment-auditor/drug-interactions`. Severity is
+/// `"severe" | "moderate" | "minor" | nil` (heuristic — DrugBank's free
+/// description text doesn't carry a structured severity field).
+struct DrugInteraction: Codable, Hashable, Identifiable {
+    let drugAId: String
+    let drugAName: String
+    let drugBId: String
+    let drugBName: String
+    let description: String?
+    let severity: String?
+
+    /// Stable id for SwiftUI list rendering. The pair (a_id, b_id) is
+    /// unique across the table by virtue of the UNIQUE constraint.
+    var id: String { "\(drugAId)::\(drugBId)" }
+
+    enum CodingKeys: String, CodingKey {
+        case drugAId = "drug_a_id"
+        case drugAName = "drug_a_name"
+        case drugBId = "drug_b_id"
+        case drugBName = "drug_b_name"
+        case description
+        case severity
+    }
+}
+
+struct DrugInteractionMatch: Codable, Hashable {
+    let inputName: String
+    let drugbankId: String
+    let drugbankName: String
+
+    enum CodingKeys: String, CodingKey {
+        case inputName = "input_name"
+        case drugbankId = "drugbank_id"
+        case drugbankName = "drugbank_name"
+    }
+}
+
+struct DrugInteractionsResponse: Codable {
+    let success: Bool
+    let drugbankLoaded: Bool?
+    let matched: [DrugInteractionMatch]?
+    let unmatched: [String]?
+    let interactions: [DrugInteraction]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case drugbankLoaded = "drugbank_loaded"
+        case matched
+        case unmatched
+        case interactions
+        case error
+    }
+}
+
+struct DrugInteractionsRequestEntry: Codable {
+    let name: String
+    let chemblId: String?
+    let drugbankId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case chemblId = "chembl_id"
+        case drugbankId = "drugbank_id"
+    }
+}
+
+struct DrugInteractionsRequest: Codable {
+    let drugs: [DrugInteractionsRequestEntry]
+}
+
+// MARK: - Treatment Auditor target overlap (issue #53)
+
+/// One mechanism-of-action target row for a drug. Returned per-drug in
+/// the target-overlap response.
+struct DrugTargetEntry: Codable, Hashable {
+    let targetChemblId: String?
+    let geneSymbol: String?
+    let proteinName: String?
+    let actionType: String?
+    let mechanismOfAction: String?
+
+    enum CodingKeys: String, CodingKey {
+        case targetChemblId = "target_chembl_id"
+        case geneSymbol = "gene_symbol"
+        case proteinName = "protein_name"
+        case actionType = "action_type"
+        case mechanismOfAction = "mechanism_of_action"
+    }
+}
+
+struct DrugTargetsByDrug: Codable, Hashable, Identifiable {
+    let name: String
+    let chemblId: String?
+    let targets: [DrugTargetEntry]
+
+    var id: String { chemblId ?? name }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case chemblId = "chembl_id"
+        case targets
+    }
+}
+
+/// One pair of drugs sharing one or more mechanism-of-action targets.
+struct DrugTargetOverlap: Codable, Hashable, Identifiable {
+    let drugA: String
+    let drugB: String
+    let sharedTargets: [SharedTarget]
+
+    var id: String { "\(drugA)::\(drugB)" }
+
+    struct SharedTarget: Codable, Hashable {
+        let targetChemblId: String?
+        let geneSymbol: String?
+        let proteinName: String?
+        let mechanismOfAction: String?
+        let actionTypeA: String?
+        let actionTypeB: String?
+
+        enum CodingKeys: String, CodingKey {
+            case targetChemblId = "target_chembl_id"
+            case geneSymbol = "gene_symbol"
+            case proteinName = "protein_name"
+            case mechanismOfAction = "mechanism_of_action"
+            case actionTypeA = "action_type_a"
+            case actionTypeB = "action_type_b"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case drugA = "drug_a"
+        case drugB = "drug_b"
+        case sharedTargets = "shared_targets"
+    }
+}
+
+struct TargetOverlapResponse: Codable {
+    let success: Bool
+    let targetsByDrug: [DrugTargetsByDrug]?
+    let unmatched: [String]?
+    let overlaps: [DrugTargetOverlap]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case targetsByDrug = "targets_by_drug"
+        case unmatched
+        case overlaps
+        case error
+    }
+}
+
+struct TargetOverlapRequestEntry: Codable {
+    let name: String
+    let chemblId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case chemblId = "chembl_id"
+    }
+}
+
+struct TargetOverlapRequest: Codable {
+    let drugs: [TargetOverlapRequestEntry]
+}
+
+// MARK: - Treatment Auditor FAERS adverse events (issue #46)
+
+struct FAERSEvent: Codable, Hashable {
+    let term: String
+    let count: Int
+}
+
+struct FAERSDrugPanel: Codable, Hashable, Identifiable {
+    let drugName: String
+    let totalReports: Int
+    let topEvents: [FAERSEvent]
+
+    var id: String { drugName }
+
+    enum CodingKeys: String, CodingKey {
+        case drugName = "drug_name"
+        case totalReports = "total_reports"
+        case topEvents = "top_events"
+    }
+}
+
+struct FAERSSymptomMatch: Codable, Hashable, Identifiable {
+    let drugName: String
+    let symptom: String
+    let matchedTerm: String
+    let count: Int
+    let rankInTop: Int?
+    let totalReports: Int
+
+    var id: String { "\(drugName)::\(symptom)::\(matchedTerm)" }
+
+    enum CodingKeys: String, CodingKey {
+        case drugName = "drug_name"
+        case symptom
+        case matchedTerm = "matched_term"
+        case count
+        case rankInTop = "rank_in_top"
+        case totalReports = "total_reports"
+    }
+}
+
+struct FAERSResponse: Codable {
+    let success: Bool
+    let perDrug: [FAERSDrugPanel]?
+    let symptomMatches: [FAERSSymptomMatch]?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case perDrug = "per_drug"
+        case symptomMatches = "symptom_matches"
+        case error
+    }
+}
+
+struct FAERSRequestDrug: Codable {
+    let name: String
+    let chemblId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case chemblId = "chembl_id"
+    }
+}
+
+struct FAERSRequest: Codable {
+    let drugs: [FAERSRequestDrug]
+    let symptoms: [String]
+}
+
