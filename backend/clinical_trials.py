@@ -242,10 +242,14 @@ def fetch_modality_trials(
             break
 
     trials: List[Dict] = []
+    # Narrow to data-shape errors only: a record that doesn't match the
+    # expected CT.gov schema is logged-and-skipped, but unrelated programmer
+    # errors (NameError, ImportError, etc.) propagate so they can be fixed.
+    parse_errors = (KeyError, TypeError, ValueError, AttributeError, IndexError)
     for raw in all_studies:
         try:
             trials.append(parse_trial(raw))
-        except Exception as e:
+        except parse_errors as e:
             # Log so unexpected schema changes / bad records are diagnosable
             # rather than invisibly dropped. Keeps `print` style consistent
             # with the rest of this module (no logger configured here).
