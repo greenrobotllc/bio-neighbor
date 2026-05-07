@@ -33,6 +33,7 @@ BioNeighbor combines:
 - **CF-inspired neighbor recommendations:** Uses the concept of collaborative filtering applied to molecules and their activity profiles to prioritize promising candidates.
 - **Cancer Research workspace:** Drill into a cancer type, pick a drug, and see synonyms, indications, structurally similar drugs, and a unified Clinical Trial Outcomes section pulled from ClinicalTrials.gov — multi-arm trials, primary outcomes, per-arm values with 95% CIs, and CI-overlap flags so you can spot likely-real differences vs noise.
 - **On-device AI trial summaries (optional):** Point the app at a local Ollama install and get a plain-English summary of every clinical trial listed for a drug. Runs entirely on your machine — no data leaves the device. Default model is `gemma4:26b`; configurable in Settings.
+- **Treatment Auditor:** Describe a cancer treatment plan — disease/subtype, prescribed drugs, scheduled treatments, symptoms/side effects — and the on-device AI cross-references ClinicalTrials.gov for efficacy signals, alternative regimens, and gaps. Research tool only, not medical advice. Adverse-event databases, drug-interaction sources, and tumor-mutation matching are tracked as planned follow-ups.
 
 ---
 
@@ -55,6 +56,12 @@ BioNeighbor combines:
 
 ![Cancer Research with AI summary](images/screen6_cancer_research_ai_summary.png)
 *Cancer Research tab - Drug detail with Clinical Trial Outcomes and an optional on-device AI summary (Ollama + Gemma 4) condensing every trial into a few paragraphs.*
+
+![Treatment Auditor form](images/screen7_treatment_auditor_form.png)
+*Treatment Auditor tab - Enter your cancer type/subtype, prescribed drugs (autocompleted against ChEMBL), scheduled treatments, and side effects. Research tool only, not medical advice.*
+
+![Treatment Auditor audit results](images/screen8_treatment_auditor_audit.png)
+*Treatment Auditor - Streaming on-device AI audit covering efficacy signals, alternative regimens, side-effect concerns, plan gaps, and uncertainty, citing ClinicalTrials.gov NCT IDs.*
 
 ---
 
@@ -370,7 +377,8 @@ bio-neighbor/
 │           ├── MoleculesDownloadViewRx.swift # Molecule download (RxSwift)
 │           ├── ReactiveDownloadService.swift # RxSwift download service
 │           ├── ResultsView.swift     # Search results view
-│           └── SearchView.swift      # Advanced Search tab
+│           ├── SearchView.swift      # Advanced Search tab
+│           └── TreatmentAuditorView.swift # Treatment Auditor tab
 ├── data/                         # Data files
 │   ├── molecules.db              # SQLite database
 │   ├── faiss_index.bin           # FAISS search index

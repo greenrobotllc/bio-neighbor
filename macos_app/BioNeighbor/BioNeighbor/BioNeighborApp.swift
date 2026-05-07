@@ -315,6 +315,13 @@ struct ContentTabView: View {
                 }
                 .tag(5)
                 .accessibilityIdentifier("cancerResearchTab")
+
+            TreatmentAuditorView()
+                .tabItem {
+                    Label("Treatment Auditor", systemImage: "checklist")
+                }
+                .tag(6)
+                .accessibilityIdentifier("treatmentAuditorTab")
         }
     }
 }
