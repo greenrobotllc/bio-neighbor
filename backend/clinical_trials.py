@@ -203,14 +203,17 @@ def fetch_modality_trials(
         # cares about outcomes, not active recruitment.
         "filter.overallStatus": "COMPLETED|TERMINATED|ACTIVE_NOT_RECRUITING",
     }
-    try:
-        resp = requests.get(CT_GOV_V2, params=params, timeout=PER_TRIAL_TIMEOUT)
-        if resp.status_code != 200:
-            return []
-        payload = resp.json()
-    except Exception as e:
-        print(f"   ⚠️  CT.gov modality search error ({condition} / {modality}): {e}")
-        return []
+    # Let transport/HTTP/JSON errors propagate. The api.py route layer wraps
+    # every endpoint in a try/except that returns 500, which the iOS auditor
+    # then surfaces as a .failed step rather than the misleading .skipped
+    # ("no trials returned") that swallowing-then-returning-[] would produce.
+    resp = requests.get(CT_GOV_V2, params=params, timeout=PER_TRIAL_TIMEOUT)
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"ClinicalTrials.gov returned HTTP {resp.status_code} for "
+            f"condition={condition!r} modality={modality!r}"
+        )
+    payload = resp.json()
 
     studies = payload.get("studies") or []
     trials: List[Dict] = []

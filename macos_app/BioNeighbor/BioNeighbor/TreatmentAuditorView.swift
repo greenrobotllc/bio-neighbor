@@ -892,9 +892,27 @@ struct TreatmentAuditorView: View {
         }
     }
 
+    /// Per-drug fetch outcome — keeps the trial list and any error returned
+    /// by the backend so the aggregate step state can distinguish a real
+    /// "no trials reported" response from a backend failure.
+    private struct DrugFetchOutcome {
+        let drugTrials: TreatmentAuditPlan.DrugTrials
+        let error: Error?
+        /// Drugs without a ChEMBL ID legitimately have no trials to fetch —
+        /// not an error, not even a "skipped fetch". The aggregate step
+        /// reports counts excluding these so we don't claim a backend failure
+        /// when there was simply nothing to query.
+        let attempted: Bool
+    }
+
     /// Fetches trials for each prescribed drug that has a ChEMBL ID. Drugs
     /// without a ChEMBL ID are still included with an empty trials list so
-    /// the prompt acknowledges them. Capped at 5 concurrent requests.
+    /// the prompt acknowledges them. Capped at 5 concurrent requests. The
+    /// aggregate step's state distinguishes:
+    ///   - `.failed`  — at least one drug fetch raised
+    ///   - `.skipped` — every attempted fetch returned an empty list (no
+    ///     attempts at all also lands here)
+    ///   - `.done`    — at least one drug returned trials and no fetch errored
     @MainActor
     private func fetchTrialsForDrugs(
         _ drugs: [PrescribedDrug],
@@ -908,9 +926,11 @@ struct TreatmentAuditorView: View {
             state: .running
         )
 
-        let collected = await withTaskGroup(of: (Int, TreatmentAuditPlan.DrugTrials).self) { group in
+        let outcomes: [DrugFetchOutcome] = await withTaskGroup(
+            of: (Int, DrugFetchOutcome).self
+        ) { group in
             let maxParallel = 5
-            var results = Array<TreatmentAuditPlan.DrugTrials?>(repeating: nil, count: drugs.count)
+            var results = Array<DrugFetchOutcome?>(repeating: nil, count: drugs.count)
             var nextIndex = 0
             var inflight = 0
 
@@ -921,45 +941,77 @@ struct TreatmentAuditorView: View {
                     nextIndex += 1
                     inflight += 1
                     group.addTask {
-                        let trials: [ClinicalTrial]
-                        if let chembl = drug.chemblId, !chembl.isEmpty {
-                            do {
-                                trials = try await BackendService.shared
-                                    .fetchClinicalTrials(chemblId: chembl, limit: 10)
-                            } catch {
-                                trials = []
-                            }
-                        } else {
-                            trials = []
+                        guard let chembl = drug.chemblId, !chembl.isEmpty else {
+                            return (i, DrugFetchOutcome(
+                                drugTrials: TreatmentAuditPlan.DrugTrials(
+                                    drugName: drug.name,
+                                    chemblId: drug.chemblId,
+                                    trials: []
+                                ),
+                                error: nil,
+                                attempted: false
+                            ))
                         }
-                        return (i, TreatmentAuditPlan.DrugTrials(
-                            drugName: drug.name,
-                            chemblId: drug.chemblId,
-                            trials: trials
-                        ))
+                        do {
+                            let trials = try await BackendService.shared
+                                .fetchClinicalTrials(chemblId: chembl, limit: 10)
+                            return (i, DrugFetchOutcome(
+                                drugTrials: TreatmentAuditPlan.DrugTrials(
+                                    drugName: drug.name,
+                                    chemblId: drug.chemblId,
+                                    trials: trials
+                                ),
+                                error: nil,
+                                attempted: true
+                            ))
+                        } catch {
+                            return (i, DrugFetchOutcome(
+                                drugTrials: TreatmentAuditPlan.DrugTrials(
+                                    drugName: drug.name,
+                                    chemblId: drug.chemblId,
+                                    trials: []
+                                ),
+                                error: error,
+                                attempted: true
+                            ))
+                        }
                     }
                 }
             }
 
             enqueue()
-            while let (i, payload) = await group.next() {
-                results[i] = payload
+            while let (i, outcome) = await group.next() {
+                results[i] = outcome
                 inflight -= 1
                 enqueue()
             }
             return results.compactMap { $0 }
         }
-        let nonEmpty = collected.filter { !$0.trials.isEmpty }.count
-        if let stepIndex = stepIndex {
-            updateStep(
-                runID: runID,
-                at: stepIndex,
-                state: nonEmpty == 0
-                    ? .skipped("No trials returned for any prescribed drug")
-                    : .done
-            )
+
+        let failed = outcomes.compactMap { o -> (String, Error)? in
+            if let err = o.error { return (o.drugTrials.drugName, err) }
+            return nil
         }
-        return collected
+        let attemptedCount = outcomes.filter(\.attempted).count
+        let nonEmptyCount = outcomes.filter { !$0.drugTrials.trials.isEmpty }.count
+
+        if let stepIndex = stepIndex {
+            let state: AuditStep.State
+            if !failed.isEmpty {
+                let drugList = failed.map(\.0).joined(separator: ", ")
+                let firstMessage = failed[0].1.localizedDescription
+                state = .failed(
+                    "Trial fetch failed for \(failed.count) of \(attemptedCount) drug\(attemptedCount == 1 ? "" : "s") (\(drugList)): \(firstMessage)"
+                )
+            } else if nonEmptyCount == 0 {
+                state = .skipped("No trials returned for any prescribed drug")
+            } else {
+                state = .done
+            }
+            updateStep(runID: runID, at: stepIndex, state: state)
+        }
+
+        return outcomes.map(\.drugTrials)
     }
 }
 
