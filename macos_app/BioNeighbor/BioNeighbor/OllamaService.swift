@@ -379,9 +379,9 @@ final class OllamaService {
 
         lines.append("Write a treatment-plan audit (300–500 words) addressing, in numbered sections:")
         lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this cancer subtype?")
-        lines.append("2. Alternative or adjunct regimens: are there trial arms that showed clearly better outcomes than what's prescribed? Reference NCT IDs.")
+        lines.append("2. Alternative or adjunct regimens: are there trial arms that showed clearly better outcomes than what's prescribed? Reference NCT IDs. When the trial digest contains arms that combine the prescribed drug(s) with chemotherapy, radiation, surgery, or other targeted agents, compare those arms' outcomes to drug-only arms in the same trial and call out the delta.")
         lines.append("3. Symptom & side-effect concerns: any of the symptoms/side effects above that are notably associated with the listed drugs and worth flagging to the prescriber?")
-        lines.append("4. Plan gaps: any treatments listed that don't appear in any trial arm — or any standard-of-care components for this subtype that appear missing?")
+        lines.append("4. Plan gaps: any treatments listed that don't appear in any trial arm — or any standard-of-care components for this subtype that appear missing? Check both drug classes AND treatment modalities (chemotherapy, radiation, surgery, targeted therapy) — even if the user's scheduled-treatments list is empty, explicitly assess whether the subtype's standard of care typically involves any of those modalities and flag the absence with \"discuss with your oncology team\" framing.")
         lines.append("5. Uncertainty: where is the evidence thin, and what would you ask the oncology team?")
         lines.append("")
         lines.append("Conclude with EXACTLY two final lines:")
