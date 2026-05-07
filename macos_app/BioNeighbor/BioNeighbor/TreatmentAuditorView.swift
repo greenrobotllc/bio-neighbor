@@ -20,7 +20,9 @@
 //  State is ephemeral (@State); nothing persists across launches.
 //
 
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TreatmentAuditorView: View {
     @StateObject private var backendService = BackendService.shared
@@ -61,6 +63,14 @@ struct TreatmentAuditorView: View {
     /// Every shared-state mutation guards on this token so an old run can't
     /// clobber the new run's output, steps, or error state.
     @State private var currentAuditRunID: UUID?
+
+    /// Frozen snapshot of the most recent successful audit. Drives the
+    /// "Save as PDF…" button (issue #58) — captured at synthesis-success so
+    /// the report reflects exactly what the user saw, even if they edit the
+    /// form afterwards.
+    @State private var completedAudit: CompletedAuditSnapshot?
+    @State private var isExportingPDF: Bool = false
+    @State private var pdfExportError: String?
 
     var body: some View {
         ScrollView {
@@ -450,8 +460,38 @@ struct TreatmentAuditorView: View {
                             auditError = nil
                             isAuditing = false
                             auditSteps = []
+                            completedAudit = nil
+                            pdfExportError = nil
                         }
                     )
+                }
+
+                if let snapshot = completedAudit, !isAuditing {
+                    HStack(spacing: 8) {
+                        Button {
+                            exportPDF(snapshot: snapshot)
+                        } label: {
+                            Label("Save as PDF…", systemImage: "square.and.arrow.down")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isExportingPDF)
+
+                        if isExportingPDF {
+                            ProgressView().controlSize(.small)
+                            Text("Rendering report…")
+                                .appFont(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        if let err = pdfExportError {
+                            Label(err, systemImage: "exclamationmark.triangle")
+                                .appFont(.caption)
+                                .foregroundColor(.orange)
+                                .lineLimit(2)
+                        }
+                    }
                 }
 
                 if !canAudit && !isAuditing {
@@ -592,6 +632,8 @@ struct TreatmentAuditorView: View {
         auditError = nil
         isAuditing = true
         auditSteps = []
+        completedAudit = nil
+        pdfExportError = nil
 
         auditTask = Task { @MainActor in
             defer {
@@ -722,12 +764,55 @@ struct TreatmentAuditorView: View {
                 if let idx = synthesisStepIndex {
                     updateStep(runID: runID, at: idx, state: .done)
                 }
+                // Snapshot for PDF export (issue #58). Built after the
+                // synthesis step is marked .done so the captured step list
+                // mirrors the final UI state.
+                self.completedAudit = CompletedAuditSnapshot(
+                    plan: plan,
+                    sourceSummaries: summaries.map {
+                        AuditSourceSummary(label: $0.label, summary: $0.summary)
+                    },
+                    finalAudit: self.auditOutput,
+                    steps: self.auditSteps,
+                    generatedAt: Date()
+                )
             } catch {
                 guard !Task.isCancelled, self.currentAuditRunID == runID else { return }
                 self.auditError = error.localizedDescription
                 if let idx = synthesisStepIndex {
                     updateStep(runID: runID, at: idx, state: .failed(error.localizedDescription))
                 }
+            }
+        }
+    }
+
+    // MARK: - PDF export (issue #58)
+
+    /// Save the most recent audit as a printable PDF. Opens NSSavePanel for
+    /// the destination, then renders via `TreatmentAuditReportExporter`. The
+    /// rendered PDF includes inputs, methodology (search terms, data sources,
+    /// multi-pass pipeline), per-source summaries, the final synthesis, and
+    /// references — enough for someone to repeat the audit by hand.
+    private func exportPDF(snapshot: CompletedAuditSnapshot) {
+        pdfExportError = nil
+
+        let panel = NSSavePanel()
+        panel.title = "Save Treatment Audit Report"
+        panel.message = "Choose where to save the printable PDF report."
+        panel.allowedContentTypes = [UTType.pdf]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = TreatmentAuditReportExporter.defaultFilename(for: snapshot)
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        isExportingPDF = true
+        Task { @MainActor in
+            defer { isExportingPDF = false }
+            do {
+                try await TreatmentAuditReportExporter.exportPDF(snapshot: snapshot, to: url)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                pdfExportError = "PDF export failed: \(error.localizedDescription)"
             }
         }
     }
