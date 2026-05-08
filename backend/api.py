@@ -38,6 +38,22 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
 
 
+def _stripped_str_or_none(value: Any) -> Optional[str]:
+    """Normalize an optional string field for the Treatment Auditor
+    cleaned-drugs path: return `value.strip()` when it's a non-empty
+    string, otherwise None.
+
+    Identifier fields (`chembl_id`, `drugbank_id`) need the same
+    whitespace handling as `name` — `" CHEMBL1399 "` would otherwise
+    travel into ChEMBL lookups verbatim and miss the cache key built
+    from the trimmed canonical form.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
     """Parse and clamp an integer query parameter.
 
@@ -3884,7 +3900,7 @@ def v2_treatment_auditor_adverse_events():
                 continue
             cleaned_drugs.append({
                 'name': name.strip(),
-                'chembl_id': entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None,
+                'chembl_id': _stripped_str_or_none(entry.get('chembl_id')),
             })
         if not cleaned_drugs:
             return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
@@ -3955,7 +3971,7 @@ def v2_treatment_auditor_target_overlap():
             name = entry.get('name')
             if not isinstance(name, str) or not name.strip():
                 continue
-            chembl_id = entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None
+            chembl_id = _stripped_str_or_none(entry.get('chembl_id'))
             cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
         if not cleaned:
             return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
@@ -4028,12 +4044,10 @@ def v2_treatment_auditor_drug_interactions():
             name = entry.get('name')
             if not isinstance(name, str) or not name.strip():
                 continue
-            chembl_id = entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None
-            drugbank_id = entry.get('drugbank_id') if isinstance(entry.get('drugbank_id'), str) else None
             cleaned.append({
                 'name': name.strip(),
-                'chembl_id': chembl_id,
-                'drugbank_id': drugbank_id,
+                'chembl_id': _stripped_str_or_none(entry.get('chembl_id')),
+                'drugbank_id': _stripped_str_or_none(entry.get('drugbank_id')),
             })
         if not cleaned:
             return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
@@ -4107,10 +4121,10 @@ def v2_treatment_auditor_normalize_drugs():
             name = entry.get('name')
             if not isinstance(name, str) or not name.strip():
                 continue
-            chembl_id = entry.get('chembl_id')
-            if chembl_id is not None and not isinstance(chembl_id, str):
-                chembl_id = None
-            cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
+            cleaned.append({
+                'name': name.strip(),
+                'chembl_id': _stripped_str_or_none(entry.get('chembl_id')),
+            })
         if not cleaned:
             return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 

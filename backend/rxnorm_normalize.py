@@ -22,10 +22,11 @@ Reference:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import sqlite3
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -43,6 +44,17 @@ HTTP_TIMEOUT = 6.0
 RATE_LIMIT_DELAY = 0.05
 
 CACHE_TABLE = "drug_rxnorm_cache"
+
+# Bounded-parallelism settings for the cold-cache path. A single
+# `_live_normalize` call can do up to 5 sequential HTTP requests
+# (exact / approximate / properties / related / historystatus) each
+# with HTTP_TIMEOUT seconds of patience — without parallelism a 10-drug
+# audit with degraded RxNorm could stall the request for minutes.
+NORMALIZE_MAX_WORKERS = 4
+# Wall-clock cap for the entire batch's live lookups. Anything not done
+# by this deadline is treated as a transient failure for THIS request
+# (not cached) and the next audit retries.
+NORMALIZE_BATCH_DEADLINE_SECS = 30.0
 
 
 class RxNormLookupError(Exception):
@@ -412,72 +424,141 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
     if not drugs:
         return []
 
+    # ------------------------------------------------------------------
+    # Phase 1 — gather inputs in order and check the SQLite cache.
+    # Sequential is fine here: cache hits are sub-millisecond and we
+    # close the connection before the parallel phase so worker threads
+    # never share the sqlite handle.
+    # ------------------------------------------------------------------
+    inputs: List[Dict[str, Any]] = []  # one entry per valid input drug
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA busy_timeout = 5000")
     try:
         ensure_cache_table(conn)
-        out: List[Dict] = []
         for entry in drugs:
             name = (entry.get("name") or "").strip()
-            chembl_id = entry.get("chembl_id")
             if not name:
                 continue
             key = _input_key(name)
-
-            cached = _cache_lookup(conn, key)
-            if cached is not None:
-                result = cached
-            else:
-                # Track whether the live lookup answer is authoritative
-                # (definite rxcui or definite no-match) versus a
-                # transient failure. Only authoritative answers may be
-                # written to the cache — caching transient failures
-                # would freeze "no match" answers across future audits
-                # for drug names that are real and just failed to load
-                # this once.
-                result_is_authoritative = True
-                try:
-                    result = _live_normalize(name)
-                except RxNormLookupError as exc:
-                    logger.warning(
-                        "RxNorm transient error for %r — not caching: %s", name, exc
-                    )
-                    result = {
-                        "matched": False,
-                        "rxcui": None,
-                        "normalized_name": None,
-                        "ingredient_rxcui": None,
-                        "ingredient_name": None,
-                    }
-                    result_is_authoritative = False
-                except Exception:
-                    # Defensive — anything not RxNormLookupError is also
-                    # treated as transient (don't poison the cache).
-                    logger.exception("RxNorm normalize unexpected error for %r", name)
-                    result = {
-                        "matched": False,
-                        "rxcui": None,
-                        "normalized_name": None,
-                        "ingredient_rxcui": None,
-                        "ingredient_name": None,
-                    }
-                    result_is_authoritative = False
-                if result_is_authoritative:
-                    _cache_store(conn, key, name, result)
-
-            group_key = _group_key(result, name)
-            out.append(
-                {
-                    "input_name": name,
-                    "input_chembl_id": chembl_id,
-                    "rxcui": result.get("rxcui"),
-                    "normalized_name": result.get("normalized_name"),
-                    "ingredient_rxcui": result.get("ingredient_rxcui"),
-                    "ingredient_name": result.get("ingredient_name"),
-                    "matched": bool(result.get("matched")),
-                    "group_key": group_key,
-                }
-            )
-        return out
+            inputs.append({
+                "name": name,
+                "key": key,
+                "chembl_id": entry.get("chembl_id"),
+                "cached": _cache_lookup(conn, key),
+            })
     finally:
         conn.close()
+    if not inputs:
+        return []
+
+    # ------------------------------------------------------------------
+    # Phase 2 — parallel live lookups for cache misses, with a shared
+    # batch deadline so a degraded RxNorm service can't stall the
+    # whole audit for minutes. Bounded worker count keeps us polite.
+    # ------------------------------------------------------------------
+    transient_unmatched: Dict[str, Optional[str]] = {
+        "matched": False,
+        "rxcui": None,
+        "normalized_name": None,
+        "ingredient_rxcui": None,
+        "ingredient_name": None,
+    }
+    pending_indices = [i for i, e in enumerate(inputs) if e["cached"] is None]
+    # `live_outcomes[i] = (result_dict, is_authoritative)`
+    live_outcomes: Dict[int, tuple] = {}
+
+    if pending_indices:
+        # NOTE: deliberately not using `with ThreadPoolExecutor(...) as executor:`
+        # — the context manager's __exit__ blocks until every submitted
+        # task completes, defeating the deadline. We shut down with
+        # `wait=False` so the function returns as soon as the deadline
+        # fires; in-flight HTTP threads finish their work in the
+        # background (their results are simply discarded — caches are
+        # only written via the post-deadline `authoritative` path).
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=NORMALIZE_MAX_WORKERS
+        )
+        try:
+            future_to_idx = {
+                executor.submit(_live_normalize, inputs[i]["name"]): i
+                for i in pending_indices
+            }
+            try:
+                for future in concurrent.futures.as_completed(
+                    future_to_idx, timeout=NORMALIZE_BATCH_DEADLINE_SECS
+                ):
+                    idx = future_to_idx[future]
+                    name = inputs[idx]["name"]
+                    try:
+                        result = future.result()
+                        live_outcomes[idx] = (result, True)
+                    except RxNormLookupError as exc:
+                        logger.warning(
+                            "RxNorm transient error for %r — not caching: %s",
+                            name, exc,
+                        )
+                        live_outcomes[idx] = (dict(transient_unmatched), False)
+                    except Exception:
+                        logger.exception(
+                            "RxNorm normalize unexpected error for %r — not caching",
+                            name,
+                        )
+                        live_outcomes[idx] = (dict(transient_unmatched), False)
+            except concurrent.futures.TimeoutError:
+                # `as_completed`'s timeout fired — fall through to the
+                # cleanup loop which marks anything still pending as a
+                # transient failure.
+                pass
+            # Anything still in flight after the deadline → transient.
+            for future, idx in future_to_idx.items():
+                if idx in live_outcomes:
+                    continue
+                future.cancel()
+                logger.warning(
+                    "RxNorm batch deadline exceeded for %r — not caching",
+                    inputs[idx]["name"],
+                )
+                live_outcomes[idx] = (dict(transient_unmatched), False)
+        finally:
+            # `cancel_futures=True` is Python 3.9+; cancel anything still
+            # queued but already-running tasks finish in the background.
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    # ------------------------------------------------------------------
+    # Phase 3 — persist authoritative live results. Done in a fresh
+    # connection on the calling thread so we don't share sqlite handles
+    # with the worker pool.
+    # ------------------------------------------------------------------
+    authoritative = [(idx, r) for idx, (r, auth) in live_outcomes.items() if auth]
+    if authoritative:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        try:
+            for idx, result in authoritative:
+                _cache_store(conn, inputs[idx]["key"], inputs[idx]["name"], result)
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # Phase 4 — assemble output preserving original input order.
+    # ------------------------------------------------------------------
+    out: List[Dict] = []
+    for idx, e in enumerate(inputs):
+        if e["cached"] is not None:
+            result = e["cached"]
+        else:
+            result, _ = live_outcomes[idx]
+        group_key = _group_key(result, e["name"])
+        out.append(
+            {
+                "input_name": e["name"],
+                "input_chembl_id": e["chembl_id"],
+                "rxcui": result.get("rxcui"),
+                "normalized_name": result.get("normalized_name"),
+                "ingredient_rxcui": result.get("ingredient_rxcui"),
+                "ingredient_name": result.get("ingredient_name"),
+                "matched": bool(result.get("matched")),
+                "group_key": group_key,
+            }
+        )
+    return out

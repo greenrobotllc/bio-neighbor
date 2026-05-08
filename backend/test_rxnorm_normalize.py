@@ -218,6 +218,48 @@ class TestNormalizeDrugsCacheRoundtrip(unittest.TestCase):
             with self.assertRaises(rxnorm_normalize.RxNormLookupError):
                 rxnorm_normalize._historystatus("12345")
 
+    def test_batch_deadline_marks_slow_lookups_transient(self):
+        # Tighten the deadline well below the simulated lookup time so
+        # the deadline path gets exercised. We expect:
+        #  - the slow drugs to come back as `matched: false` (transient
+        #    fallback that the audit can still display), and
+        #  - none of those slow drugs to get persisted to the cache so
+        #    the next audit retries against a healthy RxNorm.
+        import time as _time
+
+        def slow_normalize(name):
+            _time.sleep(2.0)  # blow past the 0.5s deadline below
+            return {
+                "matched": True, "rxcui": "1", "normalized_name": name,
+                "ingredient_rxcui": "1", "ingredient_name": name,
+            }
+
+        with patch.object(rxnorm_normalize, "_live_normalize", side_effect=slow_normalize), \
+             patch.object(rxnorm_normalize, "NORMALIZE_BATCH_DEADLINE_SECS", 0.5):
+            t0 = _time.monotonic()
+            result = rxnorm_normalize.normalize_drugs([
+                {"name": "drugA", "chembl_id": None},
+                {"name": "drugB", "chembl_id": None},
+            ])
+            elapsed = _time.monotonic() - t0
+        # Should NOT have waited for both 2.0s sleeps to complete.
+        self.assertLess(elapsed, 1.5, f"deadline didn't fire (took {elapsed:.2f}s)")
+        # Both drugs surfaced as transient unmatched rows for THIS request.
+        self.assertEqual(len(result), 2)
+        for row in result:
+            self.assertFalse(row["matched"])
+        # Critically: nothing was cached. A re-run hits live again.
+        # Use a fresh, fast mock to verify the cache write was skipped.
+        with patch.object(
+            rxnorm_normalize, "_live_normalize",
+            return_value={
+                "matched": True, "rxcui": "9", "normalized_name": "drugA",
+                "ingredient_rxcui": "9", "ingredient_name": "drugA",
+            },
+        ) as mock_fast:
+            rxnorm_normalize.normalize_drugs([{"name": "drugA", "chembl_id": None}])
+            self.assertEqual(mock_fast.call_count, 1, "deadline-failed drug must re-fetch")
+
 
 if __name__ == "__main__":
     unittest.main()

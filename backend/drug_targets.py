@@ -467,29 +467,81 @@ def find_target_overlap(drugs: List[Dict]) -> Dict:
     }
 
 
+def _aggregate_targets_by_id(targets: List[Dict]) -> Dict[str, Dict]:
+    """Collapse multiple mechanism rows for the same target_chembl_id
+    into one canonical entry per target.
+
+    ChEMBL may return several mechanism rows for the same drug→target
+    relationship (different action types, different mechanism-of-action
+    strings, hierarchy variants). The pre-aggregation version of
+    `_shared_targets` kept only the first row per target on the A
+    side, then iterated *every* row on the B side — meaning a drug
+    with two mechanism rows pointing at the same gene would emit two
+    duplicate "shared target" entries with mismatched action types.
+
+    Aggregating up-front yields one canonical record per target with
+    deduped, order-preserving action_types and mechanisms_of_action
+    lists. Gene symbol and protein name take the first non-empty value
+    seen (they don't legitimately vary across rows for the same
+    target).
+    """
+    by_id: Dict[str, Dict] = {}
+    for t in targets:
+        tid = t.get("target_chembl_id")
+        if not tid:
+            continue
+        agg = by_id.setdefault(tid, {
+            "target_chembl_id": tid,
+            "gene_symbol": None,
+            "protein_name": None,
+            "action_types": [],
+            "mechanisms_of_action": [],
+        })
+        if not agg["gene_symbol"] and t.get("gene_symbol"):
+            agg["gene_symbol"] = t.get("gene_symbol")
+        if not agg["protein_name"] and t.get("protein_name"):
+            agg["protein_name"] = t.get("protein_name")
+        action = t.get("action_type")
+        if action and action not in agg["action_types"]:
+            agg["action_types"].append(action)
+        mech = t.get("mechanism_of_action")
+        if mech and mech not in agg["mechanisms_of_action"]:
+            agg["mechanisms_of_action"].append(mech)
+    return by_id
+
+
 def _shared_targets(targets_a: List[Dict], targets_b: List[Dict]) -> List[Dict]:
     """Return the targets present in both lists, with the action types
-    each drug uses."""
-    by_id_a: Dict[str, Dict] = {}
-    for t in targets_a:
-        tid = t.get("target_chembl_id")
-        if tid:
-            by_id_a.setdefault(tid, t)
+    each drug uses against that target.
+
+    Each shared target is emitted exactly once (deduped by
+    target_chembl_id) — see `_aggregate_targets_by_id` for the
+    reasoning. `action_type_a` / `action_type_b` are joined with " / "
+    when a drug has multiple action types against the same target so
+    the existing string-typed Swift contract still holds.
+    """
+    agg_a = _aggregate_targets_by_id(targets_a)
+    agg_b = _aggregate_targets_by_id(targets_b)
 
     shared: List[Dict] = []
-    for t in targets_b:
-        tid = t.get("target_chembl_id")
-        if not tid or tid not in by_id_a:
-            continue
-        a = by_id_a[tid]
+    # Sort by target_chembl_id for deterministic output ordering across
+    # the same input — matters for snapshot tests and reproducibility
+    # of the audit's deterministic-findings section.
+    for tid in sorted(set(agg_a) & set(agg_b)):
+        a = agg_a[tid]
+        b = agg_b[tid]
         shared.append(
             {
                 "target_chembl_id": tid,
-                "gene_symbol": a.get("gene_symbol") or t.get("gene_symbol"),
-                "protein_name": a.get("protein_name") or t.get("protein_name"),
-                "mechanism_of_action": a.get("mechanism_of_action") or t.get("mechanism_of_action"),
-                "action_type_a": a.get("action_type"),
-                "action_type_b": t.get("action_type"),
+                "gene_symbol": a.get("gene_symbol") or b.get("gene_symbol"),
+                "protein_name": a.get("protein_name") or b.get("protein_name"),
+                "mechanism_of_action": (
+                    " / ".join(a["mechanisms_of_action"])
+                    or " / ".join(b["mechanisms_of_action"])
+                    or None
+                ),
+                "action_type_a": " / ".join(a["action_types"]) or None,
+                "action_type_b": " / ".join(b["action_types"]) or None,
             }
         )
     return shared
