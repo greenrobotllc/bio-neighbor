@@ -45,6 +45,15 @@ RATE_LIMIT_DELAY = 0.05
 CACHE_TABLE = "drug_rxnorm_cache"
 
 
+class RxNormLookupError(Exception):
+    """Raised when an RxNorm lookup fails transiently (network error,
+    non-200 HTTP, malformed JSON). Distinct from "the lookup succeeded
+    and returned no match" — that case still returns `None` from the
+    helpers. Callers MUST NOT cache results when this is raised, or a
+    flaky network would freeze "no match" answers across future audits.
+    """
+
+
 def ensure_cache_table(conn: sqlite3.Connection) -> None:
     """Lazily create the cache table.
 
@@ -121,7 +130,15 @@ def _cache_store(
 
 
 def _rxcui_lookup_exact(name: str) -> Optional[str]:
-    """RxNorm exact match by name. Returns the RXCUI string or None."""
+    """RxNorm exact match by name.
+
+    Returns the RXCUI string on a hit, `None` when the lookup succeeded
+    but RxNorm has no exact match for this name (genuine no-match —
+    safe to cache). Raises `RxNormLookupError` on any transient failure
+    (network error, non-200 HTTP, malformed JSON) so callers can skip
+    the cache write — a flaky network must not freeze "no match" for
+    a real drug name.
+    """
     try:
         resp = requests.get(
             f"{RXNORM_API_BASE}/rxcui.json",
@@ -130,13 +147,15 @@ def _rxcui_lookup_exact(name: str) -> Optional[str]:
         )
     except requests.RequestException as exc:
         logger.warning("RxNorm exact lookup failed for %r: %s", name, exc)
-        return None
+        raise RxNormLookupError(f"network error for {name!r}") from exc
     if resp.status_code != 200:
-        return None
+        logger.warning("RxNorm exact lookup HTTP %s for %r", resp.status_code, name)
+        raise RxNormLookupError(f"HTTP {resp.status_code} for {name!r}")
     try:
         data = resp.json()
-    except ValueError:
-        return None
+    except ValueError as exc:
+        logger.warning("RxNorm exact lookup returned non-JSON for %r", name)
+        raise RxNormLookupError(f"non-JSON response for {name!r}") from exc
     ids = data.get("idGroup", {}).get("rxnormId") or []
     if isinstance(ids, list) and ids:
         return str(ids[0])
@@ -144,7 +163,13 @@ def _rxcui_lookup_exact(name: str) -> Optional[str]:
 
 
 def _rxcui_lookup_approximate(name: str) -> Optional[str]:
-    """RxNorm fuzzy match. Used when the exact endpoint returns nothing."""
+    """RxNorm fuzzy match. Used when the exact endpoint returns nothing.
+
+    Same convention as `_rxcui_lookup_exact`: returns RXCUI string on a
+    hit, `None` for genuine no-match (cacheable), raises
+    `RxNormLookupError` for transient failures (callers must skip the
+    cache write).
+    """
     try:
         resp = requests.get(
             f"{RXNORM_API_BASE}/approximateTerm.json",
@@ -153,13 +178,15 @@ def _rxcui_lookup_approximate(name: str) -> Optional[str]:
         )
     except requests.RequestException as exc:
         logger.warning("RxNorm approximate lookup failed for %r: %s", name, exc)
-        return None
+        raise RxNormLookupError(f"network error for {name!r}") from exc
     if resp.status_code != 200:
-        return None
+        logger.warning("RxNorm approximate lookup HTTP %s for %r", resp.status_code, name)
+        raise RxNormLookupError(f"HTTP {resp.status_code} for {name!r}")
     try:
         data = resp.json()
-    except ValueError:
-        return None
+    except ValueError as exc:
+        logger.warning("RxNorm approximate lookup returned non-JSON for %r", name)
+        raise RxNormLookupError(f"non-JSON response for {name!r}") from exc
     candidates = data.get("approximateGroup", {}).get("candidate") or []
     if isinstance(candidates, list) and candidates:
         rxcui = candidates[0].get("rxcui")
@@ -262,6 +289,10 @@ def _live_normalize(name: str) -> Dict:
     The dict always carries a `matched` boolean so the cache can store the
     negative case and avoid re-querying RxNorm for unknown drug names on
     subsequent audits.
+
+    Propagates `RxNormLookupError` from the underlying lookup helpers so
+    `normalize_drugs` can distinguish a transient failure (don't cache)
+    from a genuine no-match (cacheable).
     """
     rxcui = _rxcui_lookup_exact(name)
     if not rxcui:
@@ -375,11 +406,31 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
             if cached is not None:
                 result = cached
             else:
+                # Track whether the live lookup answer is authoritative
+                # (definite rxcui or definite no-match) versus a
+                # transient failure. Only authoritative answers may be
+                # written to the cache — caching transient failures
+                # would freeze "no match" answers across future audits
+                # for drug names that are real and just failed to load
+                # this once.
+                result_is_authoritative = True
                 try:
                     result = _live_normalize(name)
+                except RxNormLookupError as exc:
+                    logger.warning(
+                        "RxNorm transient error for %r — not caching: %s", name, exc
+                    )
+                    result = {
+                        "matched": False,
+                        "rxcui": None,
+                        "normalized_name": None,
+                        "ingredient_rxcui": None,
+                        "ingredient_name": None,
+                    }
+                    result_is_authoritative = False
                 except Exception:
-                    # Defensive — _live_normalize already swallows network
-                    # errors; this catches anything that slips past.
+                    # Defensive — anything not RxNormLookupError is also
+                    # treated as transient (don't poison the cache).
                     logger.exception("RxNorm normalize unexpected error for %r", name)
                     result = {
                         "matched": False,
@@ -388,7 +439,9 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
                         "ingredient_rxcui": None,
                         "ingredient_name": None,
                     }
-                _cache_store(conn, key, name, result)
+                    result_is_authoritative = False
+                if result_is_authoritative:
+                    _cache_store(conn, key, name, result)
 
             group_key = _group_key(result, name)
             out.append(

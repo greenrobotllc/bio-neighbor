@@ -156,6 +156,51 @@ class TestNormalizeDrugsCacheRoundtrip(unittest.TestCase):
             rxnorm_normalize.normalize_drugs([{"name": "BogusDrug", "chembl_id": None}])
             self.assertEqual(mock_live.call_count, 1)
 
+    def test_transient_lookup_error_does_NOT_cache_no_match(self):
+        # A flaky-network RxNormLookupError must NOT be persisted as a
+        # "matched: false" cache row — otherwise the next audit (when
+        # the network is healthy) would see the cached failure and skip
+        # the lookup, returning a false no-match for a real drug.
+        with patch.object(
+            rxnorm_normalize, "_live_normalize",
+            side_effect=rxnorm_normalize.RxNormLookupError("simulated network error"),
+        ) as mock_live:
+            r1 = rxnorm_normalize.normalize_drugs(
+                [{"name": "anastrozole", "chembl_id": None}]
+            )
+            # First call returned an unmatched-shaped result (so the
+            # current audit keeps running) but it was NOT cached.
+            self.assertFalse(r1[0]["matched"])
+            # Second call must re-fetch — proves cache write was skipped.
+            rxnorm_normalize.normalize_drugs(
+                [{"name": "anastrozole", "chembl_id": None}]
+            )
+            self.assertEqual(mock_live.call_count, 2)
+
+    def test_lookup_helpers_raise_on_transient_failure(self):
+        # Direct unit test of the lookup helpers: network exceptions
+        # must surface as RxNormLookupError, not as a None result that
+        # callers would mistake for "no match".
+        import requests as _requests
+        with patch.object(
+            rxnorm_normalize.requests, "get",
+            side_effect=_requests.ConnectionError("simulated"),
+        ):
+            with self.assertRaises(rxnorm_normalize.RxNormLookupError):
+                rxnorm_normalize._rxcui_lookup_exact("anything")
+            with self.assertRaises(rxnorm_normalize.RxNormLookupError):
+                rxnorm_normalize._rxcui_lookup_approximate("anything")
+
+    def test_lookup_helpers_return_none_on_genuine_no_match(self):
+        # Successful HTTP response with empty idGroup → genuine no-match
+        # → returns None, MUST NOT raise. Distinguishes "we asked and
+        # they don't have this drug" from "we couldn't reach them".
+        from unittest.mock import MagicMock
+        ok_empty = MagicMock(status_code=200)
+        ok_empty.json.return_value = {"idGroup": {}}
+        with patch.object(rxnorm_normalize.requests, "get", return_value=ok_empty):
+            self.assertIsNone(rxnorm_normalize._rxcui_lookup_exact("zzznope"))
+
 
 if __name__ == "__main__":
     unittest.main()

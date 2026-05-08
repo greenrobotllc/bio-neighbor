@@ -134,6 +134,21 @@ class TestPanelCacheRoundtrip(unittest.TestCase):
         self.assertEqual(result["top_events"], [])
         self.assertEqual(result["total_reports"], 0)
 
+    def test_transient_failure_does_NOT_cache(self):
+        # A flaky-network failure (signaled by `_live_top_events`
+        # returning None) must NOT be persisted to the 7-day cache —
+        # otherwise the next 7 audits would see a stale "no events"
+        # panel for a drug that genuinely has reports.
+        with patch.object(
+            openfda_faers, "_live_top_events", return_value=None
+        ) as mock_live:
+            r1 = openfda_faers.get_top_events_for_drug("tamoxifen", limit=10)
+            r2 = openfda_faers.get_top_events_for_drug("tamoxifen", limit=10)
+        self.assertEqual(mock_live.call_count, 2, "second call must re-fetch")
+        # Caller still gets a usable empty panel for the current request.
+        self.assertEqual(r1["top_events"], [])
+        self.assertEqual(r2["top_events"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

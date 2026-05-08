@@ -50,11 +50,30 @@ CHEMBL_TIMEOUT_SECS = 12
 # caches; 12s gives the audit a meaningful budget without letting a
 # hung request stall the user indefinitely. Done at import time so all
 # subsequent mechanism / molecule / target lookups inherit it.
-if CHEMBL_AVAILABLE:
-    try:
-        _ChEMBLSettings.Instance().TIMEOUT = CHEMBL_TIMEOUT_SECS  # type: ignore[union-attr]
-    except Exception:  # pragma: no cover - defensive against client API drift
-        pass
+#
+# `Settings.Instance` has historically been a singleton accessor — in
+# current versions it's a method that returns the instance, but older
+# releases exposed it as a plain class attribute. Detect both shapes
+# before mutating, and log when neither works rather than silently
+# eating the error: a missed TIMEOUT means the audit silently falls
+# back to the 3s default and users see spurious "ChEMBL failed"
+# messages with no obvious cause.
+if CHEMBL_AVAILABLE and _ChEMBLSettings is not None:
+    _instance_attr = getattr(_ChEMBLSettings, "Instance", None)
+    if _instance_attr is None:
+        logger.warning(
+            "chembl_webresource_client.Settings has no `Instance` accessor; "
+            "TIMEOUT not applied — using client default."
+        )
+    else:
+        try:
+            _settings_obj = _instance_attr() if callable(_instance_attr) else _instance_attr
+            _settings_obj.TIMEOUT = CHEMBL_TIMEOUT_SECS
+        except (AttributeError, TypeError) as _exc:
+            logger.warning(
+                "Could not apply ChEMBL TIMEOUT=%s (%s); using client default.",
+                CHEMBL_TIMEOUT_SECS, _exc,
+            )
 
 
 def _ensure_tables(conn: sqlite3.Connection) -> None:
@@ -319,9 +338,15 @@ def fetch_drug_targets(chembl_id: str) -> List[Dict]:
             # the next audit will re-fetch.
             return []
 
-        # Resolve each unique target_chembl_id once.
+        # Resolve each unique target_chembl_id once. Track whether any
+        # target metadata fetch errored so we know whether the
+        # drug-level enriched payload is fully resolved or partial — a
+        # partial payload must NOT be persisted to the drug-level cache,
+        # otherwise a flaky network freezes "no gene_symbol" answers
+        # for the affected target across every future audit.
         target_ids = {r["target_chembl_id"] for r in rows if r["target_chembl_id"]}
         resolved: Dict[str, Dict] = {}
+        any_target_lookup_failed = False
         for tid in target_ids:
             info = _chembl_target_from_cache(conn, tid)
             if info is None:
@@ -331,6 +356,7 @@ def fetch_drug_targets(chembl_id: str) -> List[Dict]:
                     # dict for this request, but DO NOT persist to the
                     # cache so the next audit retries.
                     resolved[tid] = {}
+                    any_target_lookup_failed = True
                     continue
                 _chembl_target_to_cache(conn, tid, fresh)
                 resolved[tid] = fresh
@@ -351,7 +377,8 @@ def fetch_drug_targets(chembl_id: str) -> List[Dict]:
                 }
             )
 
-        _drug_targets_to_cache(conn, chembl_id, enriched)
+        if not any_target_lookup_failed:
+            _drug_targets_to_cache(conn, chembl_id, enriched)
         return enriched
     finally:
         conn.close()

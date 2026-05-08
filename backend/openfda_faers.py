@@ -86,7 +86,7 @@ def _cache_store(conn: sqlite3.Connection, key: str, top_events: List[Dict], tot
     conn.commit()
 
 
-def _live_top_events(drug_name: str, limit: int) -> Tuple[List[Dict], int]:
+def _live_top_events(drug_name: str, limit: int) -> Optional[Tuple[List[Dict], int]]:
     """Hit OpenFDA for the top reaction terms for a drug.
 
     Uses the `count` aggregator on `patient.reaction.reactionmeddrapt` —
@@ -94,9 +94,19 @@ def _live_top_events(drug_name: str, limit: int) -> Tuple[List[Dict], int]:
     may appear in either `generic_name` or `brand_name`; we OR them so
     "Taxol" and "paclitaxel" both work without normalization.
 
-    Returns (top_events, total_reports). `total_reports` is a separate
-    fetch (no aggregator → uses `meta.results.total`) so the UI can
-    render "ranked among 12,345 reports" framing.
+    Returns:
+      - `(top_events, total_reports)` on success (authoritative; the
+        result may legitimately be `([], 0)` when OpenFDA returns 404
+        for "no reports" or when the count aggregator returns nothing).
+      - `None` on any transient failure: network errors, non-404 non-200
+        statuses, JSON parse errors, or failures fetching the
+        `total_reports` follow-up. Callers MUST NOT cache `None` —
+        otherwise a flaky network would freeze the affected drug as a
+        zero-report panel for the cache TTL.
+
+    `total_reports` is a separate fetch (no aggregator → uses
+    `meta.results.total`) so the UI can render "ranked among 12,345
+    reports" framing.
     """
     if not drug_name:
         return [], 0
@@ -120,20 +130,23 @@ def _live_top_events(drug_name: str, limit: int) -> Tuple[List[Dict], int]:
         )
     except requests.RequestException as exc:
         logger.warning("OpenFDA top-events request failed for %r: %s", drug_name, exc)
-        return [], 0
+        return None
 
     if resp.status_code == 404:
         # OpenFDA returns 404 with `error.code = NOT_FOUND` when no
-        # reports match — that's a clean "no data" signal, not an error.
+        # reports match — that's a clean "no data" signal, not an error,
+        # and is the one case worth caching as an authoritative empty
+        # panel.
         return [], 0
     if resp.status_code != 200:
         logger.warning("OpenFDA top-events HTTP %s for %r", resp.status_code, drug_name)
-        return [], 0
+        return None
 
     try:
         data = resp.json()
     except ValueError:
-        return [], 0
+        logger.warning("OpenFDA top-events returned non-JSON for %r", drug_name)
+        return None
 
     top_events = [
         {"term": str(row.get("term") or ""), "count": int(row.get("count") or 0)}
@@ -142,18 +155,32 @@ def _live_top_events(drug_name: str, limit: int) -> Tuple[List[Dict], int]:
     ]
 
     # Total reports — separate request, smallest possible page size.
-    total_reports = 0
+    # Failures here are transient: we have valid `top_events` but
+    # missing the count framing, so propagate None rather than cache a
+    # partially-fresh panel that would lock in a wrong total.
     try:
         resp_total = requests.get(
             OPENFDA_EVENT_URL,
             params={"search": search, "limit": 1},
             timeout=HTTP_TIMEOUT,
         )
-        if resp_total.status_code == 200:
-            data_total = resp_total.json()
-            total_reports = int(data_total.get("meta", {}).get("results", {}).get("total") or 0)
-    except (requests.RequestException, ValueError):
-        pass
+    except requests.RequestException as exc:
+        logger.warning("OpenFDA total-count request failed for %r: %s", drug_name, exc)
+        return None
+    if resp_total.status_code == 404:
+        # 404 here mirrors the top-events 404 — authoritative no data.
+        return top_events, 0
+    if resp_total.status_code != 200:
+        logger.warning(
+            "OpenFDA total-count HTTP %s for %r", resp_total.status_code, drug_name
+        )
+        return None
+    try:
+        data_total = resp_total.json()
+    except ValueError:
+        logger.warning("OpenFDA total-count returned non-JSON for %r", drug_name)
+        return None
+    total_reports = int(data_total.get("meta", {}).get("results", {}).get("total") or 0)
 
     return top_events, total_reports
 
@@ -186,7 +213,14 @@ def get_top_events_for_drug(
                 "total_reports": cached["total_reports"],
                 "top_events": cached["top_events"][:limit],
             }
-        top_events, total = _live_top_events(drug_name, limit=max(limit, 50))
+        live_result = _live_top_events(drug_name, limit=max(limit, 50))
+        if live_result is None:
+            # Transient failure — DO NOT cache. Returning an empty panel
+            # for THIS request keeps the audit running, but the next
+            # audit will re-fetch instead of finding a 7-day-stale empty
+            # entry that's actually a flaky-network artifact.
+            return {"drug_name": drug_name, "total_reports": 0, "top_events": []}
+        top_events, total = live_result
         _cache_store(conn, key, top_events, total)
         return {
             "drug_name": drug_name,
