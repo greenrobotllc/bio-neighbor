@@ -32,16 +32,29 @@ logger = logging.getLogger(__name__)
 
 try:
     from chembl_webresource_client.new_client import new_client
+    from chembl_webresource_client.settings import Settings as _ChEMBLSettings
     CHEMBL_AVAILABLE = True
 except ImportError:  # pragma: no cover - dev fallback
     CHEMBL_AVAILABLE = False
     new_client = None  # type: ignore
+    _ChEMBLSettings = None  # type: ignore
 
 DRUG_TARGETS_TABLE = "drug_targets_cache"
 CHEMBL_TARGETS_TABLE = "chembl_targets_cache"
 # ChEMBL is generally fast but occasionally slow; cap each call so a hung
 # request can't stall the audit indefinitely.
 CHEMBL_TIMEOUT_SECS = 12
+
+# Apply the timeout to every ChEMBL client call in this module. The
+# client's default is 3s which trips false-positive failures on cold
+# caches; 12s gives the audit a meaningful budget without letting a
+# hung request stall the user indefinitely. Done at import time so all
+# subsequent mechanism / molecule / target lookups inherit it.
+if CHEMBL_AVAILABLE:
+    try:
+        _ChEMBLSettings.Instance().TIMEOUT = CHEMBL_TIMEOUT_SECS  # type: ignore[union-attr]
+    except Exception:  # pragma: no cover - defensive against client API drift
+        pass
 
 
 def _ensure_tables(conn: sqlite3.Connection) -> None:
@@ -130,10 +143,17 @@ def _chembl_target_to_cache(
     conn.commit()
 
 
-def _query_mechanism_endpoint(chembl_id: str) -> List[Dict]:
-    """Single ChEMBL mechanism lookup — returns parsed rows or [] on error."""
+def _query_mechanism_endpoint(chembl_id: str) -> Optional[List[Dict]]:
+    """Single ChEMBL mechanism lookup.
+
+    Returns:
+      - List of parsed rows (possibly empty) on a successful call.
+      - `None` on any network/client error — callers MUST NOT cache
+        `None` as "no targets". A blip would otherwise persist an empty
+        result for that drug forever.
+    """
     if not CHEMBL_AVAILABLE:
-        return []
+        return None
     try:
         mech = new_client.mechanism  # type: ignore[union-attr]
         results = list(
@@ -146,7 +166,7 @@ def _query_mechanism_endpoint(chembl_id: str) -> List[Dict]:
         )
     except Exception as exc:
         logger.warning("ChEMBL mechanism lookup failed for %s: %s", chembl_id, exc)
-        return []
+        return None
 
     out: List[Dict] = []
     for r in results:
@@ -191,7 +211,7 @@ def _resolve_parent_chembl_id(chembl_id: str) -> Optional[str]:
     return None
 
 
-def _live_fetch_drug_mechanisms(chembl_id: str) -> List[Dict]:
+def _live_fetch_drug_mechanisms(chembl_id: str) -> Optional[List[Dict]]:
     """Hit ChEMBL `mechanism` for a single drug.
 
     Falls back to the parent ChEMBL ID when the direct lookup is empty —
@@ -199,27 +219,45 @@ def _live_fetch_drug_mechanisms(chembl_id: str) -> List[Dict]:
     a salt-form / child-ID query (e.g. CHEMBL3707266 for ribociclib
     succinate) returns nothing without this fallback. Same problem hits
     parent-IDs whose hierarchy points elsewhere.
+
+    Returns `None` when *both* attempts errored (so the caller must skip
+    caching the result), `[]` when the lookup succeeded but the drug
+    legitimately has no recorded mechanisms, and `[...]` for hits.
     """
     rows = _query_mechanism_endpoint(chembl_id)
+    # Direct query succeeded with rows — done.
     if rows:
         return rows
     parent_id = _resolve_parent_chembl_id(chembl_id)
-    if parent_id:
-        return _query_mechanism_endpoint(parent_id)
-    return []
+    if parent_id is None:
+        # No parent to try. Trust whatever the direct call gave us
+        # (`None` → transient error, propagate; `[]` → genuine empty).
+        return rows
+    parent_rows = _query_mechanism_endpoint(parent_id)
+    if parent_rows is not None:
+        # Parent answer wins when it's available — covers both empty
+        # and non-empty cases.
+        return parent_rows
+    # Parent errored. If the direct call had a definite empty answer,
+    # use that; otherwise propagate `None` so we don't cache.
+    return rows
 
 
-def _live_fetch_target_info(target_chembl_id: str) -> Dict:
+def _live_fetch_target_info(target_chembl_id: str) -> Optional[Dict]:
     """Hit ChEMBL `target` for gene symbol + protein name.
 
     ChEMBL's target resource has nested structures. We pull `pref_name`
     (protein name) and the first matching gene symbol from
     `target_components[].target_component_synonyms[]` where syn_type is
-    `GENE_SYMBOL`. Falls back to None on any lookup failure — the audit
-    still works with target_chembl_id-only display.
+    `GENE_SYMBOL`.
+
+    Returns `None` on a network/client error (caller must NOT cache —
+    same rationale as `_query_mechanism_endpoint`). Returns `{}` when the
+    lookup succeeded but ChEMBL has no record for this target. Returns
+    `{"gene_symbol": ..., "protein_name": ..., "organism": ...}` for hits.
     """
     if not CHEMBL_AVAILABLE:
-        return {}
+        return None
     try:
         target = new_client.target  # type: ignore[union-attr]
         record = target.filter(target_chembl_id=target_chembl_id).only(
@@ -233,7 +271,7 @@ def _live_fetch_target_info(target_chembl_id: str) -> Dict:
         rec = records[0]
     except Exception as exc:
         logger.warning("ChEMBL target lookup failed for %s: %s", target_chembl_id, exc)
-        return {}
+        return None
 
     gene_symbol: Optional[str] = None
     components = rec.get("target_components") or []
@@ -275,15 +313,29 @@ def fetch_drug_targets(chembl_id: str) -> List[Dict]:
             return cached
 
         rows = _live_fetch_drug_mechanisms(chembl_id)
+        if rows is None:
+            # Transient network/client error — DO NOT cache. Return an
+            # empty list for this request so the audit keeps running, but
+            # the next audit will re-fetch.
+            return []
+
         # Resolve each unique target_chembl_id once.
         target_ids = {r["target_chembl_id"] for r in rows if r["target_chembl_id"]}
         resolved: Dict[str, Dict] = {}
         for tid in target_ids:
             info = _chembl_target_from_cache(conn, tid)
             if info is None:
-                info = _live_fetch_target_info(tid)
-                _chembl_target_to_cache(conn, tid, info)
-            resolved[tid] = info
+                fresh = _live_fetch_target_info(tid)
+                if fresh is None:
+                    # Target lookup errored — fall through with an empty
+                    # dict for this request, but DO NOT persist to the
+                    # cache so the next audit retries.
+                    resolved[tid] = {}
+                    continue
+                _chembl_target_to_cache(conn, tid, fresh)
+                resolved[tid] = fresh
+            else:
+                resolved[tid] = info
 
         enriched: List[Dict] = []
         for r in rows:

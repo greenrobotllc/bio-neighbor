@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from typing import Dict, List, Optional, Tuple
@@ -251,7 +252,6 @@ def _symptom_to_term_match(symptom: str, events: List[Dict]) -> Optional[Dict]:
 def re_split_tokens(text: str) -> List[str]:
     """Split on whitespace + common punctuation. Stays as a small helper
     instead of pulling in a tokenizer."""
-    import re
     return [t for t in re.split(r"[\s,.\-/()]+", text) if t]
 
 

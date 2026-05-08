@@ -318,6 +318,14 @@ final class OllamaService {
     /// per-source mini-summary so the model can filter the source for what's
     /// relevant to *this* patient (right subtype, right stage, etc.) rather
     /// than summarizing the source in the abstract.
+    ///
+    /// Deliberately omits the DrugBank / target-overlap / FAERS deterministic
+    /// findings — those are only relevant in the final synthesis (where the
+    /// model is asked to restate them verbatim). Including them per-source
+    /// would (a) waste tokens on every mini-summary call and (b) tempt the
+    /// model to repeat them in each digest, leading to duplicated lines in
+    /// the final report. `deterministicFindingsSummary(_:)` builds that
+    /// section separately for `buildSynthesisPrompt(...)`.
     static func planContextSummary(_ plan: TreatmentAuditPlan) -> String {
         var lines: [String] = []
         lines.append("Cancer: \(plan.cancerTypeName)")
@@ -349,6 +357,19 @@ final class OllamaService {
             }
             lines.append("Symptoms / side effects: \(formatted.joined(separator: "; "))")
         }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Pre-LLM deterministic findings (DrugBank interactions, ChEMBL
+    /// target overlap, FAERS symptom→reaction matches). Returns "" when
+    /// nothing was found AND no data-availability hint is needed, so the
+    /// caller can append unconditionally.
+    ///
+    /// Used ONLY by the final-synthesis prompt — per-source mini-summaries
+    /// don't get this block, so the same facts aren't re-emitted N times
+    /// across digests.
+    static func deterministicFindingsSummary(_ plan: TreatmentAuditPlan) -> String {
+        var lines: [String] = []
         // DrugBank pairwise interactions (issue #47). Surfaced as a
         // labelled fact list so the LLM treats them as deterministic
         // findings rather than something to infer or rewrite.
@@ -362,8 +383,7 @@ final class OllamaService {
         } else if !plan.drugInteractionDataAvailable {
             lines.append("Drug-drug interaction data: unavailable (DrugBank XML not loaded server-side).")
         }
-        // Mechanism-of-action target overlap (issue #53). Same treatment
-        // as interactions — labelled, deterministic, fed verbatim.
+        // Mechanism-of-action target overlap (issue #53).
         if !plan.targetOverlaps.isEmpty {
             lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
             for row in plan.targetOverlaps {
@@ -428,6 +448,17 @@ final class OllamaService {
         lines.append("== Patient plan ==")
         lines.append(planContextSummary(plan))
         lines.append("")
+
+        // Deterministic findings (DrugBank / ChEMBL target / FAERS) live in
+        // their own block so the synthesis prompt sees them ONCE — they
+        // were intentionally omitted from `planContextSummary` to avoid
+        // duplicating the same facts across every per-source mini-summary.
+        let deterministic = deterministicFindingsSummary(plan)
+        if !deterministic.isEmpty {
+            lines.append("== Deterministic findings ==")
+            lines.append(deterministic)
+            lines.append("")
+        }
 
         if let pdq = plan.pdqSummary {
             lines.append("== Citation hint ==")

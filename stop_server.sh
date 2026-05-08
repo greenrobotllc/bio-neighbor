@@ -15,31 +15,44 @@ PORT=5000
 # so we don't accidentally kill an unrelated python process.
 PATTERN='backend/api.py'
 
-found_any=0
-for pid in $(pgrep -f "$PATTERN" 2>/dev/null); do
-    found_any=1
+# Snapshot the set of PIDs to target ONCE up front. We must not re-run
+# pgrep later — if a fresh backend is started during the 5-second wait
+# (e.g. the user runs start_server.sh in another terminal), re-querying
+# would let us SIGKILL processes we never owned.
+INITIAL_PIDS=$(pgrep -f "$PATTERN" 2>/dev/null)
+
+if [ -z "$INITIAL_PIDS" ]; then
+    echo "No bio-neighbor backend processes found."
+    exit 0
+fi
+
+for pid in $INITIAL_PIDS; do
     cmd=$(ps -o command= -p "$pid" 2>/dev/null)
     echo "Stopping bio-neighbor backend pid=$pid ($cmd)"
     kill "$pid" 2>/dev/null || true
 done
 
-if [ "$found_any" -eq 0 ]; then
-    echo "No bio-neighbor backend processes found."
-    exit 0
-fi
-
-# Wait up to 5s for graceful shutdown, then SIGKILL anything still alive.
+# Wait up to 5s for graceful shutdown, checking only the PIDs we targeted.
 for _ in 1 2 3 4 5; do
     sleep 1
-    remaining=$(pgrep -f "$PATTERN" 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$remaining" = "0" ]; then
+    still_alive=""
+    for pid in $INITIAL_PIDS; do
+        if kill -0 "$pid" 2>/dev/null; then
+            still_alive="$still_alive $pid"
+        fi
+    done
+    if [ -z "$still_alive" ]; then
         echo "Backend stopped cleanly."
         exit 0
     fi
 done
 
+# SIGKILL only the originally-captured PIDs that are still alive — never
+# any newly-spawned process matching the same pattern.
 echo "Some processes did not exit on SIGTERM, sending SIGKILL..."
-for pid in $(pgrep -f "$PATTERN" 2>/dev/null); do
-    kill -9 "$pid" 2>/dev/null || true
+for pid in $INITIAL_PIDS; do
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+    fi
 done
 echo "Done."

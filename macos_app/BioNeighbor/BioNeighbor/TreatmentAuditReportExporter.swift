@@ -739,7 +739,7 @@ enum TreatmentAuditReportExporter {
         }.joined()
         return """
         <section class="section">
-          <h2>4. Per-source summaries</h2>
+          <h2>5. Per-source summaries</h2>
           \(blocks)
         </section>
         """

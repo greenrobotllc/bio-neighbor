@@ -309,8 +309,10 @@ def _live_normalize(name: str) -> Dict:
         ingredient_concepts = derived.get("ingredientConcept") or []
         if isinstance(ingredient_concepts, list) and ingredient_concepts:
             top = ingredient_concepts[0] or {}
-            ingredient_rxcui = (top.get("ingredientRxcui") or None) or None
-            ingredient_name = (top.get("ingredientName") or None) or None
+            # Coerce empty strings to None so the dedupe-key fallback
+            # logic in `_group_key` treats them as "no ingredient".
+            ingredient_rxcui = top.get("ingredientRxcui") or None
+            ingredient_name = top.get("ingredientName") or None
         # historystatus also carries the canonical name when properties was
         # empty — preserve it so the UI doesn't render `None`.
         if not normalized_name:
