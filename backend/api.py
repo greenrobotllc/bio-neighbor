@@ -3886,8 +3886,8 @@ def v2_treatment_auditor_adverse_events():
                 'name': name.strip(),
                 'chembl_id': entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None,
             })
-        if drugs_raw and not cleaned_drugs:
-            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
+        if not cleaned_drugs:
+            return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 
         symptoms = [s.strip() for s in symptoms_raw if isinstance(s, str) and s.strip()]
 
@@ -3957,8 +3957,8 @@ def v2_treatment_auditor_target_overlap():
                 continue
             chembl_id = entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None
             cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
-        if drugs_raw and not cleaned:
-            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
+        if not cleaned:
+            return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 
         from drug_targets import find_target_overlap
         result = find_target_overlap(cleaned)
@@ -4035,8 +4035,8 @@ def v2_treatment_auditor_drug_interactions():
                 'chembl_id': chembl_id,
                 'drugbank_id': drugbank_id,
             })
-        if drugs_raw and not cleaned:
-            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
+        if not cleaned:
+            return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 
         from drugbank_interactions import get_pairwise_interactions
         result = get_pairwise_interactions(cleaned)
@@ -4111,8 +4111,8 @@ def v2_treatment_auditor_normalize_drugs():
             if chembl_id is not None and not isinstance(chembl_id, str):
                 chembl_id = None
             cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
-        if drugs_raw and not cleaned:
-            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
+        if not cleaned:
+            return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 
         from rxnorm_normalize import normalize_drugs
         normalizations = normalize_drugs(cleaned)

@@ -202,6 +202,12 @@ def _resolve_ingredient(rxcui: str) -> Optional[Dict[str, str]]:
     (RxNorm returns the same concept). For a brand input ("Taxol") it
     returns the underlying ingredient — which is exactly the dedupe key
     we want.
+
+    Returns the ingredient dict on success, `None` when the request
+    succeeded but no IN concept was found (genuine — fall through to
+    the historystatus fallback). Raises `RxNormLookupError` on any
+    transient failure so the caller can skip writing a partial result
+    to the cache.
     """
     try:
         resp = requests.get(
@@ -211,13 +217,15 @@ def _resolve_ingredient(rxcui: str) -> Optional[Dict[str, str]]:
         )
     except requests.RequestException as exc:
         logger.warning("RxNorm related-IN lookup failed for %s: %s", rxcui, exc)
-        return None
+        raise RxNormLookupError(f"network error for /related?tty=IN {rxcui}") from exc
     if resp.status_code != 200:
-        return None
+        logger.warning("RxNorm related-IN HTTP %s for %s", resp.status_code, rxcui)
+        raise RxNormLookupError(f"HTTP {resp.status_code} for /related?tty=IN {rxcui}")
     try:
         data = resp.json()
-    except ValueError:
-        return None
+    except ValueError as exc:
+        logger.warning("RxNorm related-IN returned non-JSON for %s", rxcui)
+        raise RxNormLookupError(f"non-JSON for /related?tty=IN {rxcui}") from exc
     groups = data.get("relatedGroup", {}).get("conceptGroup") or []
     for group in groups:
         if group.get("tty") != "IN":
@@ -233,7 +241,13 @@ def _resolve_ingredient(rxcui: str) -> Optional[Dict[str, str]]:
 
 
 def _rxcui_properties(rxcui: str) -> Optional[Dict[str, str]]:
-    """Fetch the canonical name + tty for an RXCUI."""
+    """Fetch the canonical name + tty for an RXCUI.
+
+    Returns the property dict on success, `None` when the request
+    succeeded but the RXCUI has no properties record (genuine — happens
+    for obsolete brand RXCUIs). Raises `RxNormLookupError` on transient
+    failures.
+    """
     try:
         resp = requests.get(
             f"{RXNORM_API_BASE}/rxcui/{rxcui}/properties.json",
@@ -241,13 +255,15 @@ def _rxcui_properties(rxcui: str) -> Optional[Dict[str, str]]:
         )
     except requests.RequestException as exc:
         logger.warning("RxNorm properties lookup failed for %s: %s", rxcui, exc)
-        return None
+        raise RxNormLookupError(f"network error for /properties {rxcui}") from exc
     if resp.status_code != 200:
-        return None
+        logger.warning("RxNorm properties HTTP %s for %s", resp.status_code, rxcui)
+        raise RxNormLookupError(f"HTTP {resp.status_code} for /properties {rxcui}")
     try:
         data = resp.json()
-    except ValueError:
-        return None
+    except ValueError as exc:
+        logger.warning("RxNorm properties returned non-JSON for %s", rxcui)
+        raise RxNormLookupError(f"non-JSON for /properties {rxcui}") from exc
     props = data.get("properties") or {}
     if not props:
         return None
@@ -265,6 +281,10 @@ def _historystatus(rxcui: str) -> Optional[Dict]:
     "Taxol", whose properties/related endpoints return empty payloads).
     Crucially, it carries `derivedConcepts.ingredientConcept[]` which is the
     only reliable bridge from an obsolete BN back to its active IN.
+
+    Returns the history dict on success, `None` when the response was
+    valid but contained no `rxcuiStatusHistory` (genuine — should be
+    rare). Raises `RxNormLookupError` on transient failures.
     """
     try:
         resp = requests.get(
@@ -273,13 +293,15 @@ def _historystatus(rxcui: str) -> Optional[Dict]:
         )
     except requests.RequestException as exc:
         logger.warning("RxNorm historystatus lookup failed for %s: %s", rxcui, exc)
-        return None
+        raise RxNormLookupError(f"network error for /historystatus {rxcui}") from exc
     if resp.status_code != 200:
-        return None
+        logger.warning("RxNorm historystatus HTTP %s for %s", resp.status_code, rxcui)
+        raise RxNormLookupError(f"HTTP {resp.status_code} for /historystatus {rxcui}")
     try:
         data = resp.json()
-    except ValueError:
-        return None
+    except ValueError as exc:
+        logger.warning("RxNorm historystatus returned non-JSON for %s", rxcui)
+        raise RxNormLookupError(f"non-JSON for /historystatus {rxcui}") from exc
     return data.get("rxcuiStatusHistory") or None
 
 

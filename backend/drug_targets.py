@@ -41,6 +41,20 @@ except ImportError:  # pragma: no cover - dev fallback
 
 DRUG_TARGETS_TABLE = "drug_targets_cache"
 CHEMBL_TARGETS_TABLE = "chembl_targets_cache"
+
+
+class _ChEMBLLookupError(Exception):
+    """Raised when a ChEMBL lookup fails transiently (network error,
+    client/library exception). Distinct from "the lookup succeeded and
+    returned no record" — that case still returns sentinel values
+    (None / [] / {}) from the helpers.
+
+    The mechanism / target helpers signal transient failures via a
+    `None` return because their happy-path return type already has a
+    natural empty case ([] / {}). The parent-lookup helper has no
+    natural empty sentinel — None already means "no parent found
+    (genuine answer)" — so it raises this exception instead.
+    """
 # ChEMBL is generally fast but occasionally slow; cap each call so a hung
 # request can't stall the audit indefinitely.
 CHEMBL_TIMEOUT_SECS = 12
@@ -204,10 +218,18 @@ def _query_mechanism_endpoint(chembl_id: str) -> Optional[List[Dict]]:
 def _resolve_parent_chembl_id(chembl_id: str) -> Optional[str]:
     """Read molecule_hierarchy.parent_chembl_id for a salt/child ID.
 
-    Returns None when the supplied ID is already the parent or the lookup
-    fails. ChEMBL registers mechanisms against the parent compound for
-    most drugs, so a salt-form lookup can come back empty even though the
-    parent has rows.
+    Returns:
+      - The parent ChEMBL ID string when one exists and differs from
+        the supplied ID.
+      - `None` when the lookup succeeded but the supplied ID is already
+        a parent or has no record. This is a genuine answer — caching
+        a downstream "no mechanisms" result based on it is safe.
+    Raises:
+      - `_ChEMBLLookupError` on any transport / client failure.
+        Conflating "no parent" (None) with "lookup errored" (was None
+        too) caused `_live_fetch_drug_mechanisms` to silently cache
+        empty mechanism lists for drugs whose parent lookup just
+        flaked once — surface the failure so callers skip the cache.
     """
     if not CHEMBL_AVAILABLE:
         return None
@@ -219,14 +241,15 @@ def _resolve_parent_chembl_id(chembl_id: str) -> Optional[str]:
                 "molecule_hierarchy",
             )
         )
-        if not records:
-            return None
-        hierarchy = records[0].get("molecule_hierarchy") or {}
-        parent_id = hierarchy.get("parent_chembl_id")
-        if parent_id and parent_id != chembl_id:
-            return parent_id
     except Exception as exc:
         logger.warning("ChEMBL parent lookup failed for %s: %s", chembl_id, exc)
+        raise _ChEMBLLookupError(f"parent lookup error for {chembl_id}") from exc
+    if not records:
+        return None
+    hierarchy = records[0].get("molecule_hierarchy") or {}
+    parent_id = hierarchy.get("parent_chembl_id")
+    if parent_id and parent_id != chembl_id:
+        return parent_id
     return None
 
 
@@ -247,7 +270,13 @@ def _live_fetch_drug_mechanisms(chembl_id: str) -> Optional[List[Dict]]:
     # Direct query succeeded with rows — done.
     if rows:
         return rows
-    parent_id = _resolve_parent_chembl_id(chembl_id)
+    try:
+        parent_id = _resolve_parent_chembl_id(chembl_id)
+    except _ChEMBLLookupError:
+        # Parent lookup errored — propagate as transient. A flaky
+        # parent lookup must NOT lock in a "no mechanisms" cache row
+        # (the drug might genuinely have mechanisms via its parent).
+        return None
     if parent_id is None:
         # No parent to try. Trust whatever the direct call gave us
         # (`None` → transient error, propagate; `[]` → genuine empty).

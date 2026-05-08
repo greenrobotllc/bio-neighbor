@@ -201,6 +201,23 @@ class TestNormalizeDrugsCacheRoundtrip(unittest.TestCase):
         with patch.object(rxnorm_normalize.requests, "get", return_value=ok_empty):
             self.assertIsNone(rxnorm_normalize._rxcui_lookup_exact("zzznope"))
 
+    def test_secondary_helpers_raise_on_transient(self):
+        # _resolve_ingredient / _rxcui_properties / _historystatus must
+        # also raise on transient errors — otherwise they silently
+        # return None and `_live_normalize` builds a partial-data
+        # `matched=true` row that gets cached.
+        import requests as _requests
+        with patch.object(
+            rxnorm_normalize.requests, "get",
+            side_effect=_requests.ConnectionError("simulated"),
+        ):
+            with self.assertRaises(rxnorm_normalize.RxNormLookupError):
+                rxnorm_normalize._resolve_ingredient("12345")
+            with self.assertRaises(rxnorm_normalize.RxNormLookupError):
+                rxnorm_normalize._rxcui_properties("12345")
+            with self.assertRaises(rxnorm_normalize.RxNormLookupError):
+                rxnorm_normalize._historystatus("12345")
+
 
 if __name__ == "__main__":
     unittest.main()
