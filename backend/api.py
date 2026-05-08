@@ -38,55 +38,6 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for local development
 
 
-def _parse_treatment_auditor_drugs_body(body: Any):
-    """Validate the shape of a Treatment Auditor POST body.
-
-    All four `/cancer-research/v2/treatment-auditor/*` endpoints accept
-    the same `{"drugs": [...]}` shape with an optional `"symptoms":
-    [...]` (only adverse-events uses the symptoms field). They share
-    these guards:
-
-    1. The body itself must be a JSON object — otherwise `body.get(...)`
-       blows up when the parsed body is a list/scalar.
-    2. `drugs` must be a list (not a dict, not missing).
-    3. Defensive cap: at most 50 drugs per call.
-
-    Returns `(drugs_raw, None)` on success, or `(None, (response, status))`
-    on failure so the caller can `return *err`. Symptom validation is
-    done in the calling endpoint since only one endpoint uses symptoms.
-    """
-    if not isinstance(body, dict):
-        return None, (jsonify({
-            'success': False,
-            'error': 'Request body must be a JSON object.',
-        }), 400)
-    drugs_raw = body.get('drugs')
-    if not isinstance(drugs_raw, list):
-        return None, (jsonify({
-            'success': False,
-            'error': "Request body must be {\"drugs\": [{\"name\": str, ...}, ...]}",
-        }), 400)
-    if len(drugs_raw) > 50:
-        return None, (jsonify({
-            'success': False,
-            'error': 'Too many drugs (max 50 per request)',
-        }), 400)
-    return drugs_raw, None
-
-
-def _empty_cleaned_drugs_response():
-    """Returned when `drugs_raw` was non-empty but every entry got filtered
-    out by the per-endpoint sanitizer (no `name`, malformed types, etc.).
-    The empty-but-valid `drugs_raw == []` case is allowed through — that's
-    a vacuous-but-structurally-fine request and downstream code handles
-    it correctly. This response only fires when the caller intended to
-    pass drugs but every one was malformed."""
-    return jsonify({
-        'success': False,
-        'error': 'No valid drug entries found — each entry needs at least a non-empty "name" string.',
-    }), 400
-
-
 def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
     """Parse and clamp an integer query parameter.
 
@@ -3902,9 +3853,18 @@ def v2_treatment_auditor_adverse_events():
     """
     try:
         body = request.get_json(silent=True)
-        drugs_raw, err = _parse_treatment_auditor_drugs_body(body)
-        if err:
-            return err
+        # Inline validation (literal error strings only, no portion of
+        # `body` flows into the response — CodeQL flagged the prior
+        # helper-based version as reflected-XSS even though the messages
+        # were static, because the helper accepted user-tainted `body`
+        # and returned a string the caller put into a Response).
+        if not isinstance(body, dict):
+            return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({'success': False, 'error': 'Request body must include a "drugs" array.'}), 400
+        if len(drugs_raw) > 50:
+            return jsonify({'success': False, 'error': 'Too many drugs (max 50 per request).'}), 400
 
         # Symptoms must be a list — bare strings would silently iterate
         # character-by-character through the comprehension below.
@@ -3927,7 +3887,7 @@ def v2_treatment_auditor_adverse_events():
                 'chembl_id': entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None,
             })
         if drugs_raw and not cleaned_drugs:
-            return _empty_cleaned_drugs_response()
+            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
 
         symptoms = [s.strip() for s in symptoms_raw if isinstance(s, str) and s.strip()]
 
@@ -3975,9 +3935,18 @@ def v2_treatment_auditor_target_overlap():
     """
     try:
         body = request.get_json(silent=True)
-        drugs_raw, err = _parse_treatment_auditor_drugs_body(body)
-        if err:
-            return err
+        # Inline validation (literal error strings only, no portion of
+        # `body` flows into the response — CodeQL flagged the prior
+        # helper-based version as reflected-XSS even though the messages
+        # were static, because the helper accepted user-tainted `body`
+        # and returned a string the caller put into a Response).
+        if not isinstance(body, dict):
+            return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({'success': False, 'error': 'Request body must include a "drugs" array.'}), 400
+        if len(drugs_raw) > 50:
+            return jsonify({'success': False, 'error': 'Too many drugs (max 50 per request).'}), 400
 
         cleaned = []
         for entry in drugs_raw:
@@ -3989,7 +3958,7 @@ def v2_treatment_auditor_target_overlap():
             chembl_id = entry.get('chembl_id') if isinstance(entry.get('chembl_id'), str) else None
             cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
         if drugs_raw and not cleaned:
-            return _empty_cleaned_drugs_response()
+            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
 
         from drug_targets import find_target_overlap
         result = find_target_overlap(cleaned)
@@ -4039,9 +4008,18 @@ def v2_treatment_auditor_drug_interactions():
     """
     try:
         body = request.get_json(silent=True)
-        drugs_raw, err = _parse_treatment_auditor_drugs_body(body)
-        if err:
-            return err
+        # Inline validation (literal error strings only, no portion of
+        # `body` flows into the response — CodeQL flagged the prior
+        # helper-based version as reflected-XSS even though the messages
+        # were static, because the helper accepted user-tainted `body`
+        # and returned a string the caller put into a Response).
+        if not isinstance(body, dict):
+            return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({'success': False, 'error': 'Request body must include a "drugs" array.'}), 400
+        if len(drugs_raw) > 50:
+            return jsonify({'success': False, 'error': 'Too many drugs (max 50 per request).'}), 400
 
         cleaned = []
         for entry in drugs_raw:
@@ -4058,7 +4036,7 @@ def v2_treatment_auditor_drug_interactions():
                 'drugbank_id': drugbank_id,
             })
         if drugs_raw and not cleaned:
-            return _empty_cleaned_drugs_response()
+            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
 
         from drugbank_interactions import get_pairwise_interactions
         result = get_pairwise_interactions(cleaned)
@@ -4109,9 +4087,18 @@ def v2_treatment_auditor_normalize_drugs():
     """
     try:
         body = request.get_json(silent=True)
-        drugs_raw, err = _parse_treatment_auditor_drugs_body(body)
-        if err:
-            return err
+        # Inline validation (literal error strings only, no portion of
+        # `body` flows into the response — CodeQL flagged the prior
+        # helper-based version as reflected-XSS even though the messages
+        # were static, because the helper accepted user-tainted `body`
+        # and returned a string the caller put into a Response).
+        if not isinstance(body, dict):
+            return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
+        drugs_raw = body.get('drugs')
+        if not isinstance(drugs_raw, list):
+            return jsonify({'success': False, 'error': 'Request body must include a "drugs" array.'}), 400
+        if len(drugs_raw) > 50:
+            return jsonify({'success': False, 'error': 'Too many drugs (max 50 per request).'}), 400
 
         cleaned = []
         for entry in drugs_raw:
@@ -4125,7 +4112,7 @@ def v2_treatment_auditor_normalize_drugs():
                 chembl_id = None
             cleaned.append({'name': name.strip(), 'chembl_id': chembl_id})
         if drugs_raw and not cleaned:
-            return _empty_cleaned_drugs_response()
+            return jsonify({'success': False, 'error': 'No valid drug entries found; each entry needs a non-empty name string.'}), 400
 
         from rxnorm_normalize import normalize_drugs
         normalizations = normalize_drugs(cleaned)
