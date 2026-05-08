@@ -125,5 +125,32 @@ class TestSharedTargets(unittest.TestCase):
         )
 
 
+class TestExceptionNarrowing(unittest.TestCase):
+    """Catch tuple in `_query_mechanism_endpoint` etc. should swallow
+    expected ChEMBL/network errors but propagate genuine programming
+    bugs so they're not silenced."""
+
+    def test_request_exception_caught(self):
+        # ConnectionError subclasses RequestException — should be
+        # caught and return None (transient signal).
+        from unittest.mock import patch, MagicMock
+        import requests
+        mock_mech = MagicMock()
+        mock_mech.filter.side_effect = requests.ConnectionError("simulated")
+        with patch.object(drug_targets.new_client, "mechanism", mock_mech):
+            self.assertIsNone(drug_targets._query_mechanism_endpoint("CHEMBL1"))
+
+    def test_unexpected_exception_propagates(self):
+        # A KeyError (programming bug) must NOT be swallowed by the
+        # narrowed catch — that's the whole point of moving away from
+        # `except Exception`.
+        from unittest.mock import patch, MagicMock
+        mock_mech = MagicMock()
+        mock_mech.filter.side_effect = KeyError("programming bug")
+        with patch.object(drug_targets.new_client, "mechanism", mock_mech):
+            with self.assertRaises(KeyError):
+                drug_targets._query_mechanism_endpoint("CHEMBL1")
+
+
 if __name__ == "__main__":
     unittest.main()

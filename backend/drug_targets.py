@@ -33,11 +33,27 @@ logger = logging.getLogger(__name__)
 try:
     from chembl_webresource_client.new_client import new_client
     from chembl_webresource_client.settings import Settings as _ChEMBLSettings
+    from chembl_webresource_client.http_errors import (
+        BaseHttpException as _ChEMBLHttpException,
+    )
     CHEMBL_AVAILABLE = True
 except ImportError:  # pragma: no cover - dev fallback
     CHEMBL_AVAILABLE = False
     new_client = None  # type: ignore
     _ChEMBLSettings = None  # type: ignore
+    _ChEMBLHttpException = Exception  # type: ignore[assignment,misc]
+
+import requests as _requests
+
+# Narrow exception tuple for catches around ChEMBL client calls.
+# Lets us log + return None for expected transient errors (network,
+# HTTP 4xx/5xx from ChEMBL, malformed JSON) without swallowing genuine
+# programming bugs (KeyError, AttributeError, TypeError).
+_CHEMBL_LOOKUP_EXCEPTIONS: tuple = (
+    _requests.RequestException,
+    _ChEMBLHttpException,
+    ValueError,
+)
 
 DRUG_TARGETS_TABLE = "drug_targets_cache"
 CHEMBL_TARGETS_TABLE = "chembl_targets_cache"
@@ -197,7 +213,7 @@ def _query_mechanism_endpoint(chembl_id: str) -> Optional[List[Dict]]:
                 "mechanism_comment",
             )
         )
-    except Exception as exc:
+    except _CHEMBL_LOOKUP_EXCEPTIONS as exc:
         logger.warning("ChEMBL mechanism lookup failed for %s: %s", chembl_id, exc)
         return None
 
@@ -241,7 +257,7 @@ def _resolve_parent_chembl_id(chembl_id: str) -> Optional[str]:
                 "molecule_hierarchy",
             )
         )
-    except Exception as exc:
+    except _CHEMBL_LOOKUP_EXCEPTIONS as exc:
         logger.warning("ChEMBL parent lookup failed for %s: %s", chembl_id, exc)
         raise _ChEMBLLookupError(f"parent lookup error for {chembl_id}") from exc
     if not records:
@@ -317,7 +333,7 @@ def _live_fetch_target_info(target_chembl_id: str) -> Optional[Dict]:
         if not records:
             return {}
         rec = records[0]
-    except Exception as exc:
+    except _CHEMBL_LOOKUP_EXCEPTIONS as exc:
         logger.warning("ChEMBL target lookup failed for %s: %s", target_chembl_id, exc)
         return None
 

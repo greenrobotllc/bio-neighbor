@@ -27,9 +27,22 @@ import datetime
 import logging
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 import requests
+
+
+class NormalizationResult(TypedDict):
+    """Shape of a normalization row — what `_live_normalize` returns
+    and what's stored in the SQLite cache. Defined as a TypedDict so
+    the `matched` boolean isn't widened to `Optional[str]` by a generic
+    `Dict[str, Optional[str]]` annotation.
+    """
+    matched: bool
+    rxcui: Optional[str]
+    normalized_name: Optional[str]
+    ingredient_rxcui: Optional[str]
+    ingredient_name: Optional[str]
 
 from data_loader import DB_PATH
 
@@ -149,14 +162,20 @@ def _is_expired(cached_at: Any, ttl_secs: int) -> bool:
     """
     if not cached_at or not isinstance(cached_at, str):
         return False
-    # SQLite's CURRENT_TIMESTAMP format: "YYYY-MM-DD HH:MM:SS" (UTC).
-    # `fromisoformat` accepts that with the space separator on 3.11+,
-    # but for older Pythons swap to ISO format defensively.
+    # SQLite's CURRENT_TIMESTAMP format: "YYYY-MM-DD HH:MM:SS" (UTC,
+    # naive). `fromisoformat` accepts that with the space separator on
+    # 3.11+, but for older Pythons swap to ISO format defensively.
     try:
         cached_dt = datetime.datetime.fromisoformat(cached_at.replace(" ", "T"))
     except ValueError:
         return False
-    age = (datetime.datetime.utcnow() - cached_dt).total_seconds()
+    # Tag the parsed value as UTC and compare with a UTC-aware "now"
+    # so we're not relying on the deprecated `datetime.utcnow()` (which
+    # returns a naive datetime and is set for removal in Python 3.13+).
+    if cached_dt.tzinfo is None:
+        cached_dt = cached_dt.replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    age = (now - cached_dt).total_seconds()
     return age > ttl_secs
 
 
@@ -500,7 +519,7 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
     # batch deadline so a degraded RxNorm service can't stall the
     # whole audit for minutes. Bounded worker count keeps us polite.
     # ------------------------------------------------------------------
-    transient_unmatched: Dict[str, Optional[str]] = {
+    transient_unmatched: NormalizationResult = {
         "matched": False,
         "rxcui": None,
         "normalized_name": None,
