@@ -218,6 +218,93 @@ class TestNormalizeDrugsCacheRoundtrip(unittest.TestCase):
             with self.assertRaises(rxnorm_normalize.RxNormLookupError):
                 rxnorm_normalize._historystatus("12345")
 
+    def test_negative_cache_entries_expire(self):
+        # Negative (`matched: false`) entries must be re-checked once
+        # they're older than NEGATIVE_CACHE_TTL_SECS — RxNorm gradually
+        # adds content, so a permanent miss would silently break the
+        # audit for drug names that became matchable after the first
+        # query.
+        unmatched = {
+            "matched": False, "rxcui": None, "normalized_name": None,
+            "ingredient_rxcui": None, "ingredient_name": None,
+        }
+        with patch.object(
+            rxnorm_normalize, "_live_normalize", return_value=unmatched
+        ) as mock_live:
+            rxnorm_normalize.normalize_drugs([{"name": "BogusDrug", "chembl_id": None}])
+            self.assertEqual(mock_live.call_count, 1)
+
+            # Hand-rewind the cached_at timestamp past the TTL.
+            import sqlite3 as _sqlite3
+            conn = _sqlite3.connect(self.db_path)
+            try:
+                conn.execute(
+                    f"UPDATE {rxnorm_normalize.CACHE_TABLE} "
+                    f"SET cached_at = '2000-01-01 00:00:00' WHERE input_key = ?",
+                    ("bogusdrug",),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            # Second call should re-fetch — the stale negative was
+            # treated as expired.
+            rxnorm_normalize.normalize_drugs([{"name": "BogusDrug", "chembl_id": None}])
+            self.assertEqual(mock_live.call_count, 2, "expired negative must re-fetch")
+
+    def test_positive_cache_entries_do_not_expire(self):
+        # Symmetric: matched=True rows are kept indefinitely. RxNorm
+        # ingredient mappings are stable, so re-querying them on a TTL
+        # would be wasteful churn.
+        matched = {
+            "matched": True, "rxcui": "84857", "normalized_name": "anastrozole",
+            "ingredient_rxcui": "84857", "ingredient_name": "anastrozole",
+        }
+        with patch.object(
+            rxnorm_normalize, "_live_normalize", return_value=matched
+        ) as mock_live:
+            rxnorm_normalize.normalize_drugs([{"name": "anastrozole", "chembl_id": None}])
+            self.assertEqual(mock_live.call_count, 1)
+
+            # Even with an ancient cached_at, a positive row is served
+            # from cache.
+            import sqlite3 as _sqlite3
+            conn = _sqlite3.connect(self.db_path)
+            try:
+                conn.execute(
+                    f"UPDATE {rxnorm_normalize.CACHE_TABLE} "
+                    f"SET cached_at = '2000-01-01 00:00:00' WHERE input_key = ?",
+                    ("anastrozole",),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            rxnorm_normalize.normalize_drugs([{"name": "anastrozole", "chembl_id": None}])
+            self.assertEqual(mock_live.call_count, 1, "positive entries must not expire")
+
+    def test_duplicate_input_names_coalesced_into_single_lookup(self):
+        # Two input rows with the same lowercased name must run ONE
+        # live lookup (not two) and broadcast the same outcome to both
+        # output rows. Avoids duplicate work and a sqlite write race
+        # on the shared cache row.
+        matched = {
+            "matched": True, "rxcui": "84857", "normalized_name": "anastrozole",
+            "ingredient_rxcui": "84857", "ingredient_name": "anastrozole",
+        }
+        with patch.object(
+            rxnorm_normalize, "_live_normalize", return_value=matched
+        ) as mock_live:
+            result = rxnorm_normalize.normalize_drugs([
+                {"name": "Anastrozole", "chembl_id": None},
+                {"name": "anastrozole", "chembl_id": None},  # duplicate (case-insensitive)
+            ])
+        self.assertEqual(mock_live.call_count, 1, "duplicate name must run one live lookup")
+        # Both outputs are present and share the same group key.
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["group_key"], result[1]["group_key"])
+        self.assertEqual(result[0]["ingredient_rxcui"], "84857")
+
     def test_batch_deadline_marks_slow_lookups_transient(self):
         # Tighten the deadline well below the simulated lookup time so
         # the deadline path gets exercised. We expect:

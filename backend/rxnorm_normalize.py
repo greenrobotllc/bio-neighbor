@@ -23,6 +23,7 @@ Reference:
 from __future__ import annotations
 
 import concurrent.futures
+import datetime
 import logging
 import sqlite3
 import time
@@ -44,6 +45,16 @@ HTTP_TIMEOUT = 6.0
 RATE_LIMIT_DELAY = 0.05
 
 CACHE_TABLE = "drug_rxnorm_cache"
+# How long to keep a `matched: False` row before re-querying RxNorm.
+# Positive matches (RxNorm has a stable ingredient mapping) can be
+# cached forever; negative entries shouldn't, because:
+#   - RxNorm gradually adds new content (today's "no match" might be
+#     tomorrow's hit).
+#   - A typo or unusual brand spelling that produced a miss may be
+#     resolvable in a future RxNorm release.
+# 30 days strikes a balance: short enough that audit results stay
+# fresh, long enough to absorb most repeat queries within a session.
+NEGATIVE_CACHE_TTL_SECS = 30 * 24 * 60 * 60
 
 # Bounded-parallelism settings for the cold-cache path. A single
 # `_live_normalize` call can do up to 5 sequential HTTP requests
@@ -96,9 +107,19 @@ def _input_key(name: str) -> str:
 
 
 def _cache_lookup(conn: sqlite3.Connection, key: str) -> Optional[Dict]:
+    """Read one cache row, applying the negative-entry TTL.
+
+    Positive entries (`matched=True`) are returned unconditionally —
+    RxNorm ingredient mappings are stable, so caching forever is fine.
+    Negative entries are treated as expired once they're older than
+    `NEGATIVE_CACHE_TTL_SECS`, returning `None` so the caller re-runs
+    the live lookup. Stale rows are *not* deleted here (avoids
+    unnecessary writes during a read path); the next live lookup's
+    `INSERT OR REPLACE` overwrites them.
+    """
     cursor = conn.execute(
         f"""
-        SELECT rxcui, normalized_name, ingredient_rxcui, ingredient_name, matched
+        SELECT rxcui, normalized_name, ingredient_rxcui, ingredient_name, matched, cached_at
         FROM {CACHE_TABLE}
         WHERE input_key = ?
         """,
@@ -107,13 +128,36 @@ def _cache_lookup(conn: sqlite3.Connection, key: str) -> Optional[Dict]:
     row = cursor.fetchone()
     if row is None:
         return None
+    rxcui, normalized_name, ingredient_rxcui, ingredient_name, matched, cached_at = row
+    matched_bool = bool(matched)
+    if not matched_bool and _is_expired(cached_at, NEGATIVE_CACHE_TTL_SECS):
+        return None
     return {
-        "rxcui": row[0],
-        "normalized_name": row[1],
-        "ingredient_rxcui": row[2],
-        "ingredient_name": row[3],
-        "matched": bool(row[4]),
+        "rxcui": rxcui,
+        "normalized_name": normalized_name,
+        "ingredient_rxcui": ingredient_rxcui,
+        "ingredient_name": ingredient_name,
+        "matched": matched_bool,
     }
+
+
+def _is_expired(cached_at: Any, ttl_secs: int) -> bool:
+    """True when `cached_at` (a SQLite CURRENT_TIMESTAMP string in UTC)
+    is older than `ttl_secs`. False when `cached_at` is missing or
+    unparseable — treat unknown ages as fresh rather than stampede the
+    upstream service when the timestamp column gets corrupted somehow.
+    """
+    if not cached_at or not isinstance(cached_at, str):
+        return False
+    # SQLite's CURRENT_TIMESTAMP format: "YYYY-MM-DD HH:MM:SS" (UTC).
+    # `fromisoformat` accepts that with the space separator on 3.11+,
+    # but for older Pythons swap to ISO format defensively.
+    try:
+        cached_dt = datetime.datetime.fromisoformat(cached_at.replace(" ", "T"))
+    except ValueError:
+        return False
+    age = (datetime.datetime.utcnow() - cached_dt).total_seconds()
+    return age > ttl_secs
 
 
 def _cache_store(
@@ -463,11 +507,21 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
         "ingredient_rxcui": None,
         "ingredient_name": None,
     }
-    pending_indices = [i for i, e in enumerate(inputs) if e["cached"] is None]
+    # Group cache misses by cache key (lowercased name) so that if the
+    # same drug appears multiple times in the input list — e.g. user
+    # types "Anastrozole" and "anastrozole" as separate rows — we run
+    # *one* live lookup and broadcast the result. Avoids duplicated
+    # network work, eliminates a sqlite write race on the same row,
+    # and guarantees identical authoritative/transient outcomes for
+    # duplicate inputs.
+    key_to_indices: Dict[str, List[int]] = {}
+    for i, e in enumerate(inputs):
+        if e["cached"] is None:
+            key_to_indices.setdefault(e["key"], []).append(i)
     # `live_outcomes[i] = (result_dict, is_authoritative)`
     live_outcomes: Dict[int, tuple] = {}
 
-    if pending_indices:
+    if key_to_indices:
         # NOTE: deliberately not using `with ThreadPoolExecutor(...) as executor:`
         # — the context manager's __exit__ blocks until every submitted
         # task completes, defeating the deadline. We shut down with
@@ -479,46 +533,56 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
             max_workers=NORMALIZE_MAX_WORKERS
         )
         try:
-            future_to_idx = {
-                executor.submit(_live_normalize, inputs[i]["name"]): i
-                for i in pending_indices
-            }
+            # Submit one task per UNIQUE key. Use the first input's
+            # exact (pre-lowercase) name as the live argument so any
+            # case-sensitivity at RxNorm's end is preserved.
+            future_to_key: Dict[concurrent.futures.Future, str] = {}
+            for key, idx_list in key_to_indices.items():
+                first_name = inputs[idx_list[0]]["name"]
+                future_to_key[executor.submit(_live_normalize, first_name)] = key
+
+            def _broadcast(key: str, outcome: tuple) -> None:
+                """Apply one live outcome to every input row sharing this key."""
+                for idx in key_to_indices[key]:
+                    live_outcomes[idx] = outcome
+
             try:
                 for future in concurrent.futures.as_completed(
-                    future_to_idx, timeout=NORMALIZE_BATCH_DEADLINE_SECS
+                    future_to_key, timeout=NORMALIZE_BATCH_DEADLINE_SECS
                 ):
-                    idx = future_to_idx[future]
-                    name = inputs[idx]["name"]
+                    key = future_to_key[future]
+                    name = inputs[key_to_indices[key][0]]["name"]
                     try:
                         result = future.result()
-                        live_outcomes[idx] = (result, True)
+                        _broadcast(key, (result, True))
                     except RxNormLookupError as exc:
                         logger.warning(
                             "RxNorm transient error for %r — not caching: %s",
                             name, exc,
                         )
-                        live_outcomes[idx] = (dict(transient_unmatched), False)
+                        _broadcast(key, (dict(transient_unmatched), False))
                     except Exception:
                         logger.exception(
                             "RxNorm normalize unexpected error for %r — not caching",
                             name,
                         )
-                        live_outcomes[idx] = (dict(transient_unmatched), False)
+                        _broadcast(key, (dict(transient_unmatched), False))
             except concurrent.futures.TimeoutError:
                 # `as_completed`'s timeout fired — fall through to the
                 # cleanup loop which marks anything still pending as a
                 # transient failure.
                 pass
             # Anything still in flight after the deadline → transient.
-            for future, idx in future_to_idx.items():
-                if idx in live_outcomes:
+            for future, key in future_to_key.items():
+                # Already populated by a completed future for this key?
+                if key_to_indices[key][0] in live_outcomes:
                     continue
                 future.cancel()
                 logger.warning(
                     "RxNorm batch deadline exceeded for %r — not caching",
-                    inputs[idx]["name"],
+                    inputs[key_to_indices[key][0]]["name"],
                 )
-                live_outcomes[idx] = (dict(transient_unmatched), False)
+                _broadcast(key, (dict(transient_unmatched), False))
         finally:
             # `cancel_futures=True` is Python 3.9+; cancel anything still
             # queued but already-running tasks finish in the background.
@@ -529,13 +593,20 @@ def normalize_drugs(drugs: List[Dict]) -> List[Dict]:
     # connection on the calling thread so we don't share sqlite handles
     # with the worker pool.
     # ------------------------------------------------------------------
-    authoritative = [(idx, r) for idx, (r, auth) in live_outcomes.items() if auth]
-    if authoritative:
+    # Dedupe writes by cache key — two input rows sharing the same key
+    # broadcast the same outcome above, so writing once per key is
+    # sufficient and avoids redundant INSERT OR REPLACE traffic.
+    authoritative_by_key: Dict[str, Dict] = {}
+    for idx, (result, auth) in live_outcomes.items():
+        if auth:
+            authoritative_by_key.setdefault(inputs[idx]["key"], result)
+    if authoritative_by_key:
         conn = sqlite3.connect(DB_PATH)
         conn.execute("PRAGMA busy_timeout = 5000")
         try:
-            for idx, result in authoritative:
-                _cache_store(conn, inputs[idx]["key"], inputs[idx]["name"], result)
+            for key, result in authoritative_by_key.items():
+                first_idx = key_to_indices[key][0]
+                _cache_store(conn, key, inputs[first_idx]["name"], result)
         finally:
             conn.close()
 
