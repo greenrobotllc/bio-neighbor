@@ -182,11 +182,12 @@ def search():
         logger = logging.getLogger(__name__)
         logger.warning("ValueError in /search endpoint: %s", str(e))
         return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
-    except OSError as e:
+    except OSError:
         # Handle broken pipe and other OS errors
+        logger.exception("OSError in /search endpoint")
         return jsonify({
-            'success': False, 
-            'error': f'Backend error: {str(e)}. Please ensure the search engine is properly initialized.'
+            'success': False,
+            'error': 'Backend error. Please ensure the search engine is properly initialized.'
         }), 500
     except Exception as e:
         import logging
@@ -761,7 +762,7 @@ def list_diseases():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -800,7 +801,7 @@ def get_disease_molecules(disease_name: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -840,7 +841,7 @@ def get_disease_top_molecules(disease_name: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -926,9 +927,22 @@ def get_download_status(task_id: str):
     """
     try:
         import os
+        from uuid import UUID
         from progress_tracker import read_progress
         from task_registry import get_task_info
-        
+
+        # Validate task_id is a UUID before letting it reach any
+        # filesystem path. CodeQL recognizes UUID() as a sanitizer for
+        # py/path-injection (the regex check inside progress_tracker is
+        # defense-in-depth but isn't seen by the analyzer).
+        try:
+            UUID(task_id)
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid task ID'
+            }), 400
+
         # Resolve UUID to PID via registry
         task_info = get_task_info(task_id)
         if not task_info:
@@ -1042,7 +1056,7 @@ def get_download_status(task_id: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Error checking status: {str(e)}'
+            'error': 'Error checking status'
         }), 500
 
 
@@ -1078,7 +1092,7 @@ def get_stats():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1117,7 +1131,7 @@ def search_molecules():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1271,7 +1285,7 @@ def search_diseases():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1302,7 +1316,7 @@ def list_drugs():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1339,7 +1353,7 @@ def get_drug(drug_id: int):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1380,7 +1394,7 @@ def get_drug_molecules(drug_id: int):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1423,7 +1437,7 @@ def get_disease_drugs(disease_name: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1576,7 +1590,7 @@ def download_molecules():
                 print(f"❌ Download process failed: {error_msg}")
                 return jsonify({
                     'success': False,
-                    'error': f'Download failed: {error_msg[:200]}'
+                    'error': 'Download failed, see server logs'
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
@@ -1614,7 +1628,7 @@ def download_molecules():
             print(f"❌ Error starting download process: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to start download: {str(e)}'
+                'error': 'Failed to start download'
             }), 500
     
     except Exception as e:
@@ -1624,7 +1638,7 @@ def download_molecules():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1784,7 +1798,7 @@ def download_drugs():
                 print(f"❌ Download process failed: {error_msg}")
                 return jsonify({
                     'success': False,
-                    'error': f'Download failed: {error_msg[:200]}'
+                    'error': 'Download failed, see server logs'
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
@@ -1822,7 +1836,7 @@ def download_drugs():
             print(f"❌ Error starting download process: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to start download: {str(e)}'
+                'error': 'Failed to start download'
             }), 500
     
     except Exception as e:
@@ -1832,7 +1846,7 @@ def download_drugs():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1969,7 +1983,7 @@ def download_diseases():
                 print(f"❌ Download process failed: {error_msg}")
                 return jsonify({
                     'success': False,
-                    'error': f'Download failed: {error_msg[:200]}'
+                    'error': 'Download failed, see server logs'
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
@@ -2007,7 +2021,7 @@ def download_diseases():
             print(f"❌ Error starting download process: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to start download: {str(e)}'
+                'error': 'Failed to start download'
             }), 500
     
     except Exception as e:
@@ -2017,7 +2031,7 @@ def download_diseases():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
