@@ -9,7 +9,7 @@ import sys
 import os
 import re
 from typing import Dict, Any, List, Optional
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 logger = logging.getLogger(__name__)
@@ -4151,6 +4151,54 @@ def v2_treatment_auditor_normalize_drugs():
         })
     except Exception:
         logger.exception("v2 treatment-auditor normalize-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/treatment-auditor/report.pdf', methods=['POST'])
+def v2_treatment_auditor_report_pdf():
+    """
+    Render a Treatment Auditor run as PDF (issue #67).
+
+    Replaces the in-Swift PDF builder so the macOS app and the Python CLI
+    share one source of truth for layout, copy, and styling. Both clients
+    POST a `ReportPayload` (the audit result they already produce) and
+    write the response bytes to disk.
+
+    Request body (JSON): see treatment_auditor_report.py for the full
+    schema. `plan` is required; every other section is optional and is
+    elided gracefully when absent.
+
+    Response: 200 application/pdf <binary>, or 400 JSON on validation
+    failure, or 500 JSON on unexpected error.
+    """
+    try:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
+        if not isinstance(body.get('plan'), dict):
+            return jsonify({'success': False, 'error': 'Request body must include a "plan" object.'}), 400
+
+        from treatment_auditor_report import build_html, render_pdf, default_filename
+        try:
+            html = build_html(body)
+            pdf_bytes = render_pdf(html)
+        except ValueError as e:
+            # build_html raises ValueError for missing-required-field cases.
+            # The string is constructed from literal text, not user input,
+            # so it is safe to return.
+            return jsonify({'success': False, 'error': str(e)}), 400
+
+        filename = default_filename(body)
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Cache-Control': 'no-store',
+            },
+        )
+    except Exception:
+        logger.exception("v2 treatment-auditor report.pdf error")
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 

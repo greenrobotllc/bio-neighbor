@@ -12,6 +12,14 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# WeasyPrint (treatment-auditor PDF reports) needs Pango/cairo from Homebrew.
+if command -v brew &> /dev/null; then
+    if ! brew list pango &> /dev/null; then
+        echo "📦 Installing Pango/cairo for PDF rendering (WeasyPrint)..."
+        brew install pango
+    fi
+fi
+
 PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
 echo "✓ Found Python $PYTHON_VERSION"
 

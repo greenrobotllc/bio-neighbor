@@ -922,13 +922,15 @@ struct TreatmentAuditorView: View {
         }
     }
 
-    // MARK: - PDF export (issue #58)
+    // MARK: - PDF export (issues #58, #67)
 
     /// Save the most recent audit as a printable PDF. Opens NSSavePanel for
-    /// the destination, then renders via `TreatmentAuditReportExporter`. The
-    /// rendered PDF includes inputs, methodology (search terms, data sources,
-    /// multi-pass pipeline), per-source summaries, the final synthesis, and
-    /// references — enough for someone to repeat the audit by hand.
+    /// the destination, then renders via the backend's report.pdf endpoint
+    /// (issue #67 — the HTML+CSS builder lives in
+    /// backend/treatment_auditor_report.py so the Python CLI and the macOS
+    /// app produce visually identical output). Includes inputs, methodology,
+    /// per-source summaries, final synthesis, and references — enough for
+    /// someone to repeat the audit by hand.
     private func exportPDF(snapshot: CompletedAuditSnapshot) {
         pdfExportError = nil
 
@@ -937,7 +939,7 @@ struct TreatmentAuditorView: View {
         panel.message = "Choose where to save the printable PDF report."
         panel.allowedContentTypes = [UTType.pdf]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = TreatmentAuditReportExporter.defaultFilename(for: snapshot)
+        panel.nameFieldStringValue = TreatmentAuditReportClient.defaultFilename(for: snapshot)
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -945,7 +947,7 @@ struct TreatmentAuditorView: View {
         Task { @MainActor in
             defer { isExportingPDF = false }
             do {
-                try await TreatmentAuditReportExporter.exportPDF(snapshot: snapshot, to: url)
+                try await TreatmentAuditReportClient.renderPDF(snapshot: snapshot, to: url)
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } catch {
                 pdfExportError = "PDF export failed: \(error.localizedDescription)"

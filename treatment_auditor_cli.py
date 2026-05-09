@@ -23,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -33,6 +34,8 @@ DEFAULT_OLLAMA_MODEL = "llama3.2"
 MODALITIES = ("radiation", "surgery", "chemotherapy", "targeted")
 ALLOWED_SEVERITIES = ("mild", "moderate", "severe")
 ALL_STEPS = ("pdq", "modality", "rxnorm", "interactions", "targets", "faers", "drug-trials")
+
+REPORT_PDF_PATH = "/cancer-research/v2/treatment-auditor/report.pdf"
 
 
 class CLIError(Exception):
@@ -98,10 +101,19 @@ def _http_request(
 # --- progress reporting -----------------------------------------------------
 
 class Progress:
+    """Per-step progress reporter + structured step log.
+
+    The structured log is what the PDF report's "Audit pipeline log" section
+    consumes (issue #67) — it mirrors what `TreatmentAuditorView.swift` shows
+    on screen as the audit runs. Every `start(...)`/`end(...)` pair appends
+    one entry to `entries`, with `state` mapping CLI outcomes onto the four
+    states the report renderer knows how to colour."""
+
     def __init__(self, quiet: bool) -> None:
         self.quiet = quiet
         self._step_start: Optional[float] = None
         self._step_label: Optional[str] = None
+        self.entries: List[Dict[str, Any]] = []
 
     def start(self, label: str) -> None:
         self._step_label = label
@@ -110,13 +122,24 @@ class Progress:
             print(f"→ {label} …", end="", flush=True, file=sys.stderr)
 
     def end(self, outcome: str, detail: str = "") -> None:
-        if self.quiet:
-            self._step_start = None
-            self._step_label = None
-            return
-        elapsed = time.monotonic() - (self._step_start or time.monotonic())
-        suffix = f" ({detail})" if detail else ""
-        print(f" {outcome} ({elapsed:.1f}s){suffix}", file=sys.stderr)
+        label = self._step_label or "?"
+        # Map CLI outcome strings onto the report's state enum. "ok"/"done"
+        # are equivalent — Swift uses .done, the CLI prints "ok".
+        state = {
+            "ok": "done",
+            "done": "done",
+            "skipped": "skipped",
+            "failed": "failed",
+        }.get(outcome, "done")
+        self.entries.append({
+            "label": label,
+            "state": state,
+            "detail": detail or None,
+        })
+        if not self.quiet:
+            elapsed = time.monotonic() - (self._step_start or time.monotonic())
+            suffix = f" ({detail})" if detail else ""
+            print(f" {outcome} ({elapsed:.1f}s){suffix}", file=sys.stderr)
         self._step_start = None
         self._step_label = None
 
@@ -628,17 +651,26 @@ def _step_drug_trials(
     return {"ok": overall_ok, "by_drug": by_drug, "skipped_no_chembl_id": skipped}
 
 
-# --- Ollama synthesis (optional) -------------------------------------------
+# --- Ollama multi-pass synthesis (optional) --------------------------------
+#
+# Verbatim port of OllamaService.swift's two-stage pipeline:
+#   Stage 1: one mini-summary per non-empty source (PDQ, each modality, each
+#            drug with trials) — 120-180 word digests.
+#   Stage 2: one final synthesis that consumes the mini-summaries plus the
+#            deterministic findings (DrugBank / ChEMBL target / FAERS) — 350-550
+#            word audit with NCT citations and a "Further reading" block.
+# Prompt copy is held identical to the Swift side (OllamaService.swift:413-499)
+# so CLI PDFs match the macOS app's output for the same inputs.
 
-def _ollama_synthesize(
+
+def _ollama_generate(
     endpoint: str,
     model: str,
-    plan: Dict[str, Any],
-    findings: Dict[str, Any],
-    progress: Progress,
-) -> Dict[str, Any]:
-    progress.start("ollama synthesis")
-    prompt = _build_synthesis_prompt(plan, findings)
+    prompt: str,
+    timeout: float = 600.0,
+    stream_to_stderr: bool = False,
+) -> Tuple[bool, str, Optional[str]]:
+    """One Ollama `POST /api/generate` call. Returns (ok, text, error)."""
     payload = {"model": model, "prompt": prompt, "stream": True}
     url = endpoint.rstrip("/") + "/api/generate"
     try:
@@ -649,7 +681,7 @@ def _ollama_synthesize(
             method="POST",
         )
         chunks: List[str] = []
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
@@ -659,48 +691,473 @@ def _ollama_synthesize(
                 except json.JSONDecodeError:
                     continue
                 if obj.get("error"):
-                    progress.end("failed", obj["error"])
-                    return {"ok": False, "error": obj["error"], "text": "".join(chunks)}
+                    return False, "".join(chunks), str(obj["error"])
                 piece = obj.get("response")
                 if isinstance(piece, str) and piece:
                     chunks.append(piece)
-                    if not progress.quiet:
+                    if stream_to_stderr:
                         sys.stderr.write(piece)
                         sys.stderr.flush()
                 if obj.get("done"):
                     break
-        if not progress.quiet:
+        if stream_to_stderr:
             sys.stderr.write("\n")
-        progress.end("ok", f"{sum(len(c) for c in chunks)} chars")
-        return {"ok": True, "text": "".join(chunks)}
+        return True, "".join(chunks), None
     except urllib.error.URLError as e:
-        progress.end("failed", str(e.reason))
-        return {"ok": False, "error": f"could not reach Ollama at {url}: {e.reason}"}
+        return False, "", f"could not reach Ollama at {url}: {e.reason}"
     except TimeoutError:
-        progress.end("failed", "timeout")
-        return {"ok": False, "error": f"timeout contacting Ollama at {url}"}
+        return False, "", f"timeout contacting Ollama at {url}"
 
 
-def _build_synthesis_prompt(plan: Dict[str, Any], findings: Dict[str, Any]) -> str:
-    header_lines = [
-        "You are auditing a cancer treatment plan. Produce a clinical-style audit",
-        "with sections for: (1) plan summary, (2) NCI PDQ alignment, (3) drug-drug",
-        "interactions, (4) mechanism overlap, (5) FAERS signal vs. reported symptoms,",
-        "(6) relevant trials, (7) open questions for the prescriber. Do not invent",
-        "facts; cite only what appears in FINDINGS.",
+def _plan_context_summary(plan: Dict[str, Any]) -> str:
+    """Mirrors OllamaService.planContextSummary — patient-plan block reused
+    verbatim in every mini-summary call. Deliberately omits deterministic
+    findings (those go into the final synthesis only)."""
+    lines: List[str] = []
+    cancer = plan.get("cancer_type_display") or plan.get("cancer_type") or ""
+    if cancer:
+        lines.append(f"Cancer: {cancer}")
+    subtype = plan.get("subtype_display") or plan.get("subtype")
+    if subtype:
+        lines.append(f"Subtype: {subtype}")
+    markers = plan.get("subtype_markers") or []
+    if markers:
+        lines.append(f"Markers: {', '.join(markers)}")
+    stage = plan.get("stage")
+    if stage:
+        lines.append(f"Stage: {stage}")
+    detail = plan.get("stage_detail")
+    if detail:
+        lines.append(f"Stage detail: {detail}")
+    drugs = plan.get("drugs") or []
+    if drugs:
+        lines.append(f"Prescribed drugs: {', '.join(d['name'] for d in drugs)}")
+    treatments = plan.get("treatments") or []
+    if treatments:
+        lines.append(f"Scheduled treatments: {'; '.join(treatments)}")
+    symptoms = plan.get("symptoms") or []
+    if symptoms:
+        formatted = []
+        for s in symptoms:
+            text = s.get("text", "")
+            sev = s.get("severity")
+            formatted.append(f"{text} ({sev})" if sev else text)
+        lines.append(f"Symptoms / side effects: {'; '.join(formatted)}")
+    return "\n".join(lines)
+
+
+def _deterministic_findings_summary(report: Dict[str, Any]) -> str:
+    """Mirrors OllamaService.deterministicFindingsSummary. Operates on the
+    wire-format `report` (DrugBank/target-overlap/FAERS already flattened),
+    not the raw CLI step shape."""
+    lines: List[str] = []
+    interactions = report.get("drug_interactions") or []
+    available = report.get("drug_interaction_data_available", True)
+    if interactions:
+        lines.append("Known pairwise drug-drug interactions (DrugBank):")
+        for r in interactions:
+            sev = r.get("severity") or "unknown"
+            desc = r.get("description") or ""
+            lines.append(f"- {r.get('drug_a', '')} ↔ {r.get('drug_b', '')} [severity: {sev}]: {desc}")
+    elif not available:
+        lines.append("Drug-drug interaction data: unavailable (DrugBank XML not loaded server-side).")
+    overlaps = report.get("target_overlaps") or []
+    if overlaps:
+        lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
+        for r in overlaps:
+            target = r.get("gene_symbol") or r.get("protein_name") or "shared target"
+            action_a = r.get("action_type_a") or "?"
+            action_b = r.get("action_type_b") or "?"
+            lines.append(
+                f"- {r.get('drug_a', '')} ({action_a}) and "
+                f"{r.get('drug_b', '')} ({action_b}) both act on {target}."
+            )
+    matches = report.get("faers_symptom_matches") or []
+    if matches:
+        lines.append("OpenFDA FAERS post-market reporting matches (symptom → top reaction term):")
+        for r in matches:
+            rank = r.get("rank_in_top")
+            rank_snippet = f"#{rank} of top reactions, " if rank is not None else ""
+            lines.append(
+                f"- {r.get('drug_name', '')}: \"{r.get('symptom', '')}\" ↔ "
+                f"\"{r.get('matched_term', '')}\" — {rank_snippet}"
+                f"{r.get('count', 0)} reports out of {r.get('total_reports', 0)} total for this drug."
+            )
+    return "\n".join(lines)
+
+
+def _build_source_summary_prompt(source_label: str, source_body: str, plan_context: str) -> str:
+    return "\n".join([
+        "You are summarizing one evidence source for a multi-source cancer treatment audit.",
+        "Be concise and factual. Do not invent data — only summarize what's in the source below.",
         "",
-        "PLAN:",
-        f"  Cancer type: {plan.get('cancer_type_display') or plan.get('cancer_type')}",
-        f"  Subtype: {plan.get('subtype_display') or plan.get('subtype')}",
-        f"  Stage: {plan.get('stage') or '(unspecified)'}",
-        f"  Stage detail: {plan.get('stage_detail') or '(none)'}",
-        f"  Drugs: {', '.join(d['name'] for d in plan.get('drugs', [])) or '(none)'}",
-        f"  Treatments: {', '.join(plan.get('treatments') or []) or '(none)'}",
-        f"  Symptoms: {', '.join(s['text'] + ' (' + s['severity'] + ')' for s in plan.get('symptoms') or []) or '(none)'}",
+        "== Patient plan (for relevance) ==",
+        plan_context,
         "",
-        "FINDINGS (JSON):",
+        f"== Source: {source_label} ==",
+        source_body,
+        "",
+        "Write a 120-180 word digest covering:",
+        "- What this source says that's relevant to *this* patient's subtype/stage.",
+        "- Specific findings worth surfacing in the final audit (cite NCT IDs if the source is trial data, or section titles if it's a guideline/PDQ).",
+        "- Anything notably missing — modalities or drug classes the source mentions that the patient's plan doesn't include.",
+        "",
+        "Plain prose, no preamble, no headings.",
+    ])
+
+
+def _build_synthesis_prompt(
+    plan: Dict[str, Any],
+    source_summaries: List[Dict[str, str]],
+    deterministic_findings: str,
+    pdq_source_url: Optional[str],
+) -> str:
+    lines: List[str] = []
+    lines.append("You are writing the final audit of a cancer treatment plan, drawing on per-source summaries already produced.")
+    lines.append("Be specific. Cite NCT IDs and the PDQ source URL inline when the answer rests on those sources. Use plain English. Flag uncertainty when evidence is thin. Do not invent trials, NCT IDs, or guidelines.")
+    lines.append("")
+    lines.append("== Patient plan ==")
+    lines.append(_plan_context_summary(plan))
+    lines.append("")
+    if deterministic_findings:
+        lines.append("== Deterministic findings ==")
+        lines.append(deterministic_findings)
+        lines.append("")
+    if pdq_source_url:
+        lines.append("== Citation hint ==")
+        lines.append(f"PDQ source URL (use this when citing standard-of-care text): {pdq_source_url}")
+        lines.append("")
+    lines.append(f"== Per-source summaries ({len(source_summaries)}) ==")
+    if not source_summaries:
+        lines.append("(none — proceed with caution and explicitly note the lack of supporting evidence)")
+    else:
+        for entry in source_summaries:
+            lines.append(f"--- {entry.get('label', '')} ---")
+            lines.append(entry.get("summary", ""))
+            lines.append("")
+    lines.append("")
+    lines.append("Write a treatment-plan audit (350-550 words) addressing, in numbered sections:")
+    lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
+    lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
+    lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
+    lines.append("4. Drug-drug interactions: if the patient plan section above includes DrugBank pairwise interactions, restate them verbatim and prioritize severe ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
+    lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
+    lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
+    lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
+    lines.append("")
+    lines.append("Then add a final \"Further reading\" block listing:")
+    if pdq_source_url:
+        lines.append(f"- NCI PDQ summary: {pdq_source_url}")
+    lines.append("- Up to 3 key NCT IDs from the summaries above, formatted as https://clinicaltrials.gov/study/{NCT}.")
+    lines.append("")
+    lines.append("End with EXACTLY this line as the final line:")
+    lines.append("Not medical advice. Discuss any plan changes with your oncologist.")
+    return "\n".join(lines)
+
+
+def _compress_pdq(pdq: Dict[str, Any]) -> str:
+    """Mirrors OllamaService.compressPDQ — prompt-ready text body for one PDQ
+    summary, with the source URL up top so the model can cite it."""
+    lines: List[str] = []
+    slug = (pdq.get("slug") or "").capitalize()
+    lines.append(f"NCI PDQ — {slug} (Health Professional)")
+    lines.append(f"Source URL: {pdq.get('source_url', '')}")
+    if pdq.get("stage"):
+        lines.append(f"Filtered for stage: {pdq['stage']}")
+    if pdq.get("stage_detail"):
+        lines.append(f"Stage detail filter: {pdq['stage_detail']}")
+    lines.append("")
+    for section in pdq.get("sections") or []:
+        title = section.get("title", "")
+        lines.append(f"### {title}")
+        parent = section.get("parent")
+        if parent and parent != title:
+            lines.append(f"(under: {parent})")
+        text = section.get("text") or ""
+        if text:
+            lines.append(text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _compress_trials(trials: List[Dict[str, Any]], header: str) -> str:
+    """Mirrors OllamaService.compressTrials — capped at 6 trials to bound
+    prompt size; backend already orders most-informative first."""
+    lines: List[str] = []
+    lines.append(header)
+    plural = "" if len(trials) == 1 else "s"
+    lines.append(f"{len(trials)} trial{plural} below.")
+    lines.append("")
+    for trial in trials[:6]:
+        lines.append(f"NCT: {trial.get('nct_id', '')}")
+        if trial.get("title"):
+            lines.append(f"  Title: {trial['title']}")
+        if trial.get("status"):
+            lines.append(f"  Status: {trial['status']}")
+        phases = trial.get("phase") or []
+        if phases:
+            lines.append(f"  Phase: {', '.join(phases)}")
+        arms = trial.get("arms") or []
+        if arms:
+            lines.append("  Arms:")
+            for arm in arms:
+                label = arm.get("label") or "—"
+                interventions = " + ".join(arm.get("interventions") or [])
+                lines.append(f"    - {label}: {interventions}")
+        outcomes = trial.get("primary_outcomes") or []
+        if outcomes:
+            lines.append("  Primary outcomes:")
+            for outcome in outcomes:
+                title = outcome.get("title") or "(unnamed)"
+                unit = f" [{outcome['unit']}]" if outcome.get("unit") else ""
+                lines.append(f"    • {title}{unit}")
+                for r in outcome.get("arm_results") or []:
+                    arm_label = r.get("arm_label") or "?"
+                    val = r.get("value") or "?"
+                    lines.append(f"      {arm_label}: {val}")
+        elif not trial.get("has_results"):
+            lines.append("  Results: not yet reported")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _build_report_payload(
+    plan: Dict[str, Any],
+    steps: Dict[str, Any],
+    step_log: List[Dict[str, Any]],
+    *,
+    source_summaries: Optional[List[Dict[str, str]]] = None,
+    final_audit: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Translate the CLI's internal `result` into the wire format the
+    `/treatment-auditor/report.pdf` endpoint expects (issue #67). The CLI's
+    step shape is shaped for diffing/regression tests; the wire format is
+    what both Swift and the report builder agree on, with field names
+    matching `TreatmentAuditPlan` in OllamaService.swift."""
+    payload: Dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "plan": {
+            "cancer_type": plan.get("cancer_type"),
+            "cancer_type_id": plan.get("cancer_type_id"),
+            "cancer_type_display": plan.get("cancer_type_display"),
+            "subtype": plan.get("subtype"),
+            "subtype_id": plan.get("subtype_id"),
+            "subtype_display": plan.get("subtype_display"),
+            "subtype_markers": plan.get("subtype_markers") or [],
+            "stage": plan.get("stage") or "",
+            "stage_detail": plan.get("stage_detail") or "",
+            "drugs": [
+                {"name": d["name"], "chembl_id": d.get("chembl_id"), "drugbank_id": d.get("drugbank_id")}
+                for d in plan.get("drugs", [])
+            ],
+            "treatments": list(plan.get("treatments") or []),
+            "symptoms": [
+                {"text": s["text"], "severity": s.get("severity")}
+                for s in plan.get("symptoms") or []
+            ],
+        },
+        "steps": list(step_log),
+    }
+
+    rxnorm = steps.get("rxnorm") or {}
+    merge_notes_raw = rxnorm.get("merge_notes") or []
+    # Group pairwise (kept, merged) entries onto one row per ingredient so
+    # the report shows "Herceptin + Trastuzumab → trastuzumab" once rather
+    # than three rows when three brand variants collapse onto one ingredient.
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for note in merge_notes_raw:
+        key = note.get("group_key") or note.get("kept_name") or ""
+        if not key:
+            continue
+        bucket = grouped.setdefault(key, {
+            "original_names": [],
+            "ingredient_name": note.get("ingredient") or note.get("kept_name") or "",
+        })
+        for name in (note.get("kept_name"), note.get("merged_name")):
+            if name and name not in bucket["original_names"]:
+                bucket["original_names"].append(name)
+    payload["merge_notes"] = list(grouped.values())
+
+    pdq = steps.get("pdq") or {}
+    if pdq.get("ok") and pdq.get("data"):
+        data = pdq["data"]
+        payload["pdq_summary"] = {
+            "slug": data.get("slug"),
+            "source_url": data.get("source_url"),
+            "stage": data.get("stage"),
+            "stage_detail": data.get("stage_detail"),
+            "sections": list(data.get("sections") or []),
+        }
+
+    modality = steps.get("modality_trials") or {}
+    by_modality = modality.get("by_modality") or {}
+    payload["modality_trials"] = [
+        {
+            "modality": m,
+            "condition": (by_modality.get(m) or {}).get("condition"),
+            "trials": (by_modality.get(m) or {}).get("trials") or [],
+        }
+        for m in MODALITIES if m in by_modality
     ]
-    return "\n".join(header_lines) + "\n" + json.dumps(findings, indent=2)
+
+    drug_trials = steps.get("drug_trials") or {}
+    by_drug = drug_trials.get("by_drug") or {}
+    deduped_drugs = rxnorm.get("deduped_drugs") or plan.get("drugs", [])
+    payload["drug_trials"] = []
+    for drug in deduped_drugs:
+        chembl_id = drug.get("chembl_id")
+        entry = by_drug.get(chembl_id) if chembl_id else None
+        payload["drug_trials"].append({
+            "drug_name": drug["name"],
+            "chembl_id": chembl_id,
+            "trials": (entry or {}).get("trials") or [],
+        })
+
+    interactions = steps.get("drug_interactions") or {}
+    payload["drug_interaction_data_available"] = bool(interactions.get("drugbank_loaded", True)) if interactions.get("ok") else interactions.get("drugbank_loaded", True)
+    payload["drug_interactions"] = [
+        {
+            "drug_a": r.get("drug_a_name") or r.get("drug_a"),
+            "drug_b": r.get("drug_b_name") or r.get("drug_b"),
+            "severity": r.get("severity"),
+            "description": r.get("description"),
+        }
+        for r in (interactions.get("interactions") or [])
+    ]
+
+    target_overlap = steps.get("target_overlap") or {}
+    overlaps_flat: List[Dict[str, Any]] = []
+    for overlap in target_overlap.get("overlaps") or []:
+        for shared in overlap.get("shared_targets") or []:
+            overlaps_flat.append({
+                "drug_a": overlap.get("drug_a"),
+                "drug_b": overlap.get("drug_b"),
+                "gene_symbol": shared.get("gene_symbol"),
+                "protein_name": shared.get("protein_name"),
+                "action_type_a": shared.get("action_type_a"),
+                "action_type_b": shared.get("action_type_b"),
+            })
+    payload["target_overlaps"] = overlaps_flat
+
+    faers = steps.get("adverse_events") or {}
+    payload["faers_panels"] = list(faers.get("per_drug") or [])
+    payload["faers_symptom_matches"] = list(faers.get("symptom_matches") or [])
+
+    if source_summaries is not None:
+        payload["source_summaries"] = source_summaries
+    if final_audit is not None:
+        payload["final_audit"] = final_audit
+
+    return payload
+
+
+def _post_pdf(backend: str, payload: Dict[str, Any], output: Path) -> None:
+    """POST `payload` to /treatment-auditor/report.pdf and write the response
+    bytes to `output`. Raises CLIError on transport / non-2xx response."""
+    url = backend.rstrip("/") + REPORT_PDF_PATH
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "Accept": "application/pdf"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            body = resp.read()
+            if "application/pdf" not in content_type:
+                raise CLIError(f"backend returned {content_type!r} from {url} (expected application/pdf)")
+            output.write_bytes(body)
+    except urllib.error.HTTPError as e:
+        # Backend returns JSON on errors. Surface its message rather than the
+        # raw HTML Flask emits for unexpected exceptions.
+        try:
+            err_body = json.loads(e.read().decode("utf-8"))
+            err = err_body.get("error", f"HTTP {e.code}")
+        except (ValueError, UnicodeDecodeError):
+            err = f"HTTP {e.code}"
+        raise CLIError(f"backend rejected {url}: {err}") from None
+    except urllib.error.URLError as e:
+        raise CLIError(f"network error contacting {url}: {e.reason}") from None
+    except TimeoutError:
+        raise CLIError(f"timeout contacting {url}") from None
+    except OSError as e:
+        raise CLIError(f"could not write {output}: {e}") from None
+
+
+def _run_synthesis_pipeline(
+    endpoint: str,
+    model: str,
+    plan: Dict[str, Any],
+    report_payload: Dict[str, Any],
+    progress: Progress,
+) -> Tuple[List[Dict[str, str]], str, Optional[str]]:
+    """Run the multi-pass synthesis. Returns (source_summaries, final_audit,
+    error). On a per-source failure the source is skipped (not fatal).
+    On final-synthesis failure, error is set and final_audit is whatever was
+    streamed before the failure."""
+    plan_context = _plan_context_summary(plan)
+    source_summaries: List[Dict[str, str]] = []
+
+    pdq = report_payload.get("pdq_summary")
+    if pdq and pdq.get("sections"):
+        slug = (pdq.get("slug") or "").capitalize()
+        label = f"NCI PDQ — {slug}"
+        body = _compress_pdq(pdq)
+        progress.start(f"summarize {label}")
+        ok, text, err = _ollama_generate(endpoint, model, _build_source_summary_prompt(label, body, plan_context))
+        if ok:
+            progress.end("ok", f"{len(text)} chars")
+            source_summaries.append({"label": label, "summary": text.strip()})
+        else:
+            progress.end("failed", err or "")
+
+    for entry in report_payload.get("modality_trials") or []:
+        trials = entry.get("trials") or []
+        if not trials:
+            continue
+        modality = entry.get("modality", "").capitalize()
+        condition = entry.get("condition")
+        header = f"Modality: {modality} trials" + (f" — condition: {condition}" if condition else "")
+        body = _compress_trials(trials, header)
+        label = f"{modality} trials"
+        progress.start(f"summarize {label}")
+        ok, text, err = _ollama_generate(endpoint, model, _build_source_summary_prompt(label, body, plan_context))
+        if ok:
+            progress.end("ok", f"{len(text)} chars")
+            source_summaries.append({"label": label, "summary": text.strip()})
+        else:
+            progress.end("failed", err or "")
+
+    for entry in report_payload.get("drug_trials") or []:
+        trials = entry.get("trials") or []
+        if not trials:
+            continue
+        drug_name = entry.get("drug_name", "")
+        chembl_id = entry.get("chembl_id")
+        header = f"Trials linked to {drug_name}" + (f" [{chembl_id}]" if chembl_id else "")
+        body = _compress_trials(trials, header)
+        label = f"{drug_name} trials"
+        progress.start(f"summarize {label}")
+        ok, text, err = _ollama_generate(endpoint, model, _build_source_summary_prompt(label, body, plan_context))
+        if ok:
+            progress.end("ok", f"{len(text)} chars")
+            source_summaries.append({"label": label, "summary": text.strip()})
+        else:
+            progress.end("failed", err or "")
+
+    deterministic = _deterministic_findings_summary(report_payload)
+    pdq_url = (pdq or {}).get("source_url") if pdq else None
+    final_prompt = _build_synthesis_prompt(plan, source_summaries, deterministic, pdq_url)
+
+    progress.start("synthesize final audit")
+    ok, text, err = _ollama_generate(endpoint, model, final_prompt, stream_to_stderr=not progress.quiet)
+    if ok:
+        progress.end("ok", f"{len(text)} chars")
+        return source_summaries, text.strip(), None
+    progress.end("failed", err or "")
+    return source_summaries, text.strip(), err
 
 
 # --- text rendering ---------------------------------------------------------
@@ -769,13 +1226,21 @@ def _render_text(result: Dict[str, Any]) -> str:
                 out.append(f"  (skipped — no chembl_id: {', '.join(s['skipped_no_chembl_id'])})")
         out.append("")
 
-    if "synthesis" in result:
-        synth = result["synthesis"]
-        out.append("--- ai synthesis ---")
-        if synth.get("ok"):
-            out.append(synth.get("text") or "")
+    if "source_summaries" in result:
+        out.append("--- per-source summaries ---")
+        for entry in result["source_summaries"] or []:
+            out.append(f"[{entry.get('label', '')}]")
+            out.append(entry.get("summary", "") or "(empty)")
+            out.append("")
+    if "final_audit" in result:
+        out.append("--- final audit ---")
+        text = result.get("final_audit") or ""
+        if text:
+            out.append(text)
         else:
-            out.append(f"FAILED: {synth.get('error')}")
+            out.append("(empty)")
+        if result.get("synthesis_error"):
+            out.append(f"FAILED: {result['synthesis_error']}")
         out.append("")
     return "\n".join(out)
 
@@ -796,7 +1261,13 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--backend", default=DEFAULT_BACKEND, help=f"Backend base URL (default: {DEFAULT_BACKEND}).")
     parser.add_argument("--format", choices=("json", "text"), default="json", help="Output format (default: json).")
     parser.add_argument("--output", type=Path, default=None, help="Write output to file instead of stdout.")
-    parser.add_argument("--with-ollama", action="store_true", help="Also stream a final AI synthesis from Ollama.")
+    parser.add_argument("--pdf", type=Path, default=None, help="Also render the audit as a PDF at this path (issue #67).")
+    parser.add_argument(
+        "--no-ollama",
+        action="store_true",
+        help="Skip the multi-pass Ollama synthesis (per-source mini-summaries + final audit). "
+             "By default the synthesis runs to match the macOS app's behaviour.",
+    )
     parser.add_argument("--ollama-endpoint", default=DEFAULT_OLLAMA, help=f"Ollama base URL (default: {DEFAULT_OLLAMA}).")
     parser.add_argument("--ollama-model", default=DEFAULT_OLLAMA_MODEL, help=f"Ollama model name (default: {DEFAULT_OLLAMA_MODEL}).")
     parser.add_argument("--modality-limit", type=int, default=8, help="Max trials per modality (default 8, max 20).")
@@ -846,7 +1317,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         _validate_url_scheme(backend, "--backend")
-        if args.with_ollama:
+        if not args.no_ollama:
             _validate_url_scheme(args.ollama_endpoint, "--ollama-endpoint")
         plan_raw = _load_plan(args.plan)
         plan = _validate_plan(plan_raw)
@@ -882,14 +1353,25 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     result: Dict[str, Any] = {"plan": plan, "steps": steps}
 
-    if args.with_ollama:
-        result["synthesis"] = _ollama_synthesize(
+    source_summaries: Optional[List[Dict[str, str]]] = None
+    final_audit: Optional[str] = None
+    synthesis_error: Optional[str] = None
+    if not args.no_ollama:
+        # Multi-pass synthesis needs the wire-format payload (PDQ + flattened
+        # modality / drug trials) to drive its per-source pass, so we build
+        # the payload once now and reuse it for the optional --pdf POST.
+        payload_for_synth = _build_report_payload(plan, steps, progress.entries)
+        source_summaries, final_audit, synthesis_error = _run_synthesis_pipeline(
             args.ollama_endpoint,
             args.ollama_model,
             plan,
-            steps,
+            payload_for_synth,
             progress,
         )
+        result["source_summaries"] = source_summaries
+        result["final_audit"] = final_audit
+        if synthesis_error:
+            result["synthesis_error"] = synthesis_error
 
     if args.format == "json":
         rendered = json.dumps(result, indent=2)
@@ -906,6 +1388,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stdout.write(rendered)
         if not rendered.endswith("\n"):
             sys.stdout.write("\n")
+
+    if args.pdf:
+        progress.start("render PDF")
+        try:
+            payload = _build_report_payload(
+                plan,
+                steps,
+                progress.entries,
+                source_summaries=source_summaries,
+                final_audit=final_audit,
+            )
+            _post_pdf(backend, payload, args.pdf)
+            progress.end("ok", str(args.pdf))
+        except CLIError as e:
+            progress.end("failed", str(e))
+            print(f"error rendering PDF: {e}", file=sys.stderr)
+            return 2
 
     pdq = steps.get("pdq", {})
     pdq_ok = "pdq" in skip_set or (pdq.get("ok") and (pdq.get("skipped") or pdq.get("data")))
