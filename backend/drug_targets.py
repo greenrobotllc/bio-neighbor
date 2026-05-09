@@ -283,9 +283,21 @@ def _live_fetch_drug_mechanisms(chembl_id: str) -> Optional[List[Dict]]:
     legitimately has no recorded mechanisms, and `[...]` for hits.
     """
     rows = _query_mechanism_endpoint(chembl_id)
+    # Direct lookup errored transiently — propagate immediately and do
+    # NOT try the parent fallback. A parent-derived `[]` would land in
+    # the cache as a definitive "no mechanisms" answer for this child,
+    # even though we don't actually know what the child has; future
+    # audits would never retry. The parent fallback is only meaningful
+    # when the child gave us a definite empty — see below.
+    if rows is None:
+        return None
     # Direct query succeeded with rows — done.
     if rows:
         return rows
+    # rows == []: direct said "no mechanisms" definitively. Try the
+    # parent fallback (most ChEMBL drugs register mechanisms against
+    # the parent compound; a salt-form child returns [] for this
+    # reason).
     try:
         parent_id = _resolve_parent_chembl_id(chembl_id)
     except _ChEMBLLookupError:
@@ -294,16 +306,15 @@ def _live_fetch_drug_mechanisms(chembl_id: str) -> Optional[List[Dict]]:
         # (the drug might genuinely have mechanisms via its parent).
         return None
     if parent_id is None:
-        # No parent to try. Trust whatever the direct call gave us
-        # (`None` → transient error, propagate; `[]` → genuine empty).
+        # No parent to consult. Trust the direct call's definite [].
         return rows
     parent_rows = _query_mechanism_endpoint(parent_id)
     if parent_rows is not None:
         # Parent answer wins when it's available — covers both empty
         # and non-empty cases.
         return parent_rows
-    # Parent errored. If the direct call had a definite empty answer,
-    # use that; otherwise propagate `None` so we don't cache.
+    # Parent mechanism call errored. Direct had a definite empty
+    # answer — return it (the parent fallback was best-effort).
     return rows
 
 

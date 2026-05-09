@@ -165,6 +165,56 @@ class TestSharedTargets(unittest.TestCase):
         )
 
 
+class TestLiveFetchDrugMechanisms(unittest.TestCase):
+    """Control flow around `_live_fetch_drug_mechanisms` and the
+    parent-ID fallback."""
+
+    def test_transient_child_does_not_consult_parent(self):
+        # When the direct mechanism query errors transiently, we MUST
+        # NOT fall back to the parent compound's mechanism list.
+        # Caching a parent-derived `[]` as the child's answer would
+        # freeze "no mechanisms" forever even though the child's real
+        # answer is unknown.
+        from unittest.mock import patch
+        # First call (direct) returns None → transient.
+        # Second call (parent) would return [] if reached — but we
+        # expect it NOT to be reached.
+        call_log = []
+
+        def mock_query(chembl_id):
+            call_log.append(chembl_id)
+            return None  # always transient
+
+        with patch.object(drug_targets, "_query_mechanism_endpoint",
+                          side_effect=mock_query) as mock_q, \
+             patch.object(drug_targets, "_resolve_parent_chembl_id",
+                          side_effect=AssertionError("parent must not be consulted")):
+            result = drug_targets._live_fetch_drug_mechanisms("CHEMBL1")
+        self.assertIsNone(result, "transient child must propagate as None")
+        self.assertEqual(mock_q.call_count, 1, "parent fallback must be skipped")
+
+    def test_definite_empty_child_consults_parent(self):
+        # When the direct query returned a definite [] (succeeded with
+        # no rows), the parent fallback DOES run — that's the salt-form
+        # case the fallback exists for.
+        from unittest.mock import patch
+
+        def mock_query(chembl_id):
+            if chembl_id == "CHEMBL_CHILD":
+                return []  # definite empty
+            return [{"target_chembl_id": "T", "action_type": "INHIBITOR",
+                     "mechanism_of_action": "from parent"}]
+
+        with patch.object(drug_targets, "_query_mechanism_endpoint",
+                          side_effect=mock_query) as mock_q, \
+             patch.object(drug_targets, "_resolve_parent_chembl_id",
+                          return_value="CHEMBL_PARENT"):
+            result = drug_targets._live_fetch_drug_mechanisms("CHEMBL_CHILD")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["mechanism_of_action"], "from parent")
+        self.assertEqual(mock_q.call_count, 2, "parent fallback was consulted")
+
+
 class TestExceptionNarrowing(unittest.TestCase):
     """Catch tuple in `_query_mechanism_endpoint` etc. should swallow
     expected ChEMBL/network errors but propagate genuine programming
