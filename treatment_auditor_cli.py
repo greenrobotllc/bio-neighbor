@@ -803,12 +803,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     progress = Progress(quiet=args.quiet)
+    backend = (args.backend or DEFAULT_BACKEND).rstrip("/")
 
     try:
         plan_raw = _load_plan(args.plan)
         plan = _validate_plan(plan_raw)
-        _check_backend(args.backend)
-        plan = _resolve_taxonomy(args.backend, plan, progress)
+        _check_backend(backend)
+        plan = _resolve_taxonomy(backend, plan, progress)
     except CLIError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -816,25 +817,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     steps: Dict[str, Any] = {}
 
     if "pdq" not in skip_set:
-        steps["pdq"] = _step_pdq(args.backend, plan, progress)
+        steps["pdq"] = _step_pdq(backend, plan, progress)
     if "modality" not in skip_set:
-        steps["modality_trials"] = _step_modality(args.backend, plan, args.modality_limit, progress)
+        steps["modality_trials"] = _step_modality(backend, plan, args.modality_limit, progress)
 
     if "rxnorm" not in skip_set:
-        rxnorm = _step_rxnorm(args.backend, plan["drugs"], progress)
+        rxnorm = _step_rxnorm(backend, plan["drugs"], progress)
     else:
         rxnorm = {"ok": True, "skipped_by_user": True, "deduped_drugs": list(plan["drugs"])}
     steps["rxnorm"] = rxnorm
     deduped = rxnorm.get("deduped_drugs") or list(plan["drugs"])
 
     if "interactions" not in skip_set:
-        steps["drug_interactions"] = _step_drug_interactions(args.backend, deduped, progress)
+        steps["drug_interactions"] = _step_drug_interactions(backend, deduped, progress)
     if "targets" not in skip_set:
-        steps["target_overlap"] = _step_target_overlap(args.backend, deduped, progress)
+        steps["target_overlap"] = _step_target_overlap(backend, deduped, progress)
     if "faers" not in skip_set:
-        steps["adverse_events"] = _step_faers(args.backend, deduped, plan["symptoms"], progress)
+        steps["adverse_events"] = _step_faers(backend, deduped, plan["symptoms"], progress)
     if "drug-trials" not in skip_set:
-        steps["drug_trials"] = _step_drug_trials(args.backend, deduped, args.drug_trials_limit, progress)
+        steps["drug_trials"] = _step_drug_trials(backend, deduped, args.drug_trials_limit, progress)
 
     result: Dict[str, Any] = {"plan": plan, "steps": steps}
 
@@ -864,7 +865,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stdout.write("\n")
 
     pdq = steps.get("pdq", {})
-    pdq_ok = pdq.get("ok") and (pdq.get("skipped") or pdq.get("data"))
+    pdq_ok = "pdq" in skip_set or (pdq.get("ok") and (pdq.get("skipped") or pdq.get("data")))
     modality = steps.get("modality_trials", {})
     any_trials = bool(modality.get("ok") and any(
         v.get("ok") and v.get("trials") for v in (modality.get("by_modality") or {}).values()
