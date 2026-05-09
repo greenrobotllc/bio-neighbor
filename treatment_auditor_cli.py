@@ -502,9 +502,25 @@ def _dedupe_by_group_key(
             merged["normalized_name"] = norm["normalized_name"]
         if norm.get("ingredient_rxcui"):
             merged["ingredient_rxcui"] = norm["ingredient_rxcui"]
+        # Carry the RxNorm-resolved ingredient name forward so downstream
+        # name-keyed lookups (DDInter, openFDA FAERS) can use the active
+        # ingredient instead of the salt form. Without this, "Ribociclib
+        # Succinate" reaches DDInter as "ribociclib succinate" (no match)
+        # and openFDA returns ~90 reports vs ~30k for the ingredient form.
+        if norm.get("ingredient_name"):
+            merged["ingredient_name"] = norm["ingredient_name"]
         merged["group_key"] = group_key
         seen[group_key] = merged
     return list(seen.values()), merge_notes
+
+
+def _lookup_name(drug: Dict[str, Any]) -> str:
+    """The name to use when looking a drug up in name-keyed external sources
+    (DDInter, openFDA). Prefers the RxNorm-resolved ingredient — it's the
+    same active drug across salt forms, brand names, and capitalisation
+    variations the underlying source would otherwise miss. Falls back to
+    the user's original input when RxNorm didn't match."""
+    return (drug.get("ingredient_name") or drug.get("name") or "").strip()
 
 
 def _step_drug_interactions(backend: str, drugs: List[Dict[str, Any]], progress: Progress) -> Dict[str, Any]:
@@ -514,7 +530,7 @@ def _step_drug_interactions(backend: str, drugs: List[Dict[str, Any]], progress:
     payload = {
         "drugs": [
             {
-                "name": d["name"],
+                "name": _lookup_name(d),
                 "chembl_id": d.get("chembl_id"),
             }
             for d in drugs
@@ -549,7 +565,7 @@ def _step_target_overlap(backend: str, drugs: List[Dict[str, Any]], progress: Pr
     if not drugs:
         return {"ok": True, "targets_by_drug": [], "overlaps": [], "unmatched": []}
     progress.start("target overlap")
-    payload = {"drugs": [{"name": d["name"], "chembl_id": d.get("chembl_id")} for d in drugs]}
+    payload = {"drugs": [{"name": _lookup_name(d), "chembl_id": d.get("chembl_id")} for d in drugs]}
     try:
         status, body = _http_request(
             "POST",
@@ -584,7 +600,7 @@ def _step_faers(
         return {"ok": True, "per_drug": [], "symptom_matches": []}
     progress.start("faers")
     payload = {
-        "drugs": [{"name": d["name"], "chembl_id": d.get("chembl_id")} for d in drugs],
+        "drugs": [{"name": _lookup_name(d), "chembl_id": d.get("chembl_id")} for d in drugs],
         "symptoms": [s["text"] for s in symptoms],
     }
     try:

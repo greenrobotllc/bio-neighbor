@@ -1119,17 +1119,16 @@ struct TreatmentAuditorView: View {
         var notes: [DrugMergeNote] = []
         for key in groupOrder {
             let bucket = groups[key] ?? []
-            // Single-row groups pass through untouched.
-            if bucket.count == 1 {
-                deduped.append(bucket[0].0)
-                continue
-            }
-            // Multi-row group: pick a representative row. Prefer one with a
-            // ChEMBL ID so the downstream trial fetch still has a valid key.
+            guard !bucket.isEmpty else { continue }
+            // Pick a representative row. Prefer one with a ChEMBL ID so the
+            // downstream trial fetch still has a valid key.
             let representative = bucket.first(where: { $0.0.chemblId != nil })?.0 ?? bucket[0].0
-            // Display name: prefer the RxNorm ingredient name (the canonical
-            // generic) so the chip reads "Paclitaxel" instead of either of
-            // the original inputs.
+            // Display + downstream-lookup name: prefer the RxNorm ingredient
+            // name (canonical generic) so "Ribociclib Succinate" becomes
+            // "Ribociclib" — DDInter only carries the ingredient form, and
+            // openFDA returns ~340x more reports under the ingredient than
+            // under the salt. Falls back to the user's typed name when
+            // RxNorm didn't resolve.
             let ingredientName = bucket.compactMap { $0.1?.ingredientName }
                 .first(where: { !$0.isEmpty })
             let displayName = ingredientName?.capitalized ?? representative.name
@@ -1137,10 +1136,15 @@ struct TreatmentAuditorView: View {
                 name: displayName,
                 chemblId: representative.chemblId
             ))
-            notes.append(DrugMergeNote(
-                ingredientName: displayName,
-                originalNames: bucket.map { $0.0.name }
-            ))
+            // Only emit a merge note when the group actually collapsed
+            // multiple inputs — single-row groups don't need a "merged"
+            // callout in the UI even when their name was rewritten.
+            if bucket.count > 1 {
+                notes.append(DrugMergeNote(
+                    ingredientName: displayName,
+                    originalNames: bucket.map { $0.0.name }
+                ))
+            }
         }
 
         self.drugMergeNotes = notes

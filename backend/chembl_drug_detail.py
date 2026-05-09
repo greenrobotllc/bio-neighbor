@@ -209,11 +209,24 @@ def fetch_nct_ids_for_drug(chembl_id: str) -> List[str]:
     Return all unique NCT IDs (clinicaltrials.gov references) for a drug,
     walking ChEMBL drug_indication.indication_refs across every indication.
     Used by clinical_trials.fetch_trials_for_drug to seed the trial pull.
+
+    When the supplied id is a salt form (e.g. CHEMBL3707266 RIBOCICLIB
+    SUCCINATE), ChEMBL files most drug_indication rows under the parent
+    compound (CHEMBL3545110 RIBOCICLIB). Without this fallback, a Treatment
+    Auditor input with the salt's ChEMBL ID returns zero trials and the
+    per-drug summary step skips it entirely. We always merge in the parent's
+    NCTs when the parent differs.
     """
-    raw = _fetch_indications_raw(chembl_id)
+    indications = list(_fetch_indications_raw(chembl_id) or [])
+
+    mol = _fetch_molecule_raw(chembl_id)
+    parent_id = ((mol or {}).get("molecule_hierarchy") or {}).get("parent_chembl_id")
+    if parent_id and parent_id != chembl_id:
+        indications.extend(_fetch_indications_raw(parent_id) or [])
+
     seen: set = set()
     out: List[str] = []
-    for ind in raw or []:
+    for ind in indications:
         for ref in ind.get("indication_refs") or []:
             if (ref.get("ref_type") or "").lower() != "clinicaltrials":
                 continue
