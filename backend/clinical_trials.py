@@ -248,12 +248,21 @@ cancer subtype regardless of the patient's drug list.
 Public API: fetch_modality_trials(condition, modality, max_trials=10)
 """
 
-# Maps the Treatment Auditor's modality keys to the intervention strings that
-# CT.gov's `query.intr=` accepts. Kept short and concrete so the search isn't
-# diluted by overly-broad terms.
+# Maps the Treatment Auditor's modality keys to the `query.intr` value that
+# CT.gov v2 accepts. For chemotherapy and targeted therapy, plain-text
+# matching against the intervention-name field works well — both are drug
+# interventions and the term itself disambiguates. For surgery and radiation
+# we use CT.gov's field-expression syntax `AREA[InterventionType]<TYPE>`
+# which constrains to trials whose interventions are tagged with that type
+# (PROCEDURE / RADIATION). Without this filter, `query.intr=surgery` swept
+# in every neoadjuvant chemo trial that listed surgery as one step among
+# drug arms — the multi-arm-results-first sort then preferred those
+# drug-comparison trials over actual surgical-technique trials, and the
+# LLM mini-summary ended up describing chemo. Field expression docs:
+# https://clinicaltrials.gov/data-api/api
 _MODALITY_INTERVENTION_TERMS = {
-    "radiation": "radiation therapy",
-    "surgery": "surgery",
+    "radiation": "AREA[InterventionType]RADIATION",
+    "surgery": "AREA[InterventionType]PROCEDURE",
     "chemotherapy": "chemotherapy",
     "targeted": "targeted therapy",
 }
@@ -271,15 +280,22 @@ def fetch_modality_trials(
     condition: str,
     modality: str,
     max_trials: int = 10,
+    stage: Optional[str] = None,
 ) -> List[Dict]:
     """Search CT.gov v2 for trials matching `condition` + the intervention
     term mapped from `modality`. Returns parsed trials in the same shape as
     `fetch_trials_for_drug`, sorted with multi-arm comparable outcomes first.
 
     `modality` must be one of: radiation, surgery, chemotherapy, targeted.
+    `stage` (optional) is appended to `query.term` to bias ranking toward
+    stage-relevant trials without hard-filtering — passing "Stage IV" or
+    "metastatic" surfaces trials that mention those terms anywhere in the
+    study record. Free-text stage_detail is intentionally NOT used as a
+    query term (too noisy).
     Whitespace-only conditions and non-positive `max_trials` return [].
     """
-    intervention = _MODALITY_INTERVENTION_TERMS.get((modality or "").strip().lower())
+    modality_key = (modality or "").strip().lower()
+    intervention = _MODALITY_INTERVENTION_TERMS.get(modality_key)
     condition_norm = (condition or "").strip()
     if not intervention or not condition_norm:
         return []
@@ -297,6 +313,9 @@ def fetch_modality_trials(
         # cares about outcomes, not active recruitment.
         "filter.overallStatus": "COMPLETED|TERMINATED|ACTIVE_NOT_RECRUITING",
     }
+    stage_norm = (stage or "").strip()
+    if stage_norm:
+        base_params["query.term"] = stage_norm
 
     # Paginate so the sort picks from a deeper pool than CT.gov's default
     # first-page relevance ordering. Stops early when (a) no more pages,

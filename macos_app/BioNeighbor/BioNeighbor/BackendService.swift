@@ -1883,13 +1883,18 @@ class BackendService: ObservableObject {
     func fetchModalityTrials(
         subtypeId: Int,
         modality: String,
-        limit: Int = 8
+        limit: Int = 8,
+        stage: String? = nil
     ) async throws -> [ClinicalTrial] {
         var components = URLComponents(string: "\(baseURL)/cancer-research/v2/subtypes/\(subtypeId)/modality-trials")
-        components?.queryItems = [
+        var query = [
             URLQueryItem(name: "modality", value: modality),
             URLQueryItem(name: "limit", value: "\(limit)"),
         ]
+        if let stage, !stage.trimmingCharacters(in: .whitespaces).isEmpty {
+            query.append(URLQueryItem(name: "stage", value: stage))
+        }
+        components?.queryItems = query
         guard let url = components?.url else {
             throw BackendError.backendNotAvailable
         }

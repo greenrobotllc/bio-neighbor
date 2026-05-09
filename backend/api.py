@@ -3831,6 +3831,8 @@ def v2_subtype_modality_trials(subtype_id: int):
     - modality (string, required): one of "radiation", "surgery",
       "chemotherapy", "targeted".
     - limit (int, optional): max trials to return (default 8, hi 20).
+    - stage (string, optional): biases CT.gov ranking toward stage-relevant
+      trials (e.g. "Stage IV", "metastatic"). Soft hint, not a hard filter.
     """
     try:
         modality = request.args.get('modality', '', type=str).strip().lower()
@@ -3841,6 +3843,7 @@ def v2_subtype_modality_trials(subtype_id: int):
             }), 400
 
         limit = _int_arg('limit', default=8, lo=1, hi=20)
+        stage = (request.args.get('stage') or '').strip() or None
 
         subtype = _load_subtype_for_lookup(subtype_id)
         if subtype is None:
@@ -3854,12 +3857,18 @@ def v2_subtype_modality_trials(subtype_id: int):
             }), 422
 
         from clinical_trials import fetch_modality_trials
-        trials = fetch_modality_trials(condition=condition, modality=modality, max_trials=limit)
+        trials = fetch_modality_trials(
+            condition=condition,
+            modality=modality,
+            max_trials=limit,
+            stage=stage,
+        )
         return jsonify({
             'success': True,
             'subtype_id': subtype_id,
             'condition': condition,
             'modality': modality,
+            'stage': stage,
             'trials': trials,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
         })

@@ -729,9 +729,14 @@ struct TreatmentAuditorView: View {
             }
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
-            // 2. Modality trials (4 in parallel).
+            // 2. Modality trials (4 in parallel). The structured stage
+            // value (Stage I-IV / recurrent / metastatic) is forwarded as
+            // a soft hint so CT.gov ranks stage-relevant trials higher.
+            // Free-text stage_detail is intentionally NOT used as a query
+            // term (too noisy) but still flows into the synthesis prompt.
             let modalityTrials = await fetchModalityTrialsParallel(
                 subtypeId: subtype.id,
+                stage: stageSnapshot,
                 runID: runID
             )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
@@ -1345,6 +1350,7 @@ struct TreatmentAuditorView: View {
     @MainActor
     private func fetchModalityTrialsParallel(
         subtypeId: Int,
+        stage: String?,
         runID: UUID
     ) async -> [TreatmentAuditPlan.ModalityTrials] {
         let modalities = ["radiation", "surgery", "chemotherapy", "targeted"]
@@ -1362,7 +1368,8 @@ struct TreatmentAuditorView: View {
                         let trials = try await BackendService.shared.fetchModalityTrials(
                             subtypeId: subtypeId,
                             modality: modality,
-                            limit: 8
+                            limit: 8,
+                            stage: stage
                         )
                         return (i, ModalityFetchOutcome(modality: modality, trials: trials, error: nil))
                     } catch {

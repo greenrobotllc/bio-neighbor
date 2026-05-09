@@ -393,8 +393,17 @@ def _step_pdq(backend: str, plan: Dict[str, Any], progress: Progress) -> Dict[st
     }
 
 
-def _fetch_modality(backend: str, subtype_id: int, modality: str, limit: int) -> Tuple[str, Dict[str, Any]]:
-    qs = urllib.parse.urlencode({"modality": modality, "limit": str(limit)})
+def _fetch_modality(
+    backend: str,
+    subtype_id: int,
+    modality: str,
+    limit: int,
+    stage: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    params = {"modality": modality, "limit": str(limit)}
+    if stage:
+        params["stage"] = stage
+    qs = urllib.parse.urlencode(params)
     url = f"{backend}/cancer-research/v2/subtypes/{subtype_id}/modality-trials?{qs}"
     try:
         status, body = _http_request("GET", url, timeout=30)
@@ -408,8 +417,12 @@ def _fetch_modality(backend: str, subtype_id: int, modality: str, limit: int) ->
 def _step_modality(backend: str, plan: Dict[str, Any], limit: int, progress: Progress) -> Dict[str, Any]:
     progress.start("modality trials x4")
     by_modality: Dict[str, Dict[str, Any]] = {}
+    stage = plan.get("stage") or None
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_fetch_modality, backend, plan["subtype_id"], m, limit) for m in MODALITIES]
+        futures = [
+            pool.submit(_fetch_modality, backend, plan["subtype_id"], m, limit, stage)
+            for m in MODALITIES
+        ]
         for f in futures:
             modality, result = f.result()
             by_modality[modality] = result
@@ -885,14 +898,15 @@ def _build_synthesis_prompt(
             lines.append(entry.get("summary", ""))
             lines.append("")
     lines.append("")
-    lines.append("Write a treatment-plan audit (350-550 words) addressing, in numbered sections:")
+    lines.append("Write a treatment-plan audit (400-650 words) addressing, in numbered sections:")
     lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
     lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
     lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
     lines.append("4. Drug-drug interactions: restate exactly what the deterministic findings block above says about drug-drug interactions. If it lists DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. If it says 'checked, no interactions found', say that explicitly — the audit checked DDInter and no concerning pairs surfaced; do NOT say 'the plan does not provide information.' If it says interaction data was unavailable, say that. Do NOT invent interactions.")
     lines.append("5. Mechanism overlap: restate exactly what the deterministic findings block above says about target overlap. If it lists shared targets, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. If it says 'checked, no shared targets found', say that explicitly — the audit checked ChEMBL and no overlap surfaced; do NOT say 'the plan does not provide information.' Do NOT invent overlaps.")
-    lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
-    lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
+    lines.append("6. Surgical & radiation considerations: address surgery and radiation explicitly when they are part of standard of care for this subtype/stage (use the PDQ summary as the authoritative source — surgery is primary for most early-stage solid tumours including breast, colon, and many lung cancers). Comment on: (a) whether the patient's plan includes the surgical/radiation steps PDQ identifies as standard, (b) timing and sequencing relative to the listed systemic therapy (neoadjuvant vs adjuvant), (c) lymph node assessment when applicable, and (d) any scheduled surgical or radiation treatments the patient supplied — name each one and comment on PDQ alignment. If PDQ doesn't cover surgical/radiation guidance for this cancer (hematologic / advanced metastatic / unmapped), say so. Use \"discuss with your surgical oncologist / radiation oncologist\" framing.")
+    lines.append("7. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
+    lines.append("8. Uncertainty: where is evidence thin? What would you ask the oncology team?")
     lines.append("")
     lines.append("Then add a final \"Further reading\" block listing:")
     if pdq_source_url:
