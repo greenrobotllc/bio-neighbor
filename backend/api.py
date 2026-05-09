@@ -927,9 +927,22 @@ def get_download_status(task_id: str):
     """
     try:
         import os
+        from uuid import UUID
         from progress_tracker import read_progress
         from task_registry import get_task_info
-        
+
+        # Validate task_id is a UUID before letting it reach any
+        # filesystem path. CodeQL recognizes UUID() as a sanitizer for
+        # py/path-injection (the regex check inside progress_tracker is
+        # defense-in-depth but isn't seen by the analyzer).
+        try:
+            UUID(task_id)
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid task ID'
+            }), 400
+
         # Resolve UUID to PID via registry
         task_info = get_task_info(task_id)
         if not task_info:
