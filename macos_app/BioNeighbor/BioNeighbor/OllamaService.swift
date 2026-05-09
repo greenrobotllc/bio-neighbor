@@ -318,6 +318,14 @@ final class OllamaService {
     /// per-source mini-summary so the model can filter the source for what's
     /// relevant to *this* patient (right subtype, right stage, etc.) rather
     /// than summarizing the source in the abstract.
+    ///
+    /// Deliberately omits the DrugBank / target-overlap / FAERS deterministic
+    /// findings — those are only relevant in the final synthesis (where the
+    /// model is asked to restate them verbatim). Including them per-source
+    /// would (a) waste tokens on every mini-summary call and (b) tempt the
+    /// model to repeat them in each digest, leading to duplicated lines in
+    /// the final report. `deterministicFindingsSummary(_:)` builds that
+    /// section separately for `buildSynthesisPrompt(...)`.
     static func planContextSummary(_ plan: TreatmentAuditPlan) -> String {
         var lines: [String] = []
         lines.append("Cancer: \(plan.cancerTypeName)")
@@ -348,6 +356,53 @@ final class OllamaService {
                 return sym.text
             }
             lines.append("Symptoms / side effects: \(formatted.joined(separator: "; "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Pre-LLM deterministic findings (DrugBank interactions, ChEMBL
+    /// target overlap, FAERS symptom→reaction matches). Returns "" when
+    /// nothing was found AND no data-availability hint is needed, so the
+    /// caller can append unconditionally.
+    ///
+    /// Used ONLY by the final-synthesis prompt — per-source mini-summaries
+    /// don't get this block, so the same facts aren't re-emitted N times
+    /// across digests.
+    static func deterministicFindingsSummary(_ plan: TreatmentAuditPlan) -> String {
+        var lines: [String] = []
+        // DrugBank pairwise interactions (issue #47). Surfaced as a
+        // labelled fact list so the LLM treats them as deterministic
+        // findings rather than something to infer or rewrite.
+        if !plan.drugInteractions.isEmpty {
+            lines.append("Known pairwise drug-drug interactions (DrugBank):")
+            for row in plan.drugInteractions {
+                let sev = (row.severity?.isEmpty == false) ? row.severity! : "unknown"
+                let desc = row.description ?? ""
+                lines.append("- \(row.drugA) ↔ \(row.drugB) [severity: \(sev)]: \(desc)")
+            }
+        } else if !plan.drugInteractionDataAvailable {
+            lines.append("Drug-drug interaction data: unavailable (DrugBank XML not loaded server-side).")
+        }
+        // Mechanism-of-action target overlap (issue #53).
+        if !plan.targetOverlaps.isEmpty {
+            lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
+            for row in plan.targetOverlaps {
+                let target = row.geneSymbol ?? row.proteinName ?? "shared target"
+                let actionA = row.actionTypeA ?? "?"
+                let actionB = row.actionTypeB ?? "?"
+                lines.append("- \(row.drugA) (\(actionA)) and \(row.drugB) (\(actionB)) both act on \(target).")
+            }
+        }
+        // FAERS symptom→reaction matches (issue #46). Only surface the
+        // matches — top-events tables are too noisy for the prompt and
+        // the matched rows are what's actually load-bearing for
+        // "your symptom is/isn't a known reaction".
+        if !plan.faersSymptomMatches.isEmpty {
+            lines.append("OpenFDA FAERS post-market reporting matches (symptom → top reaction term):")
+            for row in plan.faersSymptomMatches {
+                let rankSnippet = row.rankInTop.map { "#\($0) of top reactions, " } ?? ""
+                lines.append("- \(row.drugName): \"\(row.symptom)\" ↔ \"\(row.matchedTerm)\" — \(rankSnippet)\(row.count) reports out of \(row.totalReports) total for this drug.")
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -394,6 +449,17 @@ final class OllamaService {
         lines.append(planContextSummary(plan))
         lines.append("")
 
+        // Deterministic findings (DrugBank / ChEMBL target / FAERS) live in
+        // their own block so the synthesis prompt sees them ONCE — they
+        // were intentionally omitted from `planContextSummary` to avoid
+        // duplicating the same facts across every per-source mini-summary.
+        let deterministic = deterministicFindingsSummary(plan)
+        if !deterministic.isEmpty {
+            lines.append("== Deterministic findings ==")
+            lines.append(deterministic)
+            lines.append("")
+        }
+
         if let pdq = plan.pdqSummary {
             lines.append("== Citation hint ==")
             lines.append("PDQ source URL (use this when citing standard-of-care text): \(pdq.sourceURL)")
@@ -415,9 +481,11 @@ final class OllamaService {
         lines.append("Write a treatment-plan audit (350-550 words) addressing, in numbered sections:")
         lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
         lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
-        lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs?")
-        lines.append("4. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
-        lines.append("5. Uncertainty: where is evidence thin? What would you ask the oncology team?")
+        lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
+        lines.append("4. Drug-drug interactions: if the patient plan section above includes DrugBank pairwise interactions, restate them verbatim and prioritize severe ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
+        lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
+        lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
+        lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
         lines.append("")
         lines.append("Then add a final \"Further reading\" block listing:")
         if let pdq = plan.pdqSummary {
@@ -528,6 +596,40 @@ struct TreatmentAuditPlan {
         let trials: [ClinicalTrial]
     }
 
+    /// One pairwise DrugBank interaction row included in the audit context
+    /// (issue #47). The LLM is instructed to *acknowledge* these
+    /// deterministic findings, not infer new ones.
+    struct InteractionRow {
+        let drugA: String
+        let drugB: String
+        let severity: String?
+        let description: String?
+    }
+
+    /// One pairwise target overlap row (issue #53). Each shared target
+    /// becomes its own line in the prompt so the LLM can speak about
+    /// each one specifically (e.g. "both inhibit CYP19A1").
+    struct TargetOverlapRow {
+        let drugA: String
+        let drugB: String
+        let geneSymbol: String?
+        let proteinName: String?
+        let actionTypeA: String?
+        let actionTypeB: String?
+    }
+
+    /// One symptom→FAERS reaction match (issue #46). The LLM is asked
+    /// to acknowledge these specifically — they connect the user's
+    /// reported symptoms to real-world post-market reporting frequency.
+    struct FAERSSymptomMatchRow {
+        let drugName: String
+        let symptom: String
+        let matchedTerm: String
+        let count: Int
+        let rankInTop: Int?
+        let totalReports: Int
+    }
+
     let cancerTypeName: String
     let subtypeName: String?
     let subtypeMarkers: [String]?
@@ -539,4 +641,20 @@ struct TreatmentAuditPlan {
     let drugTrials: [DrugTrials]
     let modalityTrials: [ModalityTrials]
     let pdqSummary: PDQSummary?
+    /// DrugBank pairwise interactions among the prescribed drugs. Empty
+    /// when DrugBank XML wasn't loaded or no pairs interact. Treated as
+    /// deterministic facts in the prompt — the LLM should not invent new
+    /// rows.
+    var drugInteractions: [InteractionRow] = []
+    /// True when the DrugBank XML was loaded server-side. False means
+    /// the audit can't speak to interactions at all (different from
+    /// "no interactions found").
+    var drugInteractionDataAvailable: Bool = true
+    /// Mechanism-of-action target overlap among prescribed drugs (issue
+    /// #53). Empty when no pairs share a target; surfaced in the prompt
+    /// so the LLM can speak to redundancy/combo intent.
+    var targetOverlaps: [TargetOverlapRow] = []
+    /// Symptom→FAERS reaction matches (issue #46) — one row per
+    /// (drug, symptom) where the symptom matched a top reported term.
+    var faersSymptomMatches: [FAERSSymptomMatchRow] = []
 }

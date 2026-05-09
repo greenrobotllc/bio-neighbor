@@ -34,12 +34,27 @@ struct AuditSourceSummary: Hashable {
 /// Frozen snapshot of a finished audit. Held by `TreatmentAuditorView` so the
 /// "Save as PDF…" button can render exactly what the user just saw, even if
 /// they edit the form afterwards.
+///
+/// `plan` carries the deterministic findings the PDF renders alongside the
+/// inputs (drug interactions, target overlap, FAERS matches). `mergeNotes`
+/// is captured separately because the merge happens *before* `plan.drugs` is
+/// populated — by the time the plan exists, the original brand/generic
+/// duplicates have already been collapsed and we need the audit history to
+/// recover what was merged.
 struct CompletedAuditSnapshot {
     let plan: TreatmentAuditPlan
     let sourceSummaries: [AuditSourceSummary]
     let finalAudit: String
     let steps: [AuditStep]
     let generatedAt: Date
+    /// Brand→generic merges flagged by the RxNorm dedupe step (issue #55).
+    /// Empty when no inputs collapsed.
+    var mergeNotes: [DrugMergeNote] = []
+    /// FAERS per-drug top events captured for the report (issue #46).
+    /// Stored on the snapshot rather than the plan because the LLM prompt
+    /// only needs the symptom→reaction matches; the full per-drug top
+    /// list is for the human reader of the PDF.
+    var faersPanels: [FAERSDrugPanel] = []
 }
 
 // MARK: - Public exporter
@@ -191,6 +206,7 @@ enum TreatmentAuditReportExporter {
         body += headerSection(timestamp: timestamp)
         body += disclaimerSection()
         body += inputsSection(plan: snapshot.plan)
+        body += deterministicFindingsSection(snapshot: snapshot)
         body += methodologySection(snapshot: snapshot)
         body += pipelineLogSection(steps: snapshot.steps)
         body += sourceSummariesSection(summaries: snapshot.sourceSummaries)
@@ -285,6 +301,226 @@ enum TreatmentAuditReportExporter {
           <table class="kv">\(rows.joined())</table>
         </section>
         """
+    }
+
+    /// Deterministic-findings section — surfaces the four
+    /// non-LLM-inferred audit outputs so the PDF mirrors the on-screen
+    /// callouts:
+    ///   - Brand→generic merges (RxNorm, issue #55)
+    ///   - Pairwise drug-drug interactions (DrugBank, issue #47)
+    ///   - Mechanism/target overlap (ChEMBL mechanisms, issue #53)
+    ///   - FAERS top reactions + symptom matches (OpenFDA, issue #46)
+    ///
+    /// Each block is rendered only when there's data to show, so an audit
+    /// that produced no findings keeps the PDF compact.
+    private static func deterministicFindingsSection(snapshot: CompletedAuditSnapshot) -> String {
+        let plan = snapshot.plan
+
+        let merges = mergesBlock(snapshot.mergeNotes)
+        let interactions = interactionsBlock(plan)
+        let overlaps = overlapsBlock(plan)
+        let faers = faersBlock(plan: plan, panels: snapshot.faersPanels)
+
+        let blocks = [merges, interactions, overlaps, faers].filter { !$0.isEmpty }
+        if blocks.isEmpty {
+            // No deterministic findings — drop the whole section rather
+            // than render an empty heading.
+            return ""
+        }
+
+        return """
+        <section class="section">
+          <h2>2. Deterministic findings</h2>
+          <p class="muted">
+            Factual lookups produced before the LLM passes — sourced from
+            RxNorm, DrugBank, ChEMBL, and openFDA respectively. The audit
+            synthesis (section 6) is instructed to repeat these verbatim
+            rather than infer new ones.
+          </p>
+          \(blocks.joined())
+        </section>
+        """
+    }
+
+    private static func mergesBlock(_ notes: [DrugMergeNote]) -> String {
+        guard !notes.isEmpty else { return "" }
+        let rows = notes.map { note -> String in
+            let originals = note.originalNames.map { escape($0) }.joined(separator: " + ")
+            return "<li>\(originals) → <strong>\(escape(note.ingredientName))</strong></li>"
+        }.joined()
+        return """
+        <h3>Brand → generic dedupe (RxNorm)</h3>
+        <p>The following input pairs collapsed onto a single ingredient
+           via RxNorm normalization. Per-drug fetches downstream used the
+           merged entry, so trial / interaction / overlap / FAERS results
+           are not duplicated for the same active ingredient:</p>
+        <ul>\(rows)</ul>
+        """
+    }
+
+    private static func interactionsBlock(_ plan: TreatmentAuditPlan) -> String {
+        // We render a block in two cases:
+        //  1. There are interactions to list.
+        //  2. Interactions data was unavailable (DrugBank XML not loaded)
+        //     — that's a meaningfully different statement from "none
+        //     found", and the report should say so explicitly.
+        if plan.drugInteractions.isEmpty && plan.drugInteractionDataAvailable {
+            return ""
+        }
+
+        if !plan.drugInteractionDataAvailable {
+            return """
+            <h3>Pairwise drug-drug interactions (DrugBank)</h3>
+            <p class="muted">
+              The DrugBank XML hasn't been loaded into the local
+              <code>drug_interactions</code> table on this install, so
+              pairwise drug-drug interactions could not be checked. This
+              is not the same as "no interactions found" — the audit
+              cannot speak to interactions at all in this state.
+              Run <code>python backend/load_drugbank_interactions.py</code>
+              after dropping the DrugBank XML at
+              <code>data/drugbank_cache/drugbank.xml</code> (free academic
+              registration at <a href="https://go.drugbank.com">go.drugbank.com</a>)
+              to enable this check.
+            </p>
+            """
+        }
+
+        let rows = plan.drugInteractions.map { row -> String in
+            let sev = (row.severity?.isEmpty == false) ? row.severity! : "unknown"
+            let desc = row.description ?? ""
+            let cls = severityCSSClass(row.severity)
+            return """
+            <tr>
+              <td>\(escape(row.drugA)) ↔ \(escape(row.drugB))</td>
+              <td><span class="\(cls)">\(escape(sev.uppercased()))</span></td>
+              <td>\(escape(desc))</td>
+            </tr>
+            """
+        }.joined()
+
+        return """
+        <h3>Pairwise drug-drug interactions (DrugBank)</h3>
+        <p>Source: DrugBank pairwise <code>drug-interactions</code>
+           records. Severity is heuristic from the description text —
+           confirm with the prescribing clinician.</p>
+        <table class="data">
+          <thead><tr><th>Pair</th><th>Severity</th><th>Description</th></tr></thead>
+          <tbody>\(rows)</tbody>
+        </table>
+        """
+    }
+
+    private static func overlapsBlock(_ plan: TreatmentAuditPlan) -> String {
+        guard !plan.targetOverlaps.isEmpty else { return "" }
+        let rows = plan.targetOverlaps.map { row -> String in
+            let target = row.geneSymbol ?? row.proteinName ?? "shared target"
+            let actionA = row.actionTypeA ?? "—"
+            let actionB = row.actionTypeB ?? "—"
+            return """
+            <tr>
+              <td>\(escape(row.drugA)) ↔ \(escape(row.drugB))</td>
+              <td><code>\(escape(target))</code></td>
+              <td>\(escape(actionA.lowercased()))</td>
+              <td>\(escape(actionB.lowercased()))</td>
+            </tr>
+            """
+        }.joined()
+        return """
+        <h3>Mechanism / target overlap (ChEMBL)</h3>
+        <p>Source: ChEMBL <code>mechanism</code> +
+           <code>target</code> resources. Overlap on its own does not
+           imply a problem — combination therapy is often intentional —
+           but it's worth raising with the prescriber.</p>
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Pair</th>
+              <th>Shared target</th>
+              <th>Drug A action</th>
+              <th>Drug B action</th>
+            </tr>
+          </thead>
+          <tbody>\(rows)</tbody>
+        </table>
+        """
+    }
+
+    private static func faersBlock(plan: TreatmentAuditPlan, panels: [FAERSDrugPanel]) -> String {
+        let hasMatches = !plan.faersSymptomMatches.isEmpty
+        let hasPanels = !panels.isEmpty
+        if !hasMatches && !hasPanels { return "" }
+
+        var pieces: [String] = []
+        pieces.append("""
+        <h3>OpenFDA FAERS post-market reporting</h3>
+        <p>Source: openFDA <code>/drug/event.json</code>. Reports are
+           voluntary and do not establish causation; counts reflect what
+           has been reported, not actual incidence.</p>
+        """)
+
+        if hasMatches {
+            let rows = plan.faersSymptomMatches.map { m -> String in
+                let rank = m.rankInTop.map { "#\($0)" } ?? "—"
+                return """
+                <tr>
+                  <td>\(escape(m.drugName))</td>
+                  <td>\(escape(m.symptom))</td>
+                  <td>\(escape(m.matchedTerm))</td>
+                  <td>\(rank)</td>
+                  <td>\(m.count.formatted())</td>
+                  <td>\(m.totalReports.formatted())</td>
+                </tr>
+                """
+            }.joined()
+            pieces.append("""
+            <h4>Symptom → reaction matches</h4>
+            <table class="data">
+              <thead>
+                <tr>
+                  <th>Drug</th><th>Symptom</th><th>Matched FAERS term</th>
+                  <th>Rank in top reactions</th><th>Reports</th><th>Total reports for drug</th>
+                </tr>
+              </thead>
+              <tbody>\(rows)</tbody>
+            </table>
+            """)
+        }
+
+        if hasPanels {
+            let panelHTML = panels.map { panel -> String in
+                let evRows = panel.topEvents.prefix(10).map { ev in
+                    "<tr><td>\(escape(ev.term))</td><td>\(ev.count.formatted())</td></tr>"
+                }.joined()
+                let bodyHTML: String
+                if evRows.isEmpty {
+                    bodyHTML = "<p class=\"muted\"><em>No reports returned for this drug.</em></p>"
+                } else {
+                    bodyHTML = """
+                    <table class="data">
+                      <thead><tr><th>Reaction term</th><th>Reports</th></tr></thead>
+                      <tbody>\(evRows)</tbody>
+                    </table>
+                    """
+                }
+                return """
+                <h4>\(escape(panel.drugName)) — \(panel.totalReports.formatted()) total reports</h4>
+                \(bodyHTML)
+                """
+            }.joined()
+            pieces.append("<h4>Top reported reactions per drug</h4>\(panelHTML)")
+        }
+
+        return pieces.joined()
+    }
+
+    private static func severityCSSClass(_ severity: String?) -> String {
+        switch (severity ?? "").lowercased() {
+        case "severe": return "sev-severe"
+        case "moderate": return "sev-moderate"
+        case "minor": return "sev-minor"
+        default: return "sev-unknown"
+        }
     }
 
     /// Methodology section — the heart of issue #58. Documents every step
@@ -413,6 +649,18 @@ enum TreatmentAuditReportExporter {
            large source can't drown the others out, and the final synthesis
            reasons over the digests rather than the raw data:</p>
         <ol>
+          <li><strong>Drug normalization.</strong> Each prescribed drug is
+              resolved to an RxNorm ingredient RXCUI; brand-vs-generic
+              duplicates are collapsed before any downstream fetch (issue #55).
+              See section&nbsp;2 for the merges flagged for this run.</li>
+          <li><strong>Deterministic safety lookups.</strong> Pairwise
+              DrugBank drug-drug interactions (issue&nbsp;#47), ChEMBL
+              mechanism-of-action target overlap among prescribed drugs
+              (issue&nbsp;#53), and openFDA FAERS top reactions plus
+              symptom→reaction matching (issue&nbsp;#46). All factual,
+              non-LLM-inferred — surfaced in section&nbsp;2 and fed
+              verbatim to the synthesis prompt as labelled "do-not-invent"
+              context.</li>
           <li><strong>Source fetch.</strong> PDQ summary (1 call), modality
               trials (4 parallel CT.gov queries), per-drug trials
               (\(plan.drugTrials.count) parallel CT.gov queries).</li>
@@ -422,20 +670,23 @@ enum TreatmentAuditReportExporter {
               \(summaryCount) mini-summar\(summaryCount == 1 ? "y" : "ies")
               produced for this run.</li>
           <li><strong>Final synthesis.</strong> A single Ollama call combines
-              the patient plan + every mini-summary into the 350–550 word audit
-              shown below, with explicit NCT-ID citations and a "Further
-              reading" block. The raw source data is not in the synthesis
-              prompt — the model only sees the mini-summaries it produced
-              earlier.</li>
+              the patient plan (now including the deterministic findings
+              from step&nbsp;2) + every mini-summary into the 350–550 word
+              audit shown below, with explicit NCT-ID citations and a
+              "Further reading" block. The raw source data is not in the
+              synthesis prompt — the model only sees the mini-summaries it
+              produced earlier and the deterministic-finding rows.</li>
         </ol>
         <p>This pipeline is fully reproducible by hand: pull the same PDQ page,
-           run the same CT.gov queries listed above, then paste each source
-           into an LLM with the patient plan and ask for the same digests.</p>
+           run the same CT.gov queries listed above, query the same
+           RxNorm / DrugBank / ChEMBL / openFDA endpoints with the same
+           inputs, then paste each source into an LLM with the patient
+           plan and ask for the same digests.</p>
         """
 
         return """
         <section class="section">
-          <h2>2. Methodology &amp; data sources</h2>
+          <h2>3. Methodology &amp; data sources</h2>
           \(overview)
           \(pdqBlock)
           \(modalityBlock)
@@ -459,7 +710,7 @@ enum TreatmentAuditReportExporter {
         }.joined()
         return """
         <section class="section">
-          <h2>3. Audit pipeline log</h2>
+          <h2>4. Audit pipeline log</h2>
           <p class="muted">Live trace of fetches and LLM passes for this run.</p>
           <table class="data">
             <thead><tr><th>State</th><th>Step</th><th>Detail</th></tr></thead>
@@ -473,7 +724,7 @@ enum TreatmentAuditReportExporter {
         guard !summaries.isEmpty else {
             return """
             <section class="section">
-              <h2>4. Per-source summaries</h2>
+              <h2>5. Per-source summaries</h2>
               <p class="muted"><em>No per-source summaries were produced for this run.</em></p>
             </section>
             """
@@ -488,7 +739,7 @@ enum TreatmentAuditReportExporter {
         }.joined()
         return """
         <section class="section">
-          <h2>4. Per-source summaries</h2>
+          <h2>5. Per-source summaries</h2>
           \(blocks)
         </section>
         """
@@ -500,7 +751,7 @@ enum TreatmentAuditReportExporter {
             : "<div class=\"prose\">\(paragraphs(from: text))</div>"
         return """
         <section class="section synthesis">
-          <h2>5. Final audit</h2>
+          <h2>6. Final audit</h2>
           \(body)
         </section>
         """
@@ -539,6 +790,35 @@ enum TreatmentAuditReportExporter {
             """)
         }
 
+        // Deterministic-finding sources — only listed when the audit
+        // actually used them, so an audit with no interactions / overlap /
+        // FAERS doesn't carry stale references.
+        if !plan.drugInteractions.isEmpty {
+            entries.append("""
+            <li><strong>DrugBank drug-drug interactions:</strong>
+                <a href="https://go.drugbank.com">https://go.drugbank.com</a>
+                (pairwise <code>drug-interactions</code> records).</li>
+            """)
+        }
+        if !plan.targetOverlaps.isEmpty {
+            entries.append("""
+            <li><strong>ChEMBL mechanism / target data:</strong>
+                <a href="https://www.ebi.ac.uk/chembl/">https://www.ebi.ac.uk/chembl/</a>
+                (<code>mechanism</code> + <code>target</code> resources).</li>
+            """)
+        }
+        if !plan.faersSymptomMatches.isEmpty {
+            entries.append("""
+            <li><strong>OpenFDA FAERS adverse events:</strong>
+                <a href="https://open.fda.gov/apis/drug/event/">https://open.fda.gov/apis/drug/event/</a></li>
+            """)
+        }
+
+        entries.append("""
+        <li><strong>RxNorm (drug name normalization):</strong>
+            <a href="https://lhncbc.nlm.nih.gov/RxNav/APIs/RxNormAPIs.html">https://lhncbc.nlm.nih.gov/RxNav/APIs/RxNormAPIs.html</a></li>
+        """)
+
         entries.append("""
         <li><strong>Bio-Neighbor source &amp; methodology:</strong>
             <a href="\(repoURL)">\(repoURL)</a></li>
@@ -546,7 +826,7 @@ enum TreatmentAuditReportExporter {
 
         return """
         <section class="section">
-          <h2>6. References</h2>
+          <h2>7. References</h2>
           <ul class="plain">\(entries.joined())</ul>
         </section>
         """
@@ -696,6 +976,15 @@ enum TreatmentAuditReportExporter {
     .footer { margin-top: 24pt; padding-top: 8pt;
               border-top: 1px solid #ccc; font-size: 9.5pt; color: #555; }
     .footer p { margin: 3pt 0; }
+    h4 { font-size: 10.5pt; margin-top: 10pt; margin-bottom: 4pt; page-break-after: avoid; }
+    .sev-severe { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
+                  background: #fdecec; color: #b00020; font-weight: 600; font-size: 9pt; }
+    .sev-moderate { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
+                    background: #fff4e0; color: #a55400; font-weight: 600; font-size: 9pt; }
+    .sev-minor { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
+                 background: #fff9d6; color: #806300; font-weight: 600; font-size: 9pt; }
+    .sev-unknown { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
+                   background: #eceff7; color: #4a4a4a; font-weight: 600; font-size: 9pt; }
     """
 }
 

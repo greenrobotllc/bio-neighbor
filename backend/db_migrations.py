@@ -137,6 +137,82 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         ],
         None  # No clean rollback — re-running is harmless (no dupes left).
     ),
+    10: (
+        "Add drug_rxnorm_cache table for Treatment Auditor brand→generic dedupe (issue #55)",
+        [
+            """
+            CREATE TABLE IF NOT EXISTS drug_rxnorm_cache (
+                input_key TEXT PRIMARY KEY,
+                input_name TEXT NOT NULL,
+                rxcui TEXT,
+                normalized_name TEXT,
+                ingredient_rxcui TEXT,
+                ingredient_name TEXT,
+                matched INTEGER NOT NULL DEFAULT 0,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_rxnorm_cache_ingredient ON drug_rxnorm_cache(ingredient_rxcui)",
+            "CREATE INDEX IF NOT EXISTS idx_rxnorm_cache_rxcui ON drug_rxnorm_cache(rxcui)",
+        ],
+        None  # Pure additive — no rollback needed.
+    ),
+    11: (
+        "Add drug_interactions table for Treatment Auditor pairwise DrugBank interactions (issue #47)",
+        [
+            """
+            CREATE TABLE IF NOT EXISTS drug_interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                drug_a_id TEXT NOT NULL,
+                drug_a_name TEXT NOT NULL,
+                drug_b_id TEXT NOT NULL,
+                drug_b_name TEXT NOT NULL,
+                description TEXT,
+                severity TEXT
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_drug_interactions_pair ON drug_interactions(drug_a_id, drug_b_id)",
+            "CREATE INDEX IF NOT EXISTS idx_drug_interactions_a_name ON drug_interactions(LOWER(drug_a_name))",
+            "CREATE INDEX IF NOT EXISTS idx_drug_interactions_b_name ON drug_interactions(LOWER(drug_b_name))",
+        ],
+        None  # Empty until the user populates from DrugBank XML.
+    ),
+    12: (
+        "Add drug_targets_cache + chembl_targets_cache for Treatment Auditor target overlap (issue #53)",
+        [
+            """
+            CREATE TABLE IF NOT EXISTS drug_targets_cache (
+                chembl_id TEXT PRIMARY KEY,
+                targets_json TEXT NOT NULL,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS chembl_targets_cache (
+                target_chembl_id TEXT PRIMARY KEY,
+                gene_symbol TEXT,
+                protein_name TEXT,
+                organism TEXT,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+        ],
+        None  # Pure additive cache tables.
+    ),
+    13: (
+        "Add drug_faers_cache table for Treatment Auditor OpenFDA adverse-event lookup (issue #46)",
+        [
+            """
+            CREATE TABLE IF NOT EXISTS drug_faers_cache (
+                drug_key TEXT PRIMARY KEY,
+                top_events_json TEXT NOT NULL,
+                total_reports INTEGER NOT NULL DEFAULT 0,
+                fetched_at INTEGER NOT NULL
+            )
+            """,
+        ],
+        None  # Pure additive cache table.
+    ),
 }
 
 

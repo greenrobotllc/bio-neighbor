@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 13
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -346,6 +346,75 @@ SCHEMA: Dict[str, Dict] = {
             'FOREIGN KEY (ligand_id) REFERENCES ligands(id)',
             'FOREIGN KEY (molecule_index) REFERENCES molecules(rowid)',
         ]
+    },
+
+    'drug_rxnorm_cache': {
+        'columns': [
+            ('input_key', 'TEXT PRIMARY KEY'),
+            ('input_name', 'TEXT NOT NULL'),
+            ('rxcui', 'TEXT'),
+            ('normalized_name', 'TEXT'),
+            ('ingredient_rxcui', 'TEXT'),
+            ('ingredient_name', 'TEXT'),
+            ('matched', 'INTEGER NOT NULL DEFAULT 0'),
+            ('cached_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [
+            'CREATE INDEX IF NOT EXISTS idx_rxnorm_cache_ingredient ON drug_rxnorm_cache(ingredient_rxcui)',
+            'CREATE INDEX IF NOT EXISTS idx_rxnorm_cache_rxcui ON drug_rxnorm_cache(rxcui)',
+        ],
+        'foreign_keys': []
+    },
+
+    'drug_interactions': {
+        'columns': [
+            ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
+            ('drug_a_id', 'TEXT NOT NULL'),
+            ('drug_a_name', 'TEXT NOT NULL'),
+            ('drug_b_id', 'TEXT NOT NULL'),
+            ('drug_b_name', 'TEXT NOT NULL'),
+            ('description', 'TEXT'),
+            ('severity', 'TEXT'),
+        ],
+        'indexes': [
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_drug_interactions_pair ON drug_interactions(drug_a_id, drug_b_id)',
+            'CREATE INDEX IF NOT EXISTS idx_drug_interactions_a_name ON drug_interactions(LOWER(drug_a_name))',
+            'CREATE INDEX IF NOT EXISTS idx_drug_interactions_b_name ON drug_interactions(LOWER(drug_b_name))',
+        ],
+        'foreign_keys': []
+    },
+
+    'drug_targets_cache': {
+        'columns': [
+            ('chembl_id', 'TEXT PRIMARY KEY'),
+            ('targets_json', 'TEXT NOT NULL'),
+            ('fetched_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [],
+        'foreign_keys': []
+    },
+
+    'chembl_targets_cache': {
+        'columns': [
+            ('target_chembl_id', 'TEXT PRIMARY KEY'),
+            ('gene_symbol', 'TEXT'),
+            ('protein_name', 'TEXT'),
+            ('organism', 'TEXT'),
+            ('fetched_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+        ],
+        'indexes': [],
+        'foreign_keys': []
+    },
+
+    'drug_faers_cache': {
+        'columns': [
+            ('drug_key', 'TEXT PRIMARY KEY'),
+            ('top_events_json', 'TEXT NOT NULL'),
+            ('total_reports', 'INTEGER NOT NULL DEFAULT 0'),
+            ('fetched_at', 'INTEGER NOT NULL'),
+        ],
+        'indexes': [],
+        'foreign_keys': []
     }
 }
 
