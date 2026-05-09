@@ -495,11 +495,14 @@ def _aggregate_targets_by_id(targets: List[Dict]) -> Dict[str, Dict]:
     with two mechanism rows pointing at the same gene would emit two
     duplicate "shared target" entries with mismatched action types.
 
-    Aggregating up-front yields one canonical record per target with
-    deduped, order-preserving action_types and mechanisms_of_action
-    lists. Gene symbol and protein name take the first non-empty value
-    seen (they don't legitimately vary across rows for the same
-    target).
+    Aggregating up-front yields one canonical record per target.
+    `action_types` and `mechanisms_of_action` are deduped and sorted
+    so the payload is byte-identical across runs regardless of the
+    input row order ChEMBL happens to return on a given fetch — that
+    matters for snapshot tests and for users comparing two audit
+    reports of the same drugs side-by-side. Gene symbol and protein
+    name take the first non-empty value seen (they don't legitimately
+    vary across rows for the same target).
     """
     by_id: Dict[str, Dict] = {}
     for t in targets:
@@ -510,19 +513,23 @@ def _aggregate_targets_by_id(targets: List[Dict]) -> Dict[str, Dict]:
             "target_chembl_id": tid,
             "gene_symbol": None,
             "protein_name": None,
-            "action_types": [],
-            "mechanisms_of_action": [],
+            "action_types": set(),  # deduped here, sorted at the end
+            "mechanisms_of_action": set(),
         })
         if not agg["gene_symbol"] and t.get("gene_symbol"):
             agg["gene_symbol"] = t.get("gene_symbol")
         if not agg["protein_name"] and t.get("protein_name"):
             agg["protein_name"] = t.get("protein_name")
         action = t.get("action_type")
-        if action and action not in agg["action_types"]:
-            agg["action_types"].append(action)
+        if action:
+            agg["action_types"].add(action)
         mech = t.get("mechanism_of_action")
-        if mech and mech not in agg["mechanisms_of_action"]:
-            agg["mechanisms_of_action"].append(mech)
+        if mech:
+            agg["mechanisms_of_action"].add(mech)
+    # Convert sets → sorted lists for stable, deterministic output.
+    for agg in by_id.values():
+        agg["action_types"] = sorted(agg["action_types"])
+        agg["mechanisms_of_action"] = sorted(agg["mechanisms_of_action"])
     return by_id
 
 
@@ -533,8 +540,11 @@ def _shared_targets(targets_a: List[Dict], targets_b: List[Dict]) -> List[Dict]:
     Each shared target is emitted exactly once (deduped by
     target_chembl_id) — see `_aggregate_targets_by_id` for the
     reasoning. `action_type_a` / `action_type_b` are joined with " / "
-    when a drug has multiple action types against the same target so
-    the existing string-typed Swift contract still holds.
+    in sorted order so the string-typed Swift contract still holds and
+    the output is deterministic. `mechanism_of_action` is the *union*
+    of both drugs' mechanisms (deduped, sorted) — building it from
+    only side A would be asymmetric: swapping the input lists would
+    produce a different value.
     """
     agg_a = _aggregate_targets_by_id(targets_a)
     agg_b = _aggregate_targets_by_id(targets_b)
@@ -546,16 +556,18 @@ def _shared_targets(targets_a: List[Dict], targets_b: List[Dict]) -> List[Dict]:
     for tid in sorted(set(agg_a) & set(agg_b)):
         a = agg_a[tid]
         b = agg_b[tid]
+        # Symmetric union of mechanism strings. `_aggregate_targets_by_id`
+        # already sorts each side; merging via `set | set` then sorting
+        # collapses any overlap and keeps the output stable.
+        combined_mechanisms = sorted(
+            set(a["mechanisms_of_action"]) | set(b["mechanisms_of_action"])
+        )
         shared.append(
             {
                 "target_chembl_id": tid,
                 "gene_symbol": a.get("gene_symbol") or b.get("gene_symbol"),
                 "protein_name": a.get("protein_name") or b.get("protein_name"),
-                "mechanism_of_action": (
-                    " / ".join(a["mechanisms_of_action"])
-                    or " / ".join(b["mechanisms_of_action"])
-                    or None
-                ),
+                "mechanism_of_action": " / ".join(combined_mechanisms) or None,
                 "action_type_a": " / ".join(a["action_types"]) or None,
                 "action_type_b": " / ".join(b["action_types"]) or None,
             }

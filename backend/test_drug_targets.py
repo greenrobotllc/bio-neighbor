@@ -43,12 +43,27 @@ class TestAggregateTargetsById(unittest.TestCase):
              "mechanism_of_action": "secondary mech"},
         ])
         self.assertEqual(set(out), {"X"})
-        # Action types preserved in first-seen order, deduped.
-        self.assertEqual(out["X"]["action_types"], ["INHIBITOR", "ANTAGONIST"])
-        # Mechanisms deduped likewise.
+        # Sorted, deduped — order is independent of input row order so
+        # snapshots stay stable even if ChEMBL re-shuffles its results.
+        self.assertEqual(out["X"]["action_types"], ["ANTAGONIST", "INHIBITOR"])
         self.assertEqual(
             out["X"]["mechanisms_of_action"],
             ["primary mech", "secondary mech"],
+        )
+
+    def test_aggregation_is_input_order_independent(self):
+        # Same rows in two different orders must produce identical
+        # aggregated output — that's the whole point of sorting.
+        rows_a = [
+            {"target_chembl_id": "X", "action_type": "INHIBITOR",
+             "mechanism_of_action": "mech1"},
+            {"target_chembl_id": "X", "action_type": "ANTAGONIST",
+             "mechanism_of_action": "mech2"},
+        ]
+        rows_b = list(reversed(rows_a))
+        self.assertEqual(
+            drug_targets._aggregate_targets_by_id(rows_a),
+            drug_targets._aggregate_targets_by_id(rows_b),
         )
 
     def test_rows_without_target_chembl_id_skipped(self):
@@ -96,10 +111,35 @@ class TestSharedTargets(unittest.TestCase):
         row = shared[0]
         self.assertEqual(row["target_chembl_id"], "CHEMBL1978")
         self.assertEqual(row["gene_symbol"], "CYP19A1")
-        # Both action types from each side are preserved (joined, since
-        # the Swift contract expects strings, not lists).
-        self.assertEqual(row["action_type_a"], "INHIBITOR / ANTAGONIST")
+        # Joined in sorted order — deterministic regardless of how
+        # ChEMBL ordered the underlying mechanism rows.
+        self.assertEqual(row["action_type_a"], "ANTAGONIST / INHIBITOR")
         self.assertEqual(row["action_type_b"], "INHIBITOR / NEGATIVE MODULATOR")
+
+    def test_mechanism_of_action_is_symmetric_union(self):
+        # Drug A has only mech1, drug B has only mech2. The shared
+        # target's mechanism_of_action must include BOTH (sorted) —
+        # the previous "A wins" behavior would silently drop drug B's
+        # contribution and produce different output if A and B were
+        # swapped.
+        targets_a = [
+            {"target_chembl_id": "X", "mechanism_of_action": "drug A's mech",
+             "action_type": "INHIBITOR"},
+        ]
+        targets_b = [
+            {"target_chembl_id": "X", "mechanism_of_action": "drug B's mech",
+             "action_type": "INHIBITOR"},
+        ]
+        shared_ab = drug_targets._shared_targets(targets_a, targets_b)
+        shared_ba = drug_targets._shared_targets(targets_b, targets_a)
+        # Both directions produce the same mechanism_of_action.
+        self.assertEqual(shared_ab[0]["mechanism_of_action"],
+                         shared_ba[0]["mechanism_of_action"])
+        # And it covers BOTH drugs' mechanisms.
+        self.assertEqual(
+            shared_ab[0]["mechanism_of_action"],
+            "drug A's mech / drug B's mech",
+        )
 
     def test_no_overlap_returns_empty(self):
         a = [{"target_chembl_id": "X", "action_type": "INHIBITOR"}]
