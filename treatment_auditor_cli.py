@@ -383,7 +383,7 @@ def _fetch_modality(backend: str, subtype_id: int, modality: str, limit: int) ->
 
 
 def _step_modality(backend: str, plan: Dict[str, Any], limit: int, progress: Progress) -> Dict[str, Any]:
-    progress.start("modality trials ×4")
+    progress.start("modality trials x4")
     by_modality: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_fetch_modality, backend, plan["subtype_id"], m, limit) for m in MODALITIES]
@@ -395,8 +395,9 @@ def _step_modality(backend: str, plan: Dict[str, Any], limit: int, progress: Pro
     detail = f"{total} trials"
     if failures:
         detail += f", failed: {','.join(failures)}"
-    progress.end("ok", detail)
-    return {"ok": True, "by_modality": by_modality}
+    overall_ok = all(v.get("ok") for v in by_modality.values())
+    progress.end("ok" if overall_ok else "failed", detail)
+    return {"ok": overall_ok, "by_modality": by_modality}
 
 
 def _step_rxnorm(backend: str, drugs: List[Dict[str, Any]], progress: Progress) -> Dict[str, Any]:
@@ -610,7 +611,7 @@ def _step_drug_trials(
     skipped = [d["name"] for d in drugs if not d.get("chembl_id")]
     if not with_chembl:
         return {"ok": True, "by_drug": {}, "skipped_no_chembl_id": skipped}
-    progress.start(f"drug trials ×{len(with_chembl)}")
+    progress.start(f"drug trials x{len(with_chembl)}")
     by_drug: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(5, len(with_chembl))) as pool:
         futures = [pool.submit(_fetch_drug_trials, backend, d["chembl_id"], limit) for d in with_chembl]
@@ -618,8 +619,13 @@ def _step_drug_trials(
             chembl_id, result = f.result()
             by_drug[chembl_id] = result
     total = sum(len(v.get("trials") or []) for v in by_drug.values())
-    progress.end("ok", f"{total} trials")
-    return {"ok": True, "by_drug": by_drug, "skipped_no_chembl_id": skipped}
+    failures = [cid for cid, v in by_drug.items() if not v.get("ok")]
+    detail = f"{total} trials"
+    if failures:
+        detail += f", failed: {','.join(failures)}"
+    overall_ok = all(v.get("ok") for v in by_drug.values())
+    progress.end("ok" if overall_ok else "failed", detail)
+    return {"ok": overall_ok, "by_drug": by_drug, "skipped_no_chembl_id": skipped}
 
 
 # --- Ollama synthesis (optional) -------------------------------------------
@@ -904,13 +910,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     pdq = steps.get("pdq", {})
     pdq_ok = "pdq" in skip_set or (pdq.get("ok") and (pdq.get("skipped") or pdq.get("data")))
     modality = steps.get("modality_trials", {})
-    any_trials = bool(modality.get("ok") and any(
+    any_trials = any(
         v.get("ok") and v.get("trials") for v in (modality.get("by_modality") or {}).values()
-    ))
+    )
     drug_trials = steps.get("drug_trials", {})
-    any_drug_trials = bool(drug_trials.get("ok") and any(
+    any_drug_trials = any(
         v.get("ok") and v.get("trials") for v in (drug_trials.get("by_drug") or {}).values()
-    ))
+    )
     return 0 if (pdq_ok and (any_trials or any_drug_trials or "modality" in skip_set or "drug-trials" in skip_set)) else 1
 
 
