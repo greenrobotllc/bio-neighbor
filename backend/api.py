@@ -3407,13 +3407,30 @@ def v2_drug_trials(chembl_id: str):
     values per arm — surfaces the regimen-vs-regimen comparisons users care
     about.
 
+    Optional `condition` query param (comma-separated keywords) restricts
+    the ChEMBL drug_indication walk to rows whose mesh_heading / efo_term
+    contains any of the keywords. Used by the Treatment Auditor to filter
+    out off-subtype trials (e.g. only breast-cancer trials for a
+    HER2+ patient on ribociclib instead of also pulling in the BRAF-mutant
+    melanoma combo trials ribociclib has been studied in). When the filter
+    yields zero indications it falls back to unfiltered.
+
     Trials with multi-arm reported outcomes are returned first.
     Slow path: a fresh fetch hits ClinicalTrials.gov (one request per trial).
     """
     try:
         from clinical_trials import fetch_trials_for_drug
         max_trials = _int_arg('limit', default=15, lo=1, hi=30)
-        trials = fetch_trials_for_drug(chembl_id, max_trials=max_trials)
+        condition_raw = (request.args.get('condition') or '').strip()
+        condition_keywords = (
+            [tok.strip() for tok in condition_raw.split(',') if tok.strip()]
+            if condition_raw else None
+        )
+        trials = fetch_trials_for_drug(
+            chembl_id,
+            max_trials=max_trials,
+            condition_keywords=condition_keywords,
+        )
         return jsonify({
             'success': True,
             'chembl_id': chembl_id,

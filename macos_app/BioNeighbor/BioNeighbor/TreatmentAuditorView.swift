@@ -766,8 +766,16 @@ struct TreatmentAuditorView: View {
             )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
-            // 3. Per-drug trials (cap 5).
-            let drugTrials = await fetchTrialsForDrugs(dedupedDrugs, runID: runID)
+            // 3. Per-drug trials (cap 5). Pass the patient's cancer type so
+            // the backend filters ChEMBL drug_indication rows to indications
+            // matching the relevant cancer — without this, ribociclib in a
+            // HER2+ breast-cancer audit would surface its BRAF-mutant
+            // melanoma trials instead of breast-cancer evidence.
+            let drugTrials = await fetchTrialsForDrugs(
+                dedupedDrugs,
+                cancerCondition: cancerType.displayName ?? cancerType.name,
+                runID: runID
+            )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
             // 4. Build the plan that gets passed to the LLM helpers.
@@ -1408,6 +1416,7 @@ struct TreatmentAuditorView: View {
     @MainActor
     private func fetchTrialsForDrugs(
         _ drugs: [PrescribedDrug],
+        cancerCondition: String?,
         runID: UUID
     ) async -> [TreatmentAuditPlan.DrugTrials] {
         // One progress step covers the whole drug-trial fetch — per-drug
@@ -1446,7 +1455,11 @@ struct TreatmentAuditorView: View {
                         }
                         do {
                             let trials = try await BackendService.shared
-                                .fetchClinicalTrials(chemblId: chembl, limit: 10)
+                                .fetchClinicalTrials(
+                                    chemblId: chembl,
+                                    limit: 10,
+                                    condition: cancerCondition
+                                )
                             return (i, DrugFetchOutcome(
                                 drugTrials: TreatmentAuditPlan.DrugTrials(
                                     drugName: drug.name,

@@ -1790,9 +1790,23 @@ class BackendService: ObservableObject {
         return drugs
     }
 
-    func fetchClinicalTrials(chemblId: String, limit: Int = 15) async throws -> [ClinicalTrial] {
+    /// `condition` (optional, Treatment Auditor use case) restricts the
+    /// ChEMBL drug_indication walk on the backend to indications whose
+    /// mesh_heading or efo_term contains the supplied keyword. Lets the
+    /// auditor avoid surfacing off-subtype trials (e.g. ribociclib's
+    /// melanoma combos for a HER2+ breast-cancer patient). The backend
+    /// falls back to unfiltered if the keyword matches nothing.
+    func fetchClinicalTrials(
+        chemblId: String,
+        limit: Int = 15,
+        condition: String? = nil
+    ) async throws -> [ClinicalTrial] {
         var components = URLComponents(string: "\(baseURL)/cancer-research/v2/drugs/\(chemblId)/trials")
-        components?.queryItems = [URLQueryItem(name: "limit", value: "\(limit)")]
+        var query = [URLQueryItem(name: "limit", value: "\(limit)")]
+        if let condition, !condition.trimmingCharacters(in: .whitespaces).isEmpty {
+            query.append(URLQueryItem(name: "condition", value: condition))
+        }
+        components?.queryItems = query
         guard let url = components?.url else {
             throw BackendError.backendNotAvailable
         }

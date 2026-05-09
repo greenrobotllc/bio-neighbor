@@ -626,8 +626,16 @@ def _step_faers(
     }
 
 
-def _fetch_drug_trials(backend: str, chembl_id: str, limit: int) -> Tuple[str, Dict[str, Any]]:
-    qs = urllib.parse.urlencode({"limit": str(limit)})
+def _fetch_drug_trials(
+    backend: str,
+    chembl_id: str,
+    limit: int,
+    condition: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    params = {"limit": str(limit)}
+    if condition:
+        params["condition"] = condition
+    qs = urllib.parse.urlencode(params)
     safe_id = urllib.parse.quote(chembl_id, safe="")
     url = f"{backend}/cancer-research/v2/drugs/{safe_id}/trials?{qs}"
     try:
@@ -644,6 +652,7 @@ def _step_drug_trials(
     drugs: List[Dict[str, Any]],
     limit: int,
     progress: Progress,
+    condition: Optional[str] = None,
 ) -> Dict[str, Any]:
     with_chembl = [d for d in drugs if d.get("chembl_id")]
     skipped = [d["name"] for d in drugs if not d.get("chembl_id")]
@@ -652,7 +661,10 @@ def _step_drug_trials(
     progress.start(f"drug trials x{len(with_chembl)}")
     by_drug: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(5, len(with_chembl))) as pool:
-        futures = [pool.submit(_fetch_drug_trials, backend, d["chembl_id"], limit) for d in with_chembl]
+        futures = [
+            pool.submit(_fetch_drug_trials, backend, d["chembl_id"], limit, condition)
+            for d in with_chembl
+        ]
         for f in futures:
             chembl_id, result = f.result()
             by_drug[chembl_id] = result
@@ -764,18 +776,35 @@ def _plan_context_summary(plan: Dict[str, Any]) -> str:
 def _deterministic_findings_summary(report: Dict[str, Any]) -> str:
     """Mirrors OllamaService.deterministicFindingsSummary. Operates on the
     wire-format `report` (DDInter/target-overlap/FAERS already flattened),
-    not the raw CLI step shape."""
+    not the raw CLI step shape.
+
+    Always emits a status line for each deterministic check (DDInter,
+    target overlap) regardless of outcome — three distinct states (data
+    unavailable / checked-none-found / findings present) so the LLM has
+    explicit input. Without the "checked, none found" line, the model
+    silently falls back to 'the plan does not provide information' for
+    sections 4-5 of the synthesis, which falsely implies the user
+    forgot to supply data."""
     lines: List[str] = []
+
+    # DDInter pairwise drug-drug interactions
     interactions = report.get("drug_interactions") or []
     available = report.get("drug_interaction_data_available", True)
-    if interactions:
+    if not available:
+        lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
+    elif interactions:
         lines.append("Known pairwise drug-drug interactions (DDInter):")
         for r in interactions:
             sev = r.get("severity") or "unknown"
             desc = r.get("description") or ""
             lines.append(f"- {r.get('drug_a', '')} ↔ {r.get('drug_b', '')} [severity: {sev}]: {desc}")
-    elif not available:
-        lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
+    else:
+        lines.append(
+            "Pairwise drug-drug interactions (DDInter): checked, "
+            "no interactions found among the prescribed drugs."
+        )
+
+    # ChEMBL mechanism / target overlap
     overlaps = report.get("target_overlaps") or []
     if overlaps:
         lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
@@ -787,6 +816,11 @@ def _deterministic_findings_summary(report: Dict[str, Any]) -> str:
                 f"- {r.get('drug_a', '')} ({action_a}) and "
                 f"{r.get('drug_b', '')} ({action_b}) both act on {target}."
             )
+    else:
+        lines.append(
+            "Mechanism/target overlap (ChEMBL): checked, "
+            "no shared targets found among the prescribed drugs."
+        )
     matches = report.get("faers_symptom_matches") or []
     if matches:
         lines.append("OpenFDA FAERS post-market reporting matches (symptom → top reaction term):")
@@ -855,8 +889,8 @@ def _build_synthesis_prompt(
     lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
     lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
     lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
-    lines.append("4. Drug-drug interactions: if the patient plan section above includes DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
-    lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
+    lines.append("4. Drug-drug interactions: restate exactly what the deterministic findings block above says about drug-drug interactions. If it lists DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. If it says 'checked, no interactions found', say that explicitly — the audit checked DDInter and no concerning pairs surfaced; do NOT say 'the plan does not provide information.' If it says interaction data was unavailable, say that. Do NOT invent interactions.")
+    lines.append("5. Mechanism overlap: restate exactly what the deterministic findings block above says about target overlap. If it lists shared targets, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. If it says 'checked, no shared targets found', say that explicitly — the audit checked ChEMBL and no overlap surfaced; do NOT say 'the plan does not provide information.' Do NOT invent overlaps.")
     lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
     lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
     lines.append("")
@@ -1364,7 +1398,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     if "faers" not in skip_set:
         steps["adverse_events"] = _step_faers(backend, deduped, plan["symptoms"], progress)
     if "drug-trials" not in skip_set:
-        steps["drug_trials"] = _step_drug_trials(backend, deduped, args.drug_trials_limit, progress)
+        # Pass the patient's cancer type so per-drug trial fetches filter
+        # to indications matching the relevant cancer (issue #67 follow-up:
+        # ribociclib has been studied in melanoma + glioma + breast; without
+        # this filter the audit's per-drug summary surfaced off-subtype
+        # trials for HR+ breast-cancer patients).
+        cancer_condition = (
+            plan.get("cancer_type_display") or plan.get("cancer_type") or ""
+        ).strip() or None
+        steps["drug_trials"] = _step_drug_trials(
+            backend, deduped, args.drug_trials_limit, progress,
+            condition=cancer_condition,
+        )
 
     result: Dict[str, Any] = {"plan": plan, "steps": steps}
 

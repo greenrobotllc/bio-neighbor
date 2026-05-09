@@ -370,20 +370,30 @@ final class OllamaService {
     /// across digests.
     static func deterministicFindingsSummary(_ plan: TreatmentAuditPlan) -> String {
         var lines: [String] = []
-        // DDInter pairwise interactions (issue #47). Surfaced as a
-        // labelled fact list so the LLM treats them as deterministic
-        // findings rather than something to infer or rewrite.
-        if !plan.drugInteractions.isEmpty {
+        // DDInter pairwise interactions (issue #47). Always emits a
+        // status line — three distinct states (data unavailable /
+        // checked-none-found / findings present) so the LLM has explicit
+        // input for section 4 of the synthesis. Without the
+        // "checked, none found" line the model would silently fall back
+        // to "the plan does not provide information," which falsely
+        // implies the user forgot to supply data.
+        if !plan.drugInteractionDataAvailable {
+            lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
+        } else if !plan.drugInteractions.isEmpty {
             lines.append("Known pairwise drug-drug interactions (DDInter):")
             for row in plan.drugInteractions {
                 let sev = (row.severity?.isEmpty == false) ? row.severity! : "unknown"
                 let desc = row.description ?? ""
                 lines.append("- \(row.drugA) ↔ \(row.drugB) [severity: \(sev)]: \(desc)")
             }
-        } else if !plan.drugInteractionDataAvailable {
-            lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
+        } else {
+            lines.append(
+                "Pairwise drug-drug interactions (DDInter): checked, "
+                + "no interactions found among the prescribed drugs."
+            )
         }
-        // Mechanism-of-action target overlap (issue #53).
+        // Mechanism-of-action target overlap (issue #53). Always emits a
+        // status line — same rationale as the DDInter block above.
         if !plan.targetOverlaps.isEmpty {
             lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
             for row in plan.targetOverlaps {
@@ -392,6 +402,11 @@ final class OllamaService {
                 let actionB = row.actionTypeB ?? "?"
                 lines.append("- \(row.drugA) (\(actionA)) and \(row.drugB) (\(actionB)) both act on \(target).")
             }
+        } else {
+            lines.append(
+                "Mechanism/target overlap (ChEMBL): checked, "
+                + "no shared targets found among the prescribed drugs."
+            )
         }
         // FAERS symptom→reaction matches (issue #46). Only surface the
         // matches — top-events tables are too noisy for the prompt and
@@ -482,8 +497,8 @@ final class OllamaService {
         lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
         lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
         lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
-        lines.append("4. Drug-drug interactions: if the patient plan section above includes DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
-        lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
+        lines.append("4. Drug-drug interactions: restate exactly what the deterministic findings block above says about drug-drug interactions. If it lists DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. If it says 'checked, no interactions found', say that explicitly — the audit checked DDInter and no concerning pairs surfaced; do NOT say 'the plan does not provide information.' If it says interaction data was unavailable, say that. Do NOT invent interactions.")
+        lines.append("5. Mechanism overlap: restate exactly what the deterministic findings block above says about target overlap. If it lists shared targets, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. If it says 'checked, no shared targets found', say that explicitly — the audit checked ChEMBL and no overlap surfaced; do NOT say 'the plan does not provide information.' Do NOT invent overlaps.")
         lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
         lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
         lines.append("")

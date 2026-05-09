@@ -198,7 +198,11 @@ def fetch_trial(nct_id: str, timeout: int = PER_TRIAL_TIMEOUT) -> Optional[Dict]
         return None
 
 
-def fetch_trials_for_drug(chembl_id: str, max_trials: int = 15) -> List[Dict]:
+def fetch_trials_for_drug(
+    chembl_id: str,
+    max_trials: int = 15,
+    condition_keywords: Optional[List[str]] = None,
+) -> List[Dict]:
     """
     Pull NCT IDs from ChEMBL drug_indication for this drug and fetch each
     from ClinicalTrials.gov v2 in parallel. Returns trials sorted with
@@ -206,11 +210,16 @@ def fetch_trials_for_drug(chembl_id: str, max_trials: int = 15) -> List[Dict]:
     max_trials so the page doesn't drown in 50+ trials. Non-positive or
     non-int max_trials returns [] — mirrors the guard in
     fetch_modality_trials so negative values can't tail-slice candidates.
+
+    `condition_keywords` is forwarded to `fetch_nct_ids_for_drug` to
+    constrain the per-drug pull to indications matching the patient's
+    cancer (Treatment Auditor use case — see fetch_nct_ids_for_drug
+    docstring).
     """
     if not isinstance(max_trials, int) or max_trials <= 0:
         return []
 
-    nct_ids = fetch_nct_ids_for_drug(chembl_id)
+    nct_ids = fetch_nct_ids_for_drug(chembl_id, condition_keywords=condition_keywords)
     if not nct_ids:
         return []
 

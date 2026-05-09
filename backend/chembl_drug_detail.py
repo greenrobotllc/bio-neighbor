@@ -204,7 +204,10 @@ def _normalize_indications(raw_indications: List[Dict]) -> List[Dict]:
     return rows
 
 
-def fetch_nct_ids_for_drug(chembl_id: str) -> List[str]:
+def fetch_nct_ids_for_drug(
+    chembl_id: str,
+    condition_keywords: Optional[List[str]] = None,
+) -> List[str]:
     """
     Return all unique NCT IDs (clinicaltrials.gov references) for a drug,
     walking ChEMBL drug_indication.indication_refs across every indication.
@@ -216,6 +219,15 @@ def fetch_nct_ids_for_drug(chembl_id: str) -> List[str]:
     Auditor input with the salt's ChEMBL ID returns zero trials and the
     per-drug summary step skips it entirely. We always merge in the parent's
     NCTs when the parent differs.
+
+    `condition_keywords` (optional) restricts the indication walk to rows
+    whose mesh_heading or efo_term contains any of the supplied keywords
+    (case-insensitive substring). Used by the Treatment Auditor so a
+    HER2+ breast-cancer audit doesn't surface ribociclib trials for
+    BRAF-mutant melanoma. If filtering produces zero matches we fall back
+    to the unfiltered list — better to surface partly-relevant trials
+    than to silently lose all per-drug evidence for rare cancer types
+    that ChEMBL doesn't yet tag.
     """
     indications = list(_fetch_indications_raw(chembl_id) or [])
 
@@ -223,6 +235,22 @@ def fetch_nct_ids_for_drug(chembl_id: str) -> List[str]:
     parent_id = ((mol or {}).get("molecule_hierarchy") or {}).get("parent_chembl_id")
     if parent_id and parent_id != chembl_id:
         indications.extend(_fetch_indications_raw(parent_id) or [])
+
+    if condition_keywords:
+        normalized_keywords = [k.lower() for k in condition_keywords if k]
+        if normalized_keywords:
+            def _matches(ind: Dict) -> bool:
+                haystack = " ".join([
+                    (ind.get("mesh_heading") or ""),
+                    (ind.get("efo_term") or ""),
+                ]).lower()
+                return any(kw in haystack for kw in normalized_keywords)
+            filtered = [ind for ind in indications if _matches(ind)]
+            # Only apply the filter if it kept at least one row — see
+            # docstring: cancer types ChEMBL doesn't tag would otherwise
+            # silently zero out per-drug trials.
+            if filtered:
+                indications = filtered
 
     seen: set = set()
     out: List[str] = []
