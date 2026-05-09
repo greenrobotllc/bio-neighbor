@@ -1590,7 +1590,7 @@ def download_molecules():
                 print(f"❌ Download process failed: {error_msg}")
                 return jsonify({
                     'success': False,
-                    'error': f'Download failed: {error_msg[:200]}'
+                    'error': 'Download failed, see server logs'
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
@@ -1798,7 +1798,7 @@ def download_drugs():
                 print(f"❌ Download process failed: {error_msg}")
                 return jsonify({
                     'success': False,
-                    'error': f'Download failed: {error_msg[:200]}'
+                    'error': 'Download failed, see server logs'
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
@@ -1983,7 +1983,7 @@ def download_diseases():
                 print(f"❌ Download process failed: {error_msg}")
                 return jsonify({
                     'success': False,
-                    'error': f'Download failed: {error_msg[:200]}'
+                    'error': 'Download failed, see server logs'
                 }), 500
             
             print(f"✅ Download process started with PID: {process.pid}, Task ID: {task_id}")
