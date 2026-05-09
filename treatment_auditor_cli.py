@@ -350,7 +350,7 @@ def _fetch_modality(backend: str, subtype_id: int, modality: str, limit: int) ->
 
 
 def _step_modality(backend: str, plan: Dict[str, Any], limit: int, progress: Progress) -> Dict[str, Any]:
-    progress.start(f"modality trials ×4")
+    progress.start("modality trials ×4")
     by_modality: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_fetch_modality, backend, plan["subtype_id"], m, limit) for m in MODALITIES]
