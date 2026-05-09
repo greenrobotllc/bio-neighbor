@@ -12,9 +12,7 @@ BioNeighbor: A molecular similarity engine inspired by collaborative filtering �
 
 ## Overview
 
-BioNeighbor is a molecular similarity and discovery platform inspired by **collaborative filtering (CF)**. Its goal is to help researchers, software engineers, and drug discovery enthusiasts explore “neighbor” molecules — compounds structurally or biologically similar to a molecule of interest.  
-
-The system is designed to be **offline-friendly**, running entirely on a user’s Mac (or other desktop platform) without requiring a server. Users can pick an existing drug or bioactive compound and find similar molecules that might improve efficacy, target specific pathways, or serve as candidate inhibitors.  
+BioNeighbor is an open-source cancer-research toolkit centered on an **on-device AI Treatment Auditor**: describe a cancer treatment plan — disease/subtype, stage, prescribed drugs, scheduled treatments, symptoms — and the system runs a multi-pass audit pulling from NCI PDQ, ClinicalTrials.gov, RxNorm, DDInter (drug-drug interactions), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS, then synthesizes the findings via a local Ollama model and exports a printable PDF. The Auditor runs from either a SwiftUI **macOS GUI** or a **cross-platform Python CLI** (macOS, Linux, Windows); both produce identical reports. The project also retains its **original molecular-similarity engine** (FAISS + RDKit + ChEMBL) for exploring "neighbor" compounds — the collaborative-filtering-inspired feature the project takes its name from. Everything runs locally; nothing leaves your machine. Research tool only, not medical advice.  
 
 BioNeighbor combines:
 - Public biochemical datasets (ChEMBL, BindingDB)  
@@ -103,16 +101,18 @@ Without this step the audit still runs, but the interactions section gracefully 
 
 ## Architecture
 
-BioNeighbor separates **frontend** and **backend logic** while remaining fully offline:
+BioNeighbor separates **frontend** and **backend logic** while remaining fully offline. There are two frontends:
 
-1. **Frontend:** SwiftUI macOS application  
-   - Allows users to browse molecules, diseases, and drugs  
-   - Search for similar molecules by SMILES or ChEMBL ID  
-   - Visualizes molecules using embedded 2D/3D viewers  
-   - Download data from multiple sources with real-time progress tracking  
-   - Built with RxSwift for reactive programming patterns  
+1. **GUI (macOS only):** SwiftUI application under `macos_app/`.
+   - Allows users to browse molecules, diseases, and drugs
+   - Search for similar molecules by SMILES or ChEMBL ID
+   - Visualizes molecules using embedded 2D/3D viewers
+   - Download data from multiple sources with real-time progress tracking
+   - Built with RxSwift for reactive programming patterns
 
-2. **Backend / local engine:** Python Flask API server with:  
+2. **CLI (cross-platform — macOS, Linux, Windows):** [treatment_auditor_cli.py](treatment_auditor_cli.py) drives the Treatment Auditor pipeline headlessly against the same Flask backend. Pure stdlib for the audit itself; the optional `--pdf` flag asks the backend to render a PDF identical to the macOS app's "Save as PDF…" output, so a Linux server or Windows workstation can produce the same audit reports without any Mac/Xcode dependency. Useful for regression testing, batch audits, and any deployment that doesn't have a Mac in front of it.
+
+3. **Backend / local engine:** Python Flask API server with:  
    - RDKit for fingerprint and descriptor computation  
    - FAISS for nearest-neighbor vector search  
    - SQLite database for molecules, drugs, diseases, and relationships  
@@ -191,12 +191,23 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
 
 ### Prerequisites
 
-- **macOS** 13.0 or later
+**Cross-platform (backend + CLI — macOS, Linux, Windows):**
+
 - **Python 3.9+** (Python 3.11 or 3.12 recommended)
-  - Install via Homebrew: `brew install python3` or `brew install python@3.12`
-  - Or use conda: `conda install python=3.11`
-- **Xcode 14+** (for macOS app development)
-- **Internet connection** (for initial dataset download)
+  - macOS: `brew install python3` or `brew install python@3.12`
+  - Linux: distro package (`apt install python3.12`, `dnf install python3.12`, etc.) or [pyenv](https://github.com/pyenv/pyenv)
+  - Windows: install from [python.org](https://www.python.org/) or use [WSL](https://learn.microsoft.com/en-us/windows/wsl/)
+  - Or any platform: `conda install python=3.11`
+- **Pango / cairo** for the Treatment Auditor's PDF endpoint (WeasyPrint)
+  - macOS: `brew install pango` (auto-installed by `setup.sh`)
+  - Linux: `apt install libpango-1.0-0 libpangoft2-1.0-0` (or your distro's equivalent)
+  - Windows: see [WeasyPrint installation docs](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#windows)
+- **Internet connection** (for initial dataset download and live API calls)
+
+**macOS GUI app only (skip if you only want the CLI):**
+
+- **macOS** 13.0 or later
+- **Xcode 14+**
 
 ### Quick Start
 
