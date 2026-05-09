@@ -41,6 +41,17 @@ class CLIError(Exception):
 
 # --- HTTP helpers -----------------------------------------------------------
 
+def _validate_url_scheme(url: str, arg_name: str) -> None:
+    """Reject non-http(s) URLs early so urllib.request can't be coerced into
+    file://, ftp://, or data: fetches by a typo or hostile config."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise CLIError(
+            f"{arg_name} must use http:// or https:// "
+            f"(got {parsed.scheme or '(no)'} scheme in {url!r})"
+        )
+
+
 def _http_request(
     method: str,
     url: str,
@@ -828,6 +839,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     backend = (args.backend or DEFAULT_BACKEND).rstrip("/")
 
     try:
+        _validate_url_scheme(backend, "--backend")
+        if args.with_ollama:
+            _validate_url_scheme(args.ollama_endpoint, "--ollama-endpoint")
         plan_raw = _load_plan(args.plan)
         plan = _validate_plan(plan_raw)
         _check_backend(backend)
