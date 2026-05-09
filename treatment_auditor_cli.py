@@ -899,6 +899,7 @@ def _build_synthesis_prompt(
             lines.append("")
     lines.append("")
     lines.append("Write a treatment-plan audit (400-650 words) addressing, in numbered sections:")
+    lines.append("Use plain text and Unicode characters only — do NOT emit LaTeX math (no $\\leftrightarrow$, no $\\to$, etc.). The arrow character ↔ is fine to use as-is when restating the deterministic findings.")
     lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
     lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
     lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
@@ -1149,6 +1150,43 @@ def _post_pdf(backend: str, payload: Dict[str, Any], output: Path) -> None:
         raise CLIError(f"could not write {output}: {e}") from None
 
 
+# LaTeX → Unicode replacements applied to LLM output. Some local models
+# (notably gemma) reflexively emit LaTeX math notation when they see
+# arrows in the prompt context, even after being told not to. The audit
+# report renders Markdown-ish prose — LaTeX renders as literal `$\foo$`
+# garbage. Strip the common cases as a defence-in-depth in case the
+# prompt instruction is ignored.
+_LATEX_REPLACEMENTS = (
+    ("$\\leftrightarrow$", "↔"),
+    ("$\\Leftrightarrow$", "↔"),
+    ("$\\rightarrow$", "→"),
+    ("$\\Rightarrow$", "→"),
+    ("$\\to$", "→"),
+    ("$\\leftarrow$", "←"),
+    ("$\\Leftarrow$", "←"),
+    ("$\\sim$", "~"),
+    ("$\\approx$", "≈"),
+    ("$\\le$", "≤"),
+    ("$\\ge$", "≥"),
+    ("$\\pm$", "±"),
+    ("$\\times$", "×"),
+    ("$\\alpha$", "α"),
+    ("$\\beta$", "β"),
+    ("$\\mu$", "μ"),
+)
+
+
+def _strip_latex(text: str) -> str:
+    """Replace common LaTeX math escapes the LLM may emit despite being
+    told not to. Targeted rather than regex-based so we don't accidentally
+    munge dollar amounts or legitimate `\\X` strings the model produces."""
+    if not text:
+        return text
+    for tex, unicode_char in _LATEX_REPLACEMENTS:
+        text = text.replace(tex, unicode_char)
+    return text
+
+
 def _run_synthesis_pipeline(
     endpoint: str,
     model: str,
@@ -1172,7 +1210,7 @@ def _run_synthesis_pipeline(
         ok, text, err = _ollama_generate(endpoint, model, _build_source_summary_prompt(label, body, plan_context))
         if ok:
             progress.end("ok", f"{len(text)} chars")
-            source_summaries.append({"label": label, "summary": text.strip()})
+            source_summaries.append({"label": label, "summary": _strip_latex(text.strip())})
         else:
             progress.end("failed", err or "")
 
@@ -1189,7 +1227,7 @@ def _run_synthesis_pipeline(
         ok, text, err = _ollama_generate(endpoint, model, _build_source_summary_prompt(label, body, plan_context))
         if ok:
             progress.end("ok", f"{len(text)} chars")
-            source_summaries.append({"label": label, "summary": text.strip()})
+            source_summaries.append({"label": label, "summary": _strip_latex(text.strip())})
         else:
             progress.end("failed", err or "")
 
@@ -1206,7 +1244,7 @@ def _run_synthesis_pipeline(
         ok, text, err = _ollama_generate(endpoint, model, _build_source_summary_prompt(label, body, plan_context))
         if ok:
             progress.end("ok", f"{len(text)} chars")
-            source_summaries.append({"label": label, "summary": text.strip()})
+            source_summaries.append({"label": label, "summary": _strip_latex(text.strip())})
         else:
             progress.end("failed", err or "")
 
@@ -1218,9 +1256,9 @@ def _run_synthesis_pipeline(
     ok, text, err = _ollama_generate(endpoint, model, final_prompt, stream_to_stderr=not progress.quiet)
     if ok:
         progress.end("ok", f"{len(text)} chars")
-        return source_summaries, text.strip(), None
+        return source_summaries, _strip_latex(text.strip()), None
     progress.end("failed", err or "")
-    return source_summaries, text.strip(), err
+    return source_summaries, _strip_latex(text.strip()), err
 
 
 # --- text rendering ---------------------------------------------------------

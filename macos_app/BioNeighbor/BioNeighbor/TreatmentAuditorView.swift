@@ -904,6 +904,11 @@ struct TreatmentAuditorView: View {
                     if Task.isCancelled || self.currentAuditRunID != runID { return }
                     self.auditOutput += chunk
                 }
+                // LaTeX strip after streaming completes — applying it to
+                // each chunk would risk splitting a `$\leftrightarrow$`
+                // token across chunks and missing it. UI re-renders the
+                // cleaned text once the stream is done.
+                self.auditOutput = stripLatexFromAuditText(self.auditOutput)
                 if let idx = synthesisStepIndex {
                     updateStep(runID: runID, at: idx, state: .done)
                 }
@@ -1070,7 +1075,9 @@ struct TreatmentAuditorView: View {
                 return nil
             }
             updateStep(runID: runID, at: index, state: .done)
-            return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            return stripLatexFromAuditText(
+                accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         } catch {
             updateStep(runID: runID, at: index, state: .failed(error.localizedDescription))
             return nil

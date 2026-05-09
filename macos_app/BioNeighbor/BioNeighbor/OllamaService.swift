@@ -494,6 +494,7 @@ final class OllamaService {
         lines.append("")
 
         lines.append("Write a treatment-plan audit (400-650 words) addressing, in numbered sections:")
+        lines.append("Use plain text and Unicode characters only — do NOT emit LaTeX math (no $\\leftrightarrow$, no $\\to$, etc.). The arrow character ↔ is fine to use as-is when restating the deterministic findings.")
         lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
         lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
         lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
@@ -673,4 +674,39 @@ struct TreatmentAuditPlan {
     /// Symptom→FAERS reaction matches (issue #46) — one row per
     /// (drug, symptom) where the symptom matched a top reported term.
     var faersSymptomMatches: [FAERSSymptomMatchRow] = []
+}
+
+// MARK: - Output post-processing
+
+/// Replace common LaTeX math escapes the LLM may emit despite being told
+/// not to. Some local models (notably gemma) reflexively wrap arrows in
+/// LaTeX (`$\leftrightarrow$`) when they see Unicode arrows in the prompt
+/// context, even after explicit instruction. The audit report renders
+/// Markdown-ish prose — LaTeX renders as literal `$\foo$` garbage.
+/// Targeted replacements rather than regex so we don't munge legitimate
+/// dollar amounts or `\X` escapes.
+func stripLatexFromAuditText(_ text: String) -> String {
+    let replacements: [(String, String)] = [
+        ("$\\leftrightarrow$", "↔"),
+        ("$\\Leftrightarrow$", "↔"),
+        ("$\\rightarrow$", "→"),
+        ("$\\Rightarrow$", "→"),
+        ("$\\to$", "→"),
+        ("$\\leftarrow$", "←"),
+        ("$\\Leftarrow$", "←"),
+        ("$\\sim$", "~"),
+        ("$\\approx$", "≈"),
+        ("$\\le$", "≤"),
+        ("$\\ge$", "≥"),
+        ("$\\pm$", "±"),
+        ("$\\times$", "×"),
+        ("$\\alpha$", "α"),
+        ("$\\beta$", "β"),
+        ("$\\mu$", "μ"),
+    ]
+    var out = text
+    for (tex, unicode) in replacements {
+        out = out.replacingOccurrences(of: tex, with: unicode)
+    }
+    return out
 }
