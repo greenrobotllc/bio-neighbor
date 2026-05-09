@@ -1986,9 +1986,11 @@ class BackendService: ObservableObject {
     }
 
     /// Outcome of `fetchDrugInteractions`. The `drugbankLoaded` flag is
-    /// the load-bearing one — when false, the UI must render a "DrugBank
-    /// XML not loaded" hint rather than "no interactions found", because
-    /// the absence of data is meaningfully different from an empty result.
+    /// the load-bearing one — when false, the UI must render a "DDInter
+    /// not loaded" hint rather than "no interactions found", because
+    /// the absence of data is meaningfully different from an empty
+    /// result. The field name is preserved for wire-format
+    /// compatibility (data source moved from DrugBank to DDInter).
     struct DrugInteractionsOutcome {
         let drugbankLoaded: Bool
         let matched: [DrugInteractionMatch]
@@ -1996,10 +1998,10 @@ class BackendService: ObservableObject {
         let interactions: [DrugInteraction]
     }
 
-    /// Fetch pairwise DrugBank drug-drug interactions among the supplied
+    /// Fetch pairwise DDInter drug-drug interactions among the supplied
     /// drugs (issue #47). Best-effort: the Treatment Auditor falls back
     /// to "no interactions surfaced" when this throws.
-    func fetchDrugInteractions(_ drugs: [(name: String, chemblId: String?, drugbankId: String?)]) async throws -> DrugInteractionsOutcome {
+    func fetchDrugInteractions(_ drugs: [(name: String, chemblId: String?)]) async throws -> DrugInteractionsOutcome {
         guard !drugs.isEmpty else {
             return DrugInteractionsOutcome(drugbankLoaded: false, matched: [], unmatched: [], interactions: [])
         }
@@ -2015,7 +2017,7 @@ class BackendService: ObservableObject {
         request.timeoutInterval = 15.0
         let body = DrugInteractionsRequest(
             drugs: drugs.map {
-                DrugInteractionsRequestEntry(name: $0.name, chemblId: $0.chemblId, drugbankId: $0.drugbankId)
+                DrugInteractionsRequestEntry(name: $0.name, chemblId: $0.chemblId)
             }
         )
         request.httpBody = try JSONEncoder().encode(body)

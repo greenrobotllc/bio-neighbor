@@ -112,10 +112,18 @@ def _live_top_events(drug_name: str, limit: int) -> Optional[Tuple[List[Dict], i
         return [], 0
 
     quoted = drug_name.replace("\"", "")
+    # OpenFDA uses Lucene-style search: a leading `+` on a sub-term means
+    # MUST be present (AND), and a bare term is optional (OR within the
+    # parenthesized group). The earlier query used `+` on the brand_name
+    # and medicinalproduct branches, which silently required ALL THREE
+    # fields to equal the drug name — impossible for biologics where
+    # reports list the brand in one field and the generic in another
+    # (e.g. trastuzumab reports often have brand_name=HERCEPTIN). Bare
+    # terms here = match any of the three fields, which is what we want.
     search = (
         f'(patient.drug.openfda.generic_name:"{quoted}" '
-        f'+patient.drug.openfda.brand_name:"{quoted}" '
-        f'+patient.drug.medicinalproduct:"{quoted}")'
+        f'patient.drug.openfda.brand_name:"{quoted}" '
+        f'patient.drug.medicinalproduct:"{quoted}")'
     )
     # Top events
     try:

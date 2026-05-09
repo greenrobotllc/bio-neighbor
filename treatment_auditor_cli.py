@@ -516,7 +516,6 @@ def _step_drug_interactions(backend: str, drugs: List[Dict[str, Any]], progress:
             {
                 "name": d["name"],
                 "chembl_id": d.get("chembl_id"),
-                "drugbank_id": d.get("drugbank_id"),
             }
             for d in drugs
         ]
@@ -657,7 +656,7 @@ def _step_drug_trials(
 #   Stage 1: one mini-summary per non-empty source (PDQ, each modality, each
 #            drug with trials) — 120-180 word digests.
 #   Stage 2: one final synthesis that consumes the mini-summaries plus the
-#            deterministic findings (DrugBank / ChEMBL target / FAERS) — 350-550
+#            deterministic findings (DDInter / ChEMBL target / FAERS) — 350-550
 #            word audit with NCT citations and a "Further reading" block.
 # Prompt copy is held identical to the Swift side (OllamaService.swift:413-499)
 # so CLI PDFs match the macOS app's output for the same inputs.
@@ -748,19 +747,19 @@ def _plan_context_summary(plan: Dict[str, Any]) -> str:
 
 def _deterministic_findings_summary(report: Dict[str, Any]) -> str:
     """Mirrors OllamaService.deterministicFindingsSummary. Operates on the
-    wire-format `report` (DrugBank/target-overlap/FAERS already flattened),
+    wire-format `report` (DDInter/target-overlap/FAERS already flattened),
     not the raw CLI step shape."""
     lines: List[str] = []
     interactions = report.get("drug_interactions") or []
     available = report.get("drug_interaction_data_available", True)
     if interactions:
-        lines.append("Known pairwise drug-drug interactions (DrugBank):")
+        lines.append("Known pairwise drug-drug interactions (DDInter):")
         for r in interactions:
             sev = r.get("severity") or "unknown"
             desc = r.get("description") or ""
             lines.append(f"- {r.get('drug_a', '')} ↔ {r.get('drug_b', '')} [severity: {sev}]: {desc}")
     elif not available:
-        lines.append("Drug-drug interaction data: unavailable (DrugBank XML not loaded server-side).")
+        lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
     overlaps = report.get("target_overlaps") or []
     if overlaps:
         lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
@@ -840,7 +839,7 @@ def _build_synthesis_prompt(
     lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
     lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
     lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
-    lines.append("4. Drug-drug interactions: if the patient plan section above includes DrugBank pairwise interactions, restate them verbatim and prioritize severe ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
+    lines.append("4. Drug-drug interactions: if the patient plan section above includes DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
     lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
     lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
     lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
@@ -947,7 +946,7 @@ def _build_report_payload(
             "stage": plan.get("stage") or "",
             "stage_detail": plan.get("stage_detail") or "",
             "drugs": [
-                {"name": d["name"], "chembl_id": d.get("chembl_id"), "drugbank_id": d.get("drugbank_id")}
+                {"name": d["name"], "chembl_id": d.get("chembl_id")}
                 for d in plan.get("drugs", [])
             ],
             "treatments": list(plan.get("treatments") or []),

@@ -4005,15 +4005,18 @@ def v2_treatment_auditor_target_overlap():
 @app.route('/cancer-research/v2/treatment-auditor/drug-interactions', methods=['POST'])
 def v2_treatment_auditor_drug_interactions():
     """
-    Return pairwise DrugBank drug-drug interactions among the supplied
-    drug list (issue #47). Surfaced by the Treatment Auditor as a
-    deterministic safety callout — factual rows from DrugBank, not
-    LLM-inferred.
+    Return pairwise drug-drug interactions among the supplied drug list
+    (issue #47). Surfaced by the Treatment Auditor as a deterministic
+    safety callout — factual rows from DDInter, not LLM-inferred.
+
+    Backed by DDInter (https://ddinter.scbdd.com), CC BY-NC-SA 4.0. The
+    previous DrugBank backing was removed because DrugBank's terms forbid
+    using its data to "build products" without a commercial license.
 
     Request body (JSON):
         {
             "drugs": [
-                {"name": "warfarin", "chembl_id": "CHEMBL1464", "drugbank_id": "DB00682"},
+                {"name": "warfarin", "chembl_id": "CHEMBL1464"},
                 {"name": "aspirin",  "chembl_id": "CHEMBL25"}
             ]
         }
@@ -4021,20 +4024,23 @@ def v2_treatment_auditor_drug_interactions():
     Response:
         {
             "success": true,
-            "drugbank_loaded": true,
-            "matched": [{"input_name": "...", "drugbank_id": "...", "drugbank_name": "..."}],
+            "drugbank_loaded": true,           # legacy field name; means "DDI data available"
+            "data_source": "ddinter",
+            "matched":   [{"input_name": "...", "ddinter_id": "DDInter...", "ddinter_name": "..."}],
             "unmatched": ["..."],
             "interactions": [
                 {"drug_a_name": "...", "drug_b_name": "...",
-                 "drug_a_id": "DB...", "drug_b_id": "DB...",
-                 "description": "...", "severity": "severe|moderate|minor|null"}
+                 "drug_a_id": "DDInter...", "drug_b_id": "DDInter...",
+                 "severity": "major|moderate|minor|null",
+                 "description": null}
             ]
         }
 
-    When the DrugBank XML hasn't been loaded into the local
-    `drug_interactions` table, `drugbank_loaded` is false and the client
-    should render a "DrugBank XML not loaded" hint instead of an empty
-    "no interactions found" message — those are very different statements.
+    When DDInter hasn't been loaded into the local `drug_interactions`
+    table, `drugbank_loaded` is false and the client should render a
+    "data unavailable" hint instead of an empty "no interactions found"
+    message — those are very different statements. The field name is kept
+    for wire compatibility with previously-shipped clients.
     """
     try:
         body = request.get_json(silent=True)
@@ -4061,12 +4067,11 @@ def v2_treatment_auditor_drug_interactions():
             cleaned.append({
                 'name': name.strip(),
                 'chembl_id': _stripped_str_or_none(entry.get('chembl_id')),
-                'drugbank_id': _stripped_str_or_none(entry.get('drugbank_id')),
             })
         if not cleaned:
             return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 
-        from drugbank_interactions import get_pairwise_interactions
+        from ddinter_loader import get_pairwise_interactions
         result = get_pairwise_interactions(cleaned)
         return jsonify({
             'success': True,

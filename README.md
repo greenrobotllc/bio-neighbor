@@ -33,8 +33,34 @@ BioNeighbor combines:
 - **CF-inspired neighbor recommendations:** Uses the concept of collaborative filtering applied to molecules and their activity profiles to prioritize promising candidates.
 - **Cancer Research workspace:** Drill into a cancer type, pick a drug, and see synonyms, indications, structurally similar drugs, and a unified Clinical Trial Outcomes section pulled from ClinicalTrials.gov — multi-arm trials, primary outcomes, per-arm values with 95% CIs, and CI-overlap flags so you can spot likely-real differences vs noise.
 - **On-device AI trial summaries (optional):** Point the app at a local Ollama install and get a plain-English summary of every clinical trial listed for a drug. Runs entirely on your machine — no data leaves the device. Default model is `gemma4:26b`; configurable in Settings.
-- **Treatment Auditor (multi-source deep audit):** Describe a cancer treatment plan — disease/subtype, **stage + free-text stage detail** (e.g. "metastasized to bone"), prescribed drugs, scheduled treatments, symptoms/side effects — and the on-device AI runs a multi-pass audit. Before the LLM passes, four deterministic safety lookups run and surface as factual callouts above the AI prose: **brand→generic dedupe via RxNorm** (e.g. Taxol + paclitaxel collapse to a single ingredient before fan-out), **pairwise drug-drug interactions from DrugBank** (severity-ranked, requires the DrugBank XML — see below), **mechanism-of-action target overlap from ChEMBL** (flags when two drugs hit the same gene, e.g. anastrozole + letrozole both inhibit CYP19A1), and **OpenFDA FAERS post-market reaction frequencies** matched against the user's symptoms (e.g. "fatigue is the #1 reported reaction for tamoxifen with 386 reports out of 5,613"). Then the LLM phase: NCI PDQ standard-of-care text from cancer.gov, ClinicalTrials.gov searches for radiation / surgery / chemotherapy / targeted-therapy trials in the subtype (independent of the patient's drugs), and per-drug trial outcomes. Each source gets its own streaming mini-summary; a final synthesis pass combines them with the deterministic findings + explicit "Further reading" citations to the PDQ URL and the most-relevant NCT IDs. Each step shows up as a progress row so the wait feels like work. Research tool only, not medical advice. Tumor-mutation matching is tracked as a planned follow-up. Note: pairwise drug-drug interactions need the DrugBank XML loaded locally — register at <https://go.drugbank.com> (free for academic use), drop the XML at `data/drugbank_cache/drugbank.xml`, then run `python backend/load_drugbank_interactions.py`. Without it the audit gracefully shows "DrugBank XML not loaded" instead of a misleading empty section.
-- **Printable PDF reports for the Treatment Auditor:** After a deep audit completes, click *Save as PDF…* to export a self-contained, paginated report capturing all inputs, the four deterministic findings (RxNorm merges, DrugBank interactions, ChEMBL target overlap, FAERS top reactions + symptom matches), the multi-pass methodology (CT.gov v2 search terms / filters / pagination, the PDQ URL fetched and section-scoring rules, the per-drug ChEMBL→NCT path), the live audit pipeline log, every per-source mini-summary, the final synthesis, and a References section with every NCT ID, the PDQ URL, the data-source URLs for each finding type, and a link back to this repo — enough detail that someone could repeat the audit by hand. Example: [example_reports/treatment-audit-her2-20260507-1433.pdf](example_reports/treatment-audit-her2-20260507-1433.pdf).
+- **Treatment Auditor (multi-source deep audit):** Describe a cancer treatment plan — disease/subtype, **stage + free-text stage detail** (e.g. "metastasized to bone"), prescribed drugs, scheduled treatments, symptoms/side effects — and the on-device AI runs a multi-pass audit. Before the LLM passes, four deterministic safety lookups run and surface as factual callouts above the AI prose: **brand→generic dedupe via RxNorm** (e.g. Taxol + paclitaxel collapse to a single ingredient before fan-out), **pairwise drug-drug interactions from DDInter** (Major / Moderate / Minor severity — see *Loading DDInter* below), **mechanism-of-action target overlap from ChEMBL** (flags when two drugs hit the same gene, e.g. anastrozole + letrozole both inhibit CYP19A1), and **OpenFDA FAERS post-market reaction frequencies** matched against the user's symptoms (e.g. "fatigue is the #1 reported reaction for tamoxifen with 386 reports out of 5,613"). Then the LLM phase: NCI PDQ standard-of-care text from cancer.gov, ClinicalTrials.gov searches for radiation / surgery / chemotherapy / targeted-therapy trials in the subtype (independent of the patient's drugs), and per-drug trial outcomes. Each source gets its own streaming mini-summary; a final synthesis pass combines them with the deterministic findings + explicit "Further reading" citations to the PDQ URL and the most-relevant NCT IDs. Each step shows up as a progress row so the wait feels like work. Research tool only, not medical advice. Tumor-mutation matching is tracked as a planned follow-up.
+- **Printable PDF reports for the Treatment Auditor:** After a deep audit completes, click *Save as PDF…* to export a self-contained, paginated report capturing all inputs, the four deterministic findings (RxNorm merges, DDInter interactions, ChEMBL target overlap, FAERS top reactions + symptom matches), the multi-pass methodology (CT.gov v2 search terms / filters / pagination, the PDQ URL fetched and section-scoring rules, the per-drug ChEMBL→NCT path), the live audit pipeline log, every per-source mini-summary, the final synthesis, and a References section with every NCT ID, the PDQ URL, the data-source URLs for each finding type, and a link back to this repo — enough detail that someone could repeat the audit by hand. Example: [example_reports/treatment-audit-her2-20260507-1433.pdf](example_reports/treatment-audit-her2-20260507-1433.pdf).
+
+### Loading DDInter
+
+The drug-drug interaction section of the Treatment Auditor is backed by **DDInter** ([ddinter.scbdd.com](https://ddinter.scbdd.com)), an academic interaction database that ships eight per-ATC-class CSVs (~13 MB total, ~236k pairwise interactions across ~1.8k approved drugs).
+
+**License — read this before running the loader.** DDInter is published under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/):
+
+- ✅ Free for **non-commercial** use (research, personal, academic).
+- ✅ No registration or login required to download.
+- ⚠️ Attribution required when redistributing audit reports that include DDInter data.
+- ⚠️ ShareAlike: derivative *data* works must be CC BY-NC-SA. (BioNeighbor's MIT-licensed source code is unaffected — only the dataset carries this restriction.)
+- ❌ **Commercial use prohibited.** Do not run the loader on a server or in a product that monetizes the resulting interactions.
+
+**To load:**
+
+```bash
+source venv/bin/activate
+python backend/load_ddinter_interactions.py        # downloads + ingests into SQLite
+python backend/load_ddinter_interactions.py --refresh   # force re-download
+```
+
+The CSVs land in `data/ddinter_cache/` (gitignored — never committed). The loader runs schema migrations first, wipes the `drug_interactions` table, then bulk-inserts ~236k rows. Takes <30s on a fresh checkout including download.
+
+Without this step the audit still runs, but the interactions section gracefully shows "DDInter not loaded" rather than a misleading empty result. Audits where the data isn't loaded explicitly say "interaction data unavailable" in the AI synthesis instead of asserting "no interactions found."
+
+> **Why DDInter and not DrugBank?** Earlier versions of BioNeighbor used DrugBank's XML download. DrugBank's terms forbid using their data to "build products" without a commercial license, which conflicts with BioNeighbor's MIT licensing and free distribution. DDInter's CC BY-NC-SA terms are stated cleanly, the data is free for non-commercial use without registration, and the operational integration is simpler (no per-user license required to download).
 
 ---
 
@@ -311,14 +337,19 @@ GUI's Treatment Auditor tab from the command line, so plans can be regression-
 tested against backend changes without driving the UI. It hits the running
 Flask server (`./start_server.sh`) and runs all seven deterministic steps —
 NCI PDQ fetch, ClinicalTrials.gov modality search ×4 (radiation / surgery /
-chemotherapy / targeted), RxNorm brand→generic dedupe, DrugBank pairwise
+chemotherapy / targeted), RxNorm brand→generic dedupe, DDInter pairwise
 interactions, ChEMBL mechanism-of-action target overlap, OpenFDA FAERS top
 reactions + symptom matches, and per-drug ClinicalTrials.gov outcomes. Pure
-stdlib — no extra `pip install` needed.
+stdlib — no extra `pip install` needed for the audit itself; the PDF
+endpoint adds a WeasyPrint dependency on the backend side only.
 
 ```bash
-# With the backend running on the default port:
+# With the backend running on the default port (Ollama synthesis is on by
+# default to match the macOS app — pass --no-ollama to skip):
 python treatment_auditor_cli.py --plan examples/treatment_auditor_plan.example.json
+
+# Render a PDF identical to the macOS "Save as PDF…" output:
+python treatment_auditor_cli.py --plan plan.json --pdf audit.pdf
 
 # Human-readable summary instead of raw JSON:
 python treatment_auditor_cli.py --plan plan.json --format text
@@ -326,8 +357,8 @@ python treatment_auditor_cli.py --plan plan.json --format text
 # Skip steps you're not testing this run:
 python treatment_auditor_cli.py --plan plan.json --skip faers,drug-trials
 
-# Also stream a final AI synthesis from a local Ollama:
-python treatment_auditor_cli.py --plan plan.json --with-ollama --output audit.json
+# Skip the LLM synthesis (deterministic findings only, much faster):
+python treatment_auditor_cli.py --plan plan.json --no-ollama --output audit.json
 ```
 
 The plan file mirrors the GUI form fields (cancer type, subtype, stage,
@@ -337,9 +368,9 @@ for a complete example. Cancer type / subtype accept either human names
 (matched case-insensitively against the seed taxonomy) or numeric
 `cancer_type_id` / `subtype_id` for fully unambiguous runs.
 
-Output is a single JSON document with `{plan, steps, [synthesis]}` — each
-step is `{"ok": true/false, ...}` so a failed source (e.g., DrugBank XML
-not loaded, PDQ unavailable for a hematologic cancer) doesn't abort the
+Output is a single JSON document with `{plan, steps, source_summaries?, final_audit?}` — each
+step is `{"ok": true/false, ...}` so a failed source (e.g., DDInter not
+loaded, PDQ unavailable for a hematologic cancer) doesn't abort the
 run, matching the GUI's best-effort behavior. Per-step progress is written
 to stderr, so `--output file.json` always gets clean JSON on stdout.
 

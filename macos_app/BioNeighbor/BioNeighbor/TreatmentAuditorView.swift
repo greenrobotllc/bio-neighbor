@@ -77,10 +77,10 @@ struct TreatmentAuditorView: View {
     /// audit is dismissed or a new audit run starts.
     @State private var drugMergeNotes: [DrugMergeNote] = []
 
-    /// Result of the DrugBank pairwise drug-drug interaction lookup
+    /// Result of the DDInter pairwise drug-drug interaction lookup
     /// (issue #47). Drives a deterministic safety callout above the AI
-    /// output. `drugbankAvailable` distinguishes "no interactions found"
-    /// from "DrugBank XML wasn't loaded" — those need very different
+    /// output. `drugInteractionDataAvailable` distinguishes "no interactions
+    /// found" from "DDInter wasn't loaded" — those need very different
     /// UI treatment.
     @State private var drugInteractions: [DrugInteraction] = []
     @State private var drugInteractionUnmatched: [String] = []
@@ -146,7 +146,7 @@ struct TreatmentAuditorView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "info.circle")
                 .foregroundColor(.secondary)
-            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches), RxNorm (brand→generic dedupe), DrugBank (pairwise drug-drug interactions, when XML is loaded locally), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS (post-market adverse-event reporting). Tumor-mutation matching is a planned follow-up.")
+            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches), RxNorm (brand→generic dedupe), DDInter (pairwise drug-drug interactions, CC BY-NC-SA, loaded locally), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS (post-market adverse-event reporting). Tumor-mutation matching is a planned follow-up.")
                 .appFont(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -742,7 +742,7 @@ struct TreatmentAuditorView: View {
             let dedupedDrugs = await normalizeAndDedupeDrugs(drugsSnapshot, runID: runID)
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
-            // 2.6. DrugBank pairwise interactions among the deduped drugs
+            // 2.6. DDInter pairwise interactions among the deduped drugs
             //      (issue #47). Deterministic safety callout — runs in the
             //      foreground because it blocks the prompt assembly we
             //      want it included in.
@@ -1157,7 +1157,7 @@ struct TreatmentAuditorView: View {
         return deduped
     }
 
-    /// Fetches pairwise DrugBank drug-drug interactions for the deduped
+    /// Fetches pairwise DDInter drug-drug interactions for the deduped
     /// drug list (issue #47) and stashes the result in `drugInteractions`
     /// for the UI callout + the LLM prompt context. Best-effort: on
     /// failure we mark the step `.failed` but the audit keeps running.
@@ -1172,12 +1172,12 @@ struct TreatmentAuditorView: View {
 
         let stepIndex = appendStep(
             runID: runID,
-            label: "Checking pairwise drug interactions (DrugBank)",
+            label: "Checking pairwise drug interactions (DDInter)",
             state: .running
         )
 
-        let payload: [(name: String, chemblId: String?, drugbankId: String?)] = drugs.map {
-            ($0.name, $0.chemblId, nil)
+        let payload: [(name: String, chemblId: String?)] = drugs.map {
+            ($0.name, $0.chemblId)
         }
 
         let outcome: BackendService.DrugInteractionsOutcome
@@ -1202,7 +1202,7 @@ struct TreatmentAuditorView: View {
         if let i = stepIndex {
             let state: AuditStep.State
             if !outcome.drugbankLoaded {
-                state = .skipped("DrugBank XML not loaded")
+                state = .skipped("DDInter not loaded")
             } else if outcome.interactions.isEmpty {
                 state = .skipped("No interactions among prescribed drugs")
             } else {
@@ -1674,12 +1674,12 @@ private struct DrugMergeNotesCallout: View {
     }
 }
 
-/// Renders pairwise DrugBank drug-drug interactions as a deterministic
+/// Renders pairwise DDInter drug-drug interactions as a deterministic
 /// safety callout (issue #47). Distinct from the AI-inferred audit text
-/// — these rows are factual lookups from DrugBank, sorted severe →
-/// moderate → minor → unknown by the backend.
+/// — these rows are factual lookups from DDInter, sorted Major →
+/// Moderate → Minor → unknown by the backend.
 ///
-/// When `dataAvailable=false` the view renders a "DrugBank XML not loaded"
+/// When `dataAvailable=false` the view renders a "DDInter not loaded"
 /// hint instead of "no interactions" — those are very different
 /// statements and conflating them would be a safety hazard.
 private struct DrugInteractionsCallout: View {
@@ -1697,7 +1697,7 @@ private struct DrugInteractionsCallout: View {
             }
 
             if !dataAvailable {
-                Text("DrugBank XML hasn't been loaded into the local database, so interactions can't be checked. Run `python backend/load_drugbank_interactions.py` after dropping the DrugBank XML at `data/drugbank_cache/drugbank.xml` (free academic registration at go.drugbank.com).")
+                Text("DDInter hasn't been loaded into the local database, so interactions can't be checked. Run `python backend/load_ddinter_interactions.py` to fetch the eight ATC-class CSVs from ddinter.scbdd.com (no registration required). DDInter is licensed CC BY-NC-SA 4.0 — non-commercial use only.")
                     .appFont(.caption2)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1706,12 +1706,12 @@ private struct DrugInteractionsCallout: View {
                     interactionRow(row)
                 }
                 if !unmatched.isEmpty {
-                    Text("Couldn't match in DrugBank: \(unmatched.joined(separator: ", "))")
+                    Text("Couldn't match in DDInter: \(unmatched.joined(separator: ", "))")
                         .appFont(.caption2)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Source: DrugBank. Severity is heuristic from the description text — confirm with the prescribing clinician.")
+                Text("Source: DDInter (ddinter.scbdd.com), CC BY-NC-SA 4.0. Severity (Major / Moderate / Minor) is curated by the DDInter team — confirm with the prescribing clinician.")
                     .appFont(.caption2)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

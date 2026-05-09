@@ -18,6 +18,46 @@
 
 import Foundation
 
+// MARK: - Snapshot the auditor view passes in
+//
+// These two types lived in the deleted `TreatmentAuditReportExporter.swift`
+// before #67 moved PDF rendering into the backend. They are part of the
+// auditor's public surface — `TreatmentAuditorView` builds a snapshot when
+// the run finishes and hands it to `renderPDF(snapshot:to:)` — so they
+// stay in the report-client file rather than the view file.
+
+/// One per-source mini-summary as captured during the audit run.
+struct AuditSourceSummary: Hashable {
+    let label: String
+    let summary: String
+}
+
+/// Frozen snapshot of a finished audit. Held by `TreatmentAuditorView` so
+/// the "Save as PDF…" button can render exactly what the user just saw,
+/// even if they edit the form afterwards.
+///
+/// `plan` carries the deterministic findings the PDF renders alongside the
+/// inputs (drug interactions, target overlap, FAERS matches). `mergeNotes`
+/// is captured separately because the merge happens *before* `plan.drugs`
+/// is populated — by the time the plan exists, the original brand/generic
+/// duplicates have already been collapsed and we need the audit history to
+/// recover what was merged.
+struct CompletedAuditSnapshot {
+    let plan: TreatmentAuditPlan
+    let sourceSummaries: [AuditSourceSummary]
+    let finalAudit: String
+    let steps: [AuditStep]
+    let generatedAt: Date
+    /// Brand→generic merges flagged by the RxNorm dedupe step (issue #55).
+    /// Empty when no inputs collapsed.
+    var mergeNotes: [DrugMergeNote] = []
+    /// FAERS per-drug top events captured for the report (issue #46).
+    /// Stored on the snapshot rather than the plan because the LLM prompt
+    /// only needs the symptom→reaction matches; the full per-drug top
+    /// list is for the human reader of the PDF.
+    var faersPanels: [FAERSDrugPanel] = []
+}
+
 @MainActor
 enum TreatmentAuditReportClient {
 

@@ -136,7 +136,7 @@ a { color: #1a5fb4; word-break: break-all; }
           border-top: 1px solid #ccc; font-size: 9.5pt; color: #555; }
 .footer p { margin: 3pt 0; }
 h4 { font-size: 10.5pt; margin-top: 10pt; margin-bottom: 4pt; page-break-after: avoid; }
-.sev-severe { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
+.sev-severe, .sev-major { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
               background: #fdecec; color: #b00020; font-weight: 600; font-size: 9pt; }
 .sev-moderate { display: inline-block; padding: 1pt 6pt; border-radius: 3pt;
                 background: #fff4e0; color: #a55400; font-weight: 600; font-size: 9pt; }
@@ -233,8 +233,9 @@ def _inputs_section(plan: Dict[str, Any]) -> str:
 
 def _severity_css_class(severity: Optional[str]) -> str:
     s = (severity or "").lower()
-    if s == "severe":
-        return "sev-severe"
+    # `major` (DDInter) and `severe` (legacy DrugBank) both map to red.
+    if s in ("major", "severe"):
+        return "sev-major"
     if s == "moderate":
         return "sev-moderate"
     if s == "minor":
@@ -267,18 +268,18 @@ def _interactions_block(report: Dict[str, Any]) -> str:
         return ""
     if not available:
         return (
-            "<h3>Pairwise drug-drug interactions (DrugBank)</h3>"
+            "<h3>Pairwise drug-drug interactions (DDInter)</h3>"
             '<p class="muted">'
-            "The DrugBank XML hasn't been loaded into the local "
+            "DDInter hasn't been loaded into the local "
             "<code>drug_interactions</code> table on this install, so "
             "pairwise drug-drug interactions could not be checked. This "
             'is not the same as "no interactions found" — the audit '
             "cannot speak to interactions at all in this state. "
-            "Run <code>python backend/load_drugbank_interactions.py</code> "
-            "after dropping the DrugBank XML at "
-            "<code>data/drugbank_cache/drugbank.xml</code> (free academic "
-            'registration at <a href="https://go.drugbank.com">go.drugbank.com</a>) '
-            "to enable this check."
+            "Run <code>python backend/load_ddinter_interactions.py</code> "
+            "to fetch the eight ATC-class CSVs from "
+            '<a href="https://ddinter.scbdd.com">ddinter.scbdd.com</a> '
+            "(no registration required) and populate the table. "
+            "DDInter is licensed CC BY-NC-SA 4.0 — non-commercial use only."
             "</p>"
         )
     rows = []
@@ -293,12 +294,12 @@ def _interactions_block(report: Dict[str, Any]) -> str:
             "</tr>"
         )
     return (
-        "<h3>Pairwise drug-drug interactions (DrugBank)</h3>"
-        "<p>Source: DrugBank pairwise <code>drug-interactions</code> "
-        "records. Severity is heuristic from the description text — "
-        "confirm with the prescribing clinician.</p>"
+        "<h3>Pairwise drug-drug interactions (DDInter)</h3>"
+        "<p>Source: DDInter v1 (<a href=\"https://ddinter.scbdd.com\">ddinter.scbdd.com</a>), "
+        "CC BY-NC-SA 4.0. Severity (Major / Moderate / Minor) is curated by the "
+        "DDInter team — confirm with the prescribing clinician.</p>"
         '<table class="data">'
-        "<thead><tr><th>Pair</th><th>Severity</th><th>Description</th></tr></thead>"
+        "<thead><tr><th>Pair</th><th>Severity</th><th>Notes</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )
@@ -412,7 +413,7 @@ def _deterministic_findings_section(report: Dict[str, Any]) -> str:
         "<h2>2. Deterministic findings</h2>"
         '<p class="muted">'
         "Factual lookups produced before the LLM passes — sourced from "
-        "RxNorm, DrugBank, ChEMBL, and openFDA respectively. The audit "
+        "RxNorm, DDInter, ChEMBL, and openFDA respectively. The audit "
         "synthesis (section 6) is instructed to repeat these verbatim "
         "rather than infer new ones."
         "</p>"
@@ -563,7 +564,7 @@ def _methodology_section(report: Dict[str, Any]) -> str:
         "duplicates are collapsed before any downstream fetch (issue #55). "
         "See section&nbsp;2 for the merges flagged for this run.</li>"
         "<li><strong>Deterministic safety lookups.</strong> Pairwise "
-        "DrugBank drug-drug interactions (issue&nbsp;#47), ChEMBL "
+        "DDInter drug-drug interactions (issue&nbsp;#47), ChEMBL "
         "mechanism-of-action target overlap among prescribed drugs "
         "(issue&nbsp;#53), and openFDA FAERS top reactions plus "
         "symptom→reaction matching (issue&nbsp;#46). All factual, "
@@ -587,7 +588,7 @@ def _methodology_section(report: Dict[str, Any]) -> str:
         "</ol>"
         "<p>This pipeline is fully reproducible by hand: pull the same PDQ page, "
         "run the same CT.gov queries listed above, query the same "
-        "RxNorm / DrugBank / ChEMBL / openFDA endpoints with the same "
+        "RxNorm / DDInter / ChEMBL / openFDA endpoints with the same "
         "inputs, then paste each source into an LLM with the patient "
         "plan and ask for the same digests.</p>"
     )
@@ -729,9 +730,9 @@ def _references_section(report: Dict[str, Any]) -> str:
 
     if report.get("drug_interactions"):
         entries.append(
-            "<li><strong>DrugBank drug-drug interactions:</strong> "
-            '<a href="https://go.drugbank.com">https://go.drugbank.com</a> '
-            "(pairwise <code>drug-interactions</code> records).</li>"
+            "<li><strong>DDInter drug-drug interactions:</strong> "
+            '<a href="https://ddinter.scbdd.com">https://ddinter.scbdd.com</a> '
+            "(CC BY-NC-SA 4.0).</li>"
         )
     if report.get("target_overlaps"):
         entries.append(

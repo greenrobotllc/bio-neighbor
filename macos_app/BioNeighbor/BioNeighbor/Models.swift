@@ -734,12 +734,14 @@ struct DrugNormalizationResponse: Codable {
     let error: String?
 }
 
-// MARK: - Treatment Auditor DrugBank pairwise interactions (issue #47)
+// MARK: - Treatment Auditor DDInter pairwise interactions (issue #47)
 
 /// One pairwise drug-drug interaction returned from
 /// `/cancer-research/v2/treatment-auditor/drug-interactions`. Severity is
-/// `"severe" | "moderate" | "minor" | nil` (heuristic — DrugBank's free
-/// description text doesn't carry a structured severity field).
+/// `"major" | "moderate" | "minor" | nil` (curated by DDInter). The drug
+/// IDs are DDInter IDs (e.g. "DDInter576"). `description` is currently
+/// unused — DDInter v1 has no per-pair free text — but is kept for the
+/// wire-format shape.
 struct DrugInteraction: Codable, Hashable, Identifiable {
     let drugAId: String
     let drugAName: String
@@ -764,18 +766,21 @@ struct DrugInteraction: Codable, Hashable, Identifiable {
 
 struct DrugInteractionMatch: Codable, Hashable {
     let inputName: String
-    let drugbankId: String
-    let drugbankName: String
+    let ddinterId: String
+    let ddinterName: String
 
     enum CodingKeys: String, CodingKey {
         case inputName = "input_name"
-        case drugbankId = "drugbank_id"
-        case drugbankName = "drugbank_name"
+        case ddinterId = "ddinter_id"
+        case ddinterName = "ddinter_name"
     }
 }
 
 struct DrugInteractionsResponse: Codable {
     let success: Bool
+    /// Legacy field name preserved across the DrugBank → DDInter swap so
+    /// older clients can still parse the response. Means "DDI data is
+    /// loaded server-side."
     let drugbankLoaded: Bool?
     let matched: [DrugInteractionMatch]?
     let unmatched: [String]?
@@ -795,12 +800,10 @@ struct DrugInteractionsResponse: Codable {
 struct DrugInteractionsRequestEntry: Codable {
     let name: String
     let chemblId: String?
-    let drugbankId: String?
 
     enum CodingKeys: String, CodingKey {
         case name
         case chemblId = "chembl_id"
-        case drugbankId = "drugbank_id"
     }
 }
 

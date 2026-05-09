@@ -319,7 +319,7 @@ final class OllamaService {
     /// relevant to *this* patient (right subtype, right stage, etc.) rather
     /// than summarizing the source in the abstract.
     ///
-    /// Deliberately omits the DrugBank / target-overlap / FAERS deterministic
+    /// Deliberately omits the DDInter / target-overlap / FAERS deterministic
     /// findings — those are only relevant in the final synthesis (where the
     /// model is asked to restate them verbatim). Including them per-source
     /// would (a) waste tokens on every mini-summary call and (b) tempt the
@@ -360,7 +360,7 @@ final class OllamaService {
         return lines.joined(separator: "\n")
     }
 
-    /// Pre-LLM deterministic findings (DrugBank interactions, ChEMBL
+    /// Pre-LLM deterministic findings (DDInter interactions, ChEMBL
     /// target overlap, FAERS symptom→reaction matches). Returns "" when
     /// nothing was found AND no data-availability hint is needed, so the
     /// caller can append unconditionally.
@@ -370,18 +370,18 @@ final class OllamaService {
     /// across digests.
     static func deterministicFindingsSummary(_ plan: TreatmentAuditPlan) -> String {
         var lines: [String] = []
-        // DrugBank pairwise interactions (issue #47). Surfaced as a
+        // DDInter pairwise interactions (issue #47). Surfaced as a
         // labelled fact list so the LLM treats them as deterministic
         // findings rather than something to infer or rewrite.
         if !plan.drugInteractions.isEmpty {
-            lines.append("Known pairwise drug-drug interactions (DrugBank):")
+            lines.append("Known pairwise drug-drug interactions (DDInter):")
             for row in plan.drugInteractions {
                 let sev = (row.severity?.isEmpty == false) ? row.severity! : "unknown"
                 let desc = row.description ?? ""
                 lines.append("- \(row.drugA) ↔ \(row.drugB) [severity: \(sev)]: \(desc)")
             }
         } else if !plan.drugInteractionDataAvailable {
-            lines.append("Drug-drug interaction data: unavailable (DrugBank XML not loaded server-side).")
+            lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
         }
         // Mechanism-of-action target overlap (issue #53).
         if !plan.targetOverlaps.isEmpty {
@@ -449,7 +449,7 @@ final class OllamaService {
         lines.append(planContextSummary(plan))
         lines.append("")
 
-        // Deterministic findings (DrugBank / ChEMBL target / FAERS) live in
+        // Deterministic findings (DDInter / ChEMBL target / FAERS) live in
         // their own block so the synthesis prompt sees them ONCE — they
         // were intentionally omitted from `planContextSummary` to avoid
         // duplicating the same facts across every per-source mini-summary.
@@ -482,7 +482,7 @@ final class OllamaService {
         lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
         lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
         lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
-        lines.append("4. Drug-drug interactions: if the patient plan section above includes DrugBank pairwise interactions, restate them verbatim and prioritize severe ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
+        lines.append("4. Drug-drug interactions: if the patient plan section above includes DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
         lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
         lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
         lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
@@ -596,7 +596,7 @@ struct TreatmentAuditPlan {
         let trials: [ClinicalTrial]
     }
 
-    /// One pairwise DrugBank interaction row included in the audit context
+    /// One pairwise DDInter interaction row included in the audit context
     /// (issue #47). The LLM is instructed to *acknowledge* these
     /// deterministic findings, not infer new ones.
     struct InteractionRow {
@@ -641,12 +641,12 @@ struct TreatmentAuditPlan {
     let drugTrials: [DrugTrials]
     let modalityTrials: [ModalityTrials]
     let pdqSummary: PDQSummary?
-    /// DrugBank pairwise interactions among the prescribed drugs. Empty
-    /// when DrugBank XML wasn't loaded or no pairs interact. Treated as
+    /// DDInter pairwise interactions among the prescribed drugs. Empty
+    /// when DDInter wasn't loaded or no pairs interact. Treated as
     /// deterministic facts in the prompt — the LLM should not invent new
     /// rows.
     var drugInteractions: [InteractionRow] = []
-    /// True when the DrugBank XML was loaded server-side. False means
+    /// True when DDInter was loaded server-side. False means
     /// the audit can't speak to interactions at all (different from
     /// "no interactions found").
     var drugInteractionDataAvailable: Bool = true
