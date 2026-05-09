@@ -1,0 +1,18 @@
+{
+  "cancer_type": "Breast",
+  "subtype": "HR+",
+  "stage": "Stage II",
+  "stage_detail": "T2N0M0",
+  "drugs": [
+    {"name": "tamoxifen", "chembl_id": "CHEMBL83"},
+    {"name": "anastrozole", "chembl_id": "CHEMBL1399"}
+  ],
+  "treatments": [
+    "Lumpectomy",
+    "Adjuvant radiation"
+  ],
+  "symptoms": [
+    {"text": "hot flashes", "severity": "moderate"},
+    {"text": "fatigue", "severity": "mild"}
+  ]
+}

@@ -304,6 +304,45 @@ python backend/main.py search "CC(=O)Oc1ccccc1C(=O)O" --top-k 10
 python backend/main.py search-chembl CHEMBL25 --top-k 5
 ```
 
+### Treatment Auditor CLI
+
+`treatment_auditor_cli.py` runs the same multi-source audit pipeline as the
+GUI's Treatment Auditor tab from the command line, so plans can be regression-
+tested against backend changes without driving the UI. It hits the running
+Flask server (`./start_server.sh`) and runs all seven deterministic steps —
+NCI PDQ fetch, ClinicalTrials.gov modality search ×4 (radiation / surgery /
+chemotherapy / targeted), RxNorm brand→generic dedupe, DrugBank pairwise
+interactions, ChEMBL mechanism-of-action target overlap, OpenFDA FAERS top
+reactions + symptom matches, and per-drug ClinicalTrials.gov outcomes. Pure
+stdlib — no extra `pip install` needed.
+
+```bash
+# With the backend running on the default port:
+python treatment_auditor_cli.py --plan examples/treatment_auditor_plan.example.json
+
+# Human-readable summary instead of raw JSON:
+python treatment_auditor_cli.py --plan plan.json --format text
+
+# Skip steps you're not testing this run:
+python treatment_auditor_cli.py --plan plan.json --skip faers,drug-trials
+
+# Also stream a final AI synthesis from a local Ollama:
+python treatment_auditor_cli.py --plan plan.json --with-ollama --output audit.json
+```
+
+The plan file mirrors the GUI form fields (cancer type, subtype, stage,
+prescribed drugs with optional ChEMBL IDs, treatments, symptoms with
+severity). See [examples/treatment_auditor_plan.example.json](examples/treatment_auditor_plan.example.json)
+for a complete example. Cancer type / subtype accept either human names
+(matched case-insensitively against the seed taxonomy) or numeric
+`cancer_type_id` / `subtype_id` for fully unambiguous runs.
+
+Output is a single JSON document with `{plan, steps, [synthesis]}` — each
+step is `{"ok": true/false, ...}` so a failed source (e.g., DrugBank XML
+not loaded, PDQ unavailable for a hematologic cancer) doesn't abort the
+run, matching the GUI's best-effort behavior. Per-step progress is written
+to stderr, so `--output file.json` always gets clean JSON on stdout.
+
 ### Database Schema Management
 
 The database schema is managed through a migration system:
@@ -385,9 +424,12 @@ bio-neighbor/
 │   ├── faiss_index.bin           # FAISS search index
 │   ├── fingerprints.pkl         # Molecular fingerprints
 │   └── progress/                 # Progress tracking files
+├── examples/                     # Sample inputs for CLI tools
+│   └── treatment_auditor_plan.example.json
 ├── images/                       # Screenshots
 ├── venv/                         # Python virtual environment
 ├── setup.sh                      # Setup script
+├── treatment_auditor_cli.py      # CLI version of the Treatment Auditor (issue #62)
 └── README.md                     # This file
 ```
 
