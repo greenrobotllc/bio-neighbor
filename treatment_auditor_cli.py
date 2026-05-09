@@ -131,9 +131,10 @@ def _validate_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     cleaned: Dict[str, Any] = {}
 
     if "cancer_type_id" in plan:
-        if not isinstance(plan["cancer_type_id"], int):
+        val = plan["cancer_type_id"]
+        if isinstance(val, bool) or not isinstance(val, int):
             raise CLIError("cancer_type_id must be an integer")
-        cleaned["cancer_type_id"] = plan["cancer_type_id"]
+        cleaned["cancer_type_id"] = val
     if "cancer_type" in plan:
         if not isinstance(plan["cancer_type"], str) or not plan["cancer_type"].strip():
             raise CLIError("cancer_type must be a non-empty string")
@@ -142,9 +143,10 @@ def _validate_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         raise CLIError("plan must include either cancer_type or cancer_type_id")
 
     if "subtype_id" in plan:
-        if not isinstance(plan["subtype_id"], int):
+        val = plan["subtype_id"]
+        if isinstance(val, bool) or not isinstance(val, int):
             raise CLIError("subtype_id must be an integer")
-        cleaned["subtype_id"] = plan["subtype_id"]
+        cleaned["subtype_id"] = val
     if "subtype" in plan:
         if not isinstance(plan["subtype"], str) or not plan["subtype"].strip():
             raise CLIError("subtype must be a non-empty string")
@@ -227,20 +229,29 @@ def _resolve_taxonomy(
     plan: Dict[str, Any],
     progress: Progress,
 ) -> Dict[str, Any]:
-    """Resolve cancer_type / subtype names to numeric IDs against the backend.
+    """Resolve cancer_type / subtype to numeric IDs and display names.
 
-    No-ops when both *_id fields are present. Mutates a copy of `plan` to
-    include resolved IDs and human-readable display names.
+    Always fetches the taxonomy so display names are populated for both the
+    name-supplied and ID-supplied paths. When both IDs are supplied, also
+    verifies the subtype belongs to the cancer type (the per-subtype list is
+    scoped to its parent, so a subtype miss in that list = mismatch).
     """
     out = dict(plan)
 
-    if "cancer_type_id" not in out:
-        progress.start("resolving cancer type")
-        status, body = _http_request("GET", f"{backend}/cancer-research/v2/cancer-types", timeout=10)
-        if status != 200 or not body.get("success"):
-            progress.end("failed", body.get("error", f"HTTP {status}"))
-            raise CLIError("failed to list cancer types — backend reachable but route returned error")
-        types = body.get("cancer_types") or []
+    progress.start("resolving cancer type")
+    status, body = _http_request("GET", f"{backend}/cancer-research/v2/cancer-types", timeout=10)
+    if status != 200 or not body.get("success"):
+        progress.end("failed", body.get("error", f"HTTP {status}"))
+        raise CLIError("failed to list cancer types — backend reachable but route returned error")
+    types = body.get("cancer_types") or []
+    if "cancer_type_id" in out:
+        match = next((t for t in types if t.get("id") == out["cancer_type_id"]), None)
+        if not match:
+            progress.end("failed", "id not found")
+            raise CLIError(
+                f"cancer_type_id {out['cancer_type_id']} not found in backend taxonomy"
+            )
+    else:
         match = _match_named(out["cancer_type"], types, ("name", "display_name"))
         if not match:
             progress.end("failed", "no match")
@@ -249,20 +260,28 @@ def _resolve_taxonomy(
                 + ", ".join(t.get("display_name") or t.get("name") or str(t.get("id")) for t in types)
             )
         out["cancer_type_id"] = match["id"]
-        out["cancer_type_display"] = match.get("display_name") or match.get("name")
-        progress.end("ok", out["cancer_type_display"])
+    out["cancer_type_display"] = match.get("display_name") or match.get("name")
+    progress.end("ok", out["cancer_type_display"])
 
-    if "subtype_id" not in out:
-        progress.start("resolving subtype")
-        status, body = _http_request(
-            "GET",
-            f"{backend}/cancer-research/v2/cancer-types/{out['cancer_type_id']}/subtypes",
-            timeout=10,
-        )
-        if status != 200 or not body.get("success"):
-            progress.end("failed", body.get("error", f"HTTP {status}"))
-            raise CLIError("failed to list subtypes for cancer type")
-        subtypes = body.get("subtypes") or []
+    progress.start("resolving subtype")
+    status, body = _http_request(
+        "GET",
+        f"{backend}/cancer-research/v2/cancer-types/{out['cancer_type_id']}/subtypes",
+        timeout=10,
+    )
+    if status != 200 or not body.get("success"):
+        progress.end("failed", body.get("error", f"HTTP {status}"))
+        raise CLIError("failed to list subtypes for cancer type")
+    subtypes = body.get("subtypes") or []
+    if "subtype_id" in out:
+        match = next((s for s in subtypes if s.get("id") == out["subtype_id"]), None)
+        if not match:
+            progress.end("failed", "id mismatch")
+            raise CLIError(
+                f"subtype_id {out['subtype_id']} does not belong to "
+                f"cancer_type_id {out['cancer_type_id']}"
+            )
+    else:
         match = _match_named(out["subtype"], subtypes, ("name", "short_name"))
         if not match:
             progress.end("failed", "no match")
@@ -271,8 +290,8 @@ def _resolve_taxonomy(
                 + ", ".join(s.get("short_name") or s.get("name") or str(s.get("id")) for s in subtypes)
             )
         out["subtype_id"] = match["id"]
-        out["subtype_display"] = match.get("short_name") or match.get("name")
-        progress.end("ok", out["subtype_display"])
+    out["subtype_display"] = match.get("short_name") or match.get("name")
+    progress.end("ok", out["subtype_display"])
 
     return out
 
@@ -284,12 +303,15 @@ def _match_named(query: str, items: List[Dict[str, Any]], fields: Tuple[str, ...
             value = item.get(field)
             if isinstance(value, str) and value.strip().lower() == q:
                 return item
+    matches: List[Dict[str, Any]] = []
     for item in items:
         for field in fields:
             value = item.get(field)
             if isinstance(value, str) and q in value.strip().lower():
-                return item
-    return None
+                if item not in matches:
+                    matches.append(item)
+                break
+    return matches[0] if len(matches) == 1 else None
 
 
 # --- pipeline steps ---------------------------------------------------------
