@@ -182,11 +182,12 @@ def search():
         logger = logging.getLogger(__name__)
         logger.warning("ValueError in /search endpoint: %s", str(e))
         return jsonify({'success': False, 'error': 'Invalid input parameter'}), 400
-    except OSError as e:
+    except OSError:
         # Handle broken pipe and other OS errors
+        logger.exception("OSError in /search endpoint")
         return jsonify({
-            'success': False, 
-            'error': f'Backend error: {str(e)}. Please ensure the search engine is properly initialized.'
+            'success': False,
+            'error': 'Backend error. Please ensure the search engine is properly initialized.'
         }), 500
     except Exception as e:
         import logging
@@ -761,7 +762,7 @@ def list_diseases():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -800,7 +801,7 @@ def get_disease_molecules(disease_name: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -840,7 +841,7 @@ def get_disease_top_molecules(disease_name: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1042,7 +1043,7 @@ def get_download_status(task_id: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Error checking status: {str(e)}'
+            'error': 'Error checking status'
         }), 500
 
 
@@ -1078,7 +1079,7 @@ def get_stats():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1117,7 +1118,7 @@ def search_molecules():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1271,7 +1272,7 @@ def search_diseases():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1302,7 +1303,7 @@ def list_drugs():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1339,7 +1340,7 @@ def get_drug(drug_id: int):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1380,7 +1381,7 @@ def get_drug_molecules(drug_id: int):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1423,7 +1424,7 @@ def get_disease_drugs(disease_name: str):
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1614,7 +1615,7 @@ def download_molecules():
             print(f"❌ Error starting download process: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to start download: {str(e)}'
+                'error': 'Failed to start download'
             }), 500
     
     except Exception as e:
@@ -1624,7 +1625,7 @@ def download_molecules():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -1822,7 +1823,7 @@ def download_drugs():
             print(f"❌ Error starting download process: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to start download: {str(e)}'
+                'error': 'Failed to start download'
             }), 500
     
     except Exception as e:
@@ -1832,7 +1833,7 @@ def download_drugs():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
@@ -2007,7 +2008,7 @@ def download_diseases():
             print(f"❌ Error starting download process: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to start download: {str(e)}'
+                'error': 'Failed to start download'
             }), 500
     
     except Exception as e:
@@ -2017,7 +2018,7 @@ def download_diseases():
         print(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f'Internal error: {error_msg}'
+            'error': 'Internal error'
         }), 500
 
 
