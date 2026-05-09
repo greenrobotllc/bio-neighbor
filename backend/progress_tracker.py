@@ -4,11 +4,14 @@ Writes progress to a JSON file that can be read by the API.
 """
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Dict, Optional
 from threading import Lock
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 # Progress files directory
 PROGRESS_DIR = Path(__file__).parent.parent / "data" / "progress"
@@ -29,15 +32,18 @@ def _safe_progress_path(task_id: str) -> Optional[Path]:
     user input never reaches the path expression directly.
     """
     if not isinstance(task_id, str):
+        logger.warning("Rejected non-string task_id: %r", type(task_id).__name__)
         return None
     try:
         safe_id = str(UUID(task_id))
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError) as exc:
+        logger.warning("Rejected malformed task_id %r: %s", task_id, exc)
         return None
     candidate = (PROGRESS_DIR / f"{safe_id}.json").resolve()
     try:
         candidate.relative_to(_PROGRESS_DIR_RESOLVED)
     except ValueError:
+        logger.warning("Rejected task_id %r: resolved path escapes PROGRESS_DIR", task_id)
         return None
     return candidate
 
@@ -68,9 +74,9 @@ def write_progress(task_id: str, status: str, message: str, details: Optional[Di
         try:
             with open(progress_file, 'w') as f:
                 json.dump(progress_data, f, indent=2)
-        except Exception:
-            # Don't fail if progress writing fails
-            pass
+        except OSError as exc:
+            # Best-effort: progress tracking must not break the parent op
+            logger.warning("Failed to write progress for %s: %s", task_id, exc)
 
 
 def read_progress(task_id: str) -> Optional[Dict]:
@@ -92,8 +98,8 @@ def read_progress(task_id: str) -> Optional[Dict]:
             if progress_file.exists():
                 with open(progress_file, 'r') as f:
                     return json.load(f)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read progress for %s: %s", task_id, exc)
 
     return None
 
@@ -108,6 +114,6 @@ def clear_progress(task_id: str):
         try:
             if progress_file.exists():
                 progress_file.unlink()
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.warning("Failed to clear progress for %s: %s", task_id, exc)
 
