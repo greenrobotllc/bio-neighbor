@@ -826,7 +826,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         rxnorm = {"ok": True, "skipped_by_user": True, "deduped_drugs": list(plan["drugs"])}
     steps["rxnorm"] = rxnorm
-    deduped = rxnorm.get("deduped_drugs") or list(plan["drugs"])
+    deduped_value = rxnorm.get("deduped_drugs")
+    deduped = deduped_value if deduped_value is not None else list(plan["drugs"])
 
     if "interactions" not in skip_set:
         steps["drug_interactions"] = _step_drug_interactions(backend, deduped, progress)
