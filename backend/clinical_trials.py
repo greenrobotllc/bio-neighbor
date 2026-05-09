@@ -350,6 +350,40 @@ def _surgery_query_intr(condition: str) -> str:
     quoted = [f'"{t}"' if " " in t else t for t in terms]
     return f"{base} AND ({' OR '.join(quoted)})"
 
+
+# Generic radiation terms used to constrain the radiation modality's
+# `query.titles` filter. Cancer-agnostic — radiation modalities are
+# similar enough across solid tumours that a generic list catches the
+# focused trials without needing per-cancer customization.
+_RADIATION_TITLE_TERMS = (
+    "radiation", "radiotherapy", "brachytherapy",
+    "stereotactic body", "fractionation",
+    "whole-brain", "external beam",
+    "IMRT", "SBRT", "SRS",
+)
+
+
+def _quoted_or_clause(terms) -> str:
+    """OR-join terms for a CT.gov `query.titles` / `query.intr` clause,
+    quoting multi-word terms so they're treated as phrases."""
+    quoted = [f'"{t}"' if " " in t else t for t in terms]
+    return " OR ".join(quoted)
+
+
+def _surgery_query_titles(condition: str) -> Optional[str]:
+    """Build the `query.titles` value for the surgery modality. The
+    intervention-type filter alone (PROCEDURE) still surfaces trials that
+    list surgery as one step among drug arms; requiring the trial's title
+    to mention a surgical procedure narrows to trials whose study focus is
+    surgical (e.g. 'Sentinel Lymph Node Biopsy in...', 'Omission of SLNB
+    after Neoadjuvant...'). Returns None when we have no surgical-term
+    list for the cancer — the modality fetch falls back to the type-only
+    filter so we don't over-narrow heme / unmapped cancers."""
+    terms = _surgical_terms_for_condition(condition)
+    if not terms:
+        return None
+    return _quoted_or_clause(terms)
+
 # Pagination knobs for the modality search. Surveying multiple pages lets the
 # multi-arm/has-results sort pick from a deeper pool than a single 20-row page
 # can offer; the hard cap keeps cost bounded when a condition has thousands of
@@ -403,8 +437,34 @@ def fetch_modality_trials(
         # cares about outcomes, not active recruitment.
         "filter.overallStatus": "COMPLETED|TERMINATED|ACTIVE_NOT_RECRUITING",
     }
+
+    # Title-based narrowing for surgery and radiation. The intervention-type
+    # filter alone matches any trial whose intervention list includes a
+    # PROCEDURE (or RADIATION) row — most modern multimodal cancer trials
+    # qualify even when the experimental variable is a drug. Requiring the
+    # trial's TITLE to mention a surgical / radiation term narrows to
+    # trials whose study focus is the modality (e.g. "Sentinel Lymph Node
+    # Biopsy in...", "Omission of Radiation in..."). For chemo / targeted
+    # we don't title-filter — chemo titles typically name the agent
+    # (paclitaxel, docetaxel) rather than "chemotherapy" itself, so a title
+    # filter would over-narrow and cut legitimate trials.
+    if modality_key == "surgery":
+        titles_clause = _surgery_query_titles(condition_norm)
+        if titles_clause:
+            base_params["query.titles"] = titles_clause
+    elif modality_key == "radiation":
+        base_params["query.titles"] = _quoted_or_clause(_RADIATION_TITLE_TERMS)
+
+    # Stage soft-hint applied to chemo / targeted / per-drug only. Surgery
+    # is overwhelmingly an early-stage modality (Stage I-III) — adding
+    # `query.term=Stage IV` to a surgery search zeros out the result for
+    # advanced-stage patients, which is misleading: it implies "no
+    # surgical evidence for this patient" when the real story is "surgery
+    # isn't a primary modality at this stage." Better to surface
+    # subtype-relevant surgical trials regardless of stage and let the
+    # synthesis prompt's section 6 frame the staging implications.
     stage_norm = (stage or "").strip()
-    if stage_norm:
+    if stage_norm and modality_key != "surgery":
         base_params["query.term"] = stage_norm
 
     # Paginate so the sort picks from a deeper pool than CT.gov's default
