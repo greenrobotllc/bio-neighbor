@@ -254,18 +254,101 @@ Public API: fetch_modality_trials(condition, modality, max_trials=10)
 # interventions and the term itself disambiguates. For surgery and radiation
 # we use CT.gov's field-expression syntax `AREA[InterventionType]<TYPE>`
 # which constrains to trials whose interventions are tagged with that type
-# (PROCEDURE / RADIATION). Without this filter, `query.intr=surgery` swept
-# in every neoadjuvant chemo trial that listed surgery as one step among
-# drug arms — the multi-arm-results-first sort then preferred those
-# drug-comparison trials over actual surgical-technique trials, and the
-# LLM mini-summary ended up describing chemo. Field expression docs:
-# https://clinicaltrials.gov/data-api/api
+# (PROCEDURE / RADIATION). The PROCEDURE filter alone still surfaces
+# drug-arm-comparison trials that list surgery as one step (most modern
+# breast / colon trials are multimodal), so for surgery we additionally
+# require the intervention name to match a cancer-type-specific surgical
+# term (mastectomy, lobectomy, etc.) when one of the per-cancer term lists
+# applies. See `_surgical_terms_for_condition` below.
+# Field expression docs: https://clinicaltrials.gov/data-api/api
 _MODALITY_INTERVENTION_TERMS = {
     "radiation": "AREA[InterventionType]RADIATION",
     "surgery": "AREA[InterventionType]PROCEDURE",
     "chemotherapy": "chemotherapy",
     "targeted": "targeted therapy",
 }
+
+# Per-cancer-type surgical procedure names. Used to refine the surgery-modality
+# CT.gov query from `AREA[InterventionType]PROCEDURE` (which matches any
+# procedure-tagged trial — too broad, includes biopsies / port placements /
+# imaging-guided procedures alongside drug-arm trials) to the same filter
+# AND a name-match against the cancer-specific surgical vocabulary.
+#
+# Keys are lowercase substrings matched against the CT.gov condition string
+# (e.g. "Breast Neoplasms", "Adenocarcinoma of Lung"). First-substring-match
+# wins; cancers without an entry fall back to the unrestricted PROCEDURE
+# filter so we don't silently drop surgical signal for cancers we haven't
+# enumerated. Hand-coded for now; #75 tracks migrating these to PDQ-derived
+# extraction so the lists update with NCI rather than this file.
+_SURGICAL_TERMS_BY_CANCER = {
+    "breast": [
+        "mastectomy", "lumpectomy",
+        "sentinel lymph node biopsy", "axillary lymph node dissection",
+        "breast-conserving surgery",
+    ],
+    "lung": [
+        "lobectomy", "pneumonectomy", "wedge resection", "segmentectomy",
+        "VATS",
+    ],
+    "melanoma": [
+        "wide local excision", "sentinel lymph node biopsy", "lymphadenectomy",
+    ],
+    "colorectal": [
+        "colectomy", "hemicolectomy", "proctectomy",
+        "low anterior resection", "abdominoperineal resection",
+        "total mesorectal excision",
+    ],
+    "colon": ["colectomy", "hemicolectomy"],
+    "rectal": ["proctectomy", "low anterior resection", "abdominoperineal resection"],
+    "pancrea": [  # matches "pancreatic", "pancreas"
+        "whipple", "pancreaticoduodenectomy", "distal pancreatectomy",
+        "total pancreatectomy",
+    ],
+    "renal": ["nephrectomy", "partial nephrectomy", "radical nephrectomy"],
+    "kidney": ["nephrectomy", "partial nephrectomy"],
+    "prostate": ["prostatectomy", "radical prostatectomy"],
+    "ovarian": [
+        "hysterectomy", "salpingo-oophorectomy", "omentectomy", "debulking",
+        "cytoreductive surgery",
+    ],
+    "bladder": [
+        "cystectomy", "radical cystectomy", "transurethral resection", "TURBT",
+    ],
+    "gastric": ["gastrectomy", "partial gastrectomy", "total gastrectomy"],
+    "stomach": ["gastrectomy"],
+    "hepatocellular": ["hepatectomy", "liver resection", "partial hepatectomy"],
+    "liver": ["hepatectomy", "liver resection"],
+    "glioma": ["craniotomy", "tumor resection", "tumour resection"],
+    "brain": ["craniotomy", "tumor resection"],
+}
+
+
+def _surgical_terms_for_condition(condition: str) -> Optional[List[str]]:
+    """Return the per-cancer surgical-term list when the supplied condition
+    matches a cancer type we've enumerated. None means 'fall back to the
+    unrestricted PROCEDURE filter' — used both for cancers we haven't
+    mapped (heme malignancies don't get surgery as a primary modality
+    anyway) and for unrecognised condition strings."""
+    cond = (condition or "").lower()
+    for key, terms in _SURGICAL_TERMS_BY_CANCER.items():
+        if key in cond:
+            return terms
+    return None
+
+
+def _surgery_query_intr(condition: str) -> str:
+    """Build the `query.intr` value for the surgery modality. When the
+    cancer type matches a known surgical-term list, combine the procedure
+    type filter with a name-OR clause; otherwise fall back to the type
+    filter alone."""
+    base = "AREA[InterventionType]PROCEDURE"
+    terms = _surgical_terms_for_condition(condition)
+    if not terms:
+        return base
+    # Multi-word terms need quotes so CT.gov treats them as phrases rather
+    # than four ANDed bare tokens.
+    quoted = [f'"{t}"' if " " in t else t for t in terms]
+    return f"{base} AND ({' OR '.join(quoted)})"
 
 # Pagination knobs for the modality search. Surveying multiple pages lets the
 # multi-arm/has-results sort pick from a deeper pool than a single 20-row page
@@ -303,6 +386,13 @@ def fetch_modality_trials(
     # (trials[:max_trials]) is well-defined.
     if not isinstance(max_trials, int) or max_trials <= 0:
         return []
+
+    # Surgery modality: refine the generic PROCEDURE filter with cancer-
+    # type-specific procedure names when we have a list for this cancer.
+    # Falls back to the unrestricted filter for cancers we haven't
+    # enumerated (mostly heme — surgery isn't primary for those anyway).
+    if modality_key == "surgery":
+        intervention = _surgery_query_intr(condition_norm)
 
     base_params = {
         "query.cond": condition_norm,

@@ -609,7 +609,11 @@ def _step_rendering(state: str, detail: Optional[str]):
     if s == "running":
         return ("step-running", "running", None)
     if s == "done":
-        return ("step-done", "done", None)
+        # The "done" state may carry an informational detail
+        # (e.g. "No interactions among prescribed drugs") that explains a
+        # clean-run-no-findings outcome. Render it so the audit pipeline
+        # log doesn't look mute when nothing surfaced.
+        return ("step-done", "done", detail)
     if s == "skipped":
         return ("step-skipped", "skipped", detail)
     if s == "failed":

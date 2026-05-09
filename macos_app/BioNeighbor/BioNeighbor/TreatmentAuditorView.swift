@@ -982,16 +982,30 @@ struct TreatmentAuditorView: View {
     /// indexing into has been reset by a fresh run).
     @MainActor
     @discardableResult
-    private func appendStep(runID: UUID, label: String, state: AuditStep.State) -> Int? {
+    private func appendStep(
+        runID: UUID,
+        label: String,
+        state: AuditStep.State,
+        detail: String? = nil
+    ) -> Int? {
         guard isActiveRun(runID) else { return nil }
-        auditSteps.append(AuditStep(label: label, state: state))
+        auditSteps.append(AuditStep(label: label, state: state, detail: detail))
         return auditSteps.count - 1
     }
 
     @MainActor
-    private func updateStep(runID: UUID, at index: Int, state: AuditStep.State) {
+    private func updateStep(
+        runID: UUID,
+        at index: Int,
+        state: AuditStep.State,
+        detail: String? = nil
+    ) {
         guard isActiveRun(runID), auditSteps.indices.contains(index) else { return }
-        auditSteps[index] = AuditStep(label: auditSteps[index].label, state: state)
+        auditSteps[index] = AuditStep(
+            label: auditSteps[index].label,
+            state: state,
+            detail: detail
+        )
     }
 
     /// Runs an async fetch as one progress-tracked step. `skipReason`, when
@@ -1163,13 +1177,12 @@ struct TreatmentAuditorView: View {
         self.drugMergeNotes = notes
         if let i = stepIndex {
             let merged = drugs.count - deduped.count
-            let state: AuditStep.State
-            if merged > 0 {
-                state = .done
-            } else {
-                state = .skipped("No duplicates found")
-            }
-            updateStep(runID: runID, at: i, state: state)
+            // The dedupe always runs successfully against RxNorm; whether
+            // any pairs collapsed is informational, not a "skipped run."
+            let detail = merged > 0
+                ? "\(merged) duplicate\(merged == 1 ? "" : "s") collapsed"
+                : "No duplicates found"
+            updateStep(runID: runID, at: i, state: .done, detail: detail)
         }
         return deduped
     }
@@ -1217,15 +1230,22 @@ struct TreatmentAuditorView: View {
         self.drugInteractionDataAvailable = outcome.drugbankLoaded
 
         if let i = stepIndex {
-            let state: AuditStep.State
+            // .skipped is reserved for "couldn't run this check"; a clean
+            // run with no findings is .done with an explanatory detail so
+            // the LLM prompt and the user-facing pipeline log don't read
+            // as if we never checked.
             if !outcome.drugbankLoaded {
-                state = .skipped("DDInter not loaded")
-            } else if outcome.interactions.isEmpty {
-                state = .skipped("No interactions among prescribed drugs")
-            } else {
-                state = .done
+                updateStep(runID: runID, at: i, state: .skipped("DDInter not loaded"))
+                return
             }
-            updateStep(runID: runID, at: i, state: state)
+            if outcome.interactions.isEmpty {
+                updateStep(
+                    runID: runID, at: i, state: .done,
+                    detail: "No interactions among prescribed drugs"
+                )
+                return
+            }
+            updateStep(runID: runID, at: i, state: .done)
         }
     }
 
@@ -1267,18 +1287,25 @@ struct TreatmentAuditorView: View {
         self.targetOverlaps = outcome.overlaps
 
         if let i = stepIndex {
-            let state: AuditStep.State
+            // Genuinely-skipped (no ChEMBL target data at all) gets the
+            // gray .skipped icon; clean run with no overlap is .done with
+            // an informational detail.
             if outcome.overlaps.isEmpty {
                 let coverage = outcome.targetsByDrug.filter { !$0.targets.isEmpty }.count
                 if coverage == 0 {
-                    state = .skipped("No target data found in ChEMBL for these drugs")
+                    updateStep(
+                        runID: runID, at: i,
+                        state: .skipped("No target data found in ChEMBL for these drugs")
+                    )
                 } else {
-                    state = .skipped("No target overlap among prescribed drugs")
+                    updateStep(
+                        runID: runID, at: i, state: .done,
+                        detail: "No target overlap among prescribed drugs"
+                    )
                 }
             } else {
-                state = .done
+                updateStep(runID: runID, at: i, state: .done)
             }
-            updateStep(runID: runID, at: i, state: state)
         }
     }
 
@@ -1324,13 +1351,14 @@ struct TreatmentAuditorView: View {
 
         if let i = stepIndex {
             let coverage = outcome.perDrug.filter { !$0.topEvents.isEmpty }.count
-            let state: AuditStep.State
             if coverage == 0 {
-                state = .skipped("No FAERS reports for these drugs")
+                updateStep(
+                    runID: runID, at: i, state: .done,
+                    detail: "No FAERS reports for these drugs"
+                )
             } else {
-                state = .done
+                updateStep(runID: runID, at: i, state: .done)
             }
-            updateStep(runID: runID, at: i, state: state)
         }
     }
 
@@ -1383,16 +1411,17 @@ struct TreatmentAuditorView: View {
                     condition: nil,
                     trials: outcome.trials
                 )
-                let state: AuditStep.State
-                if let err = outcome.error {
-                    state = .failed(err.localizedDescription)
-                } else if outcome.trials.isEmpty {
-                    state = .skipped("No \(outcome.modality) trials returned")
-                } else {
-                    state = .done
-                }
                 if let stepIndex = stepIndices[i] {
-                    updateStep(runID: runID, at: stepIndex, state: state)
+                    if let err = outcome.error {
+                        updateStep(runID: runID, at: stepIndex, state: .failed(err.localizedDescription))
+                    } else if outcome.trials.isEmpty {
+                        updateStep(
+                            runID: runID, at: stepIndex, state: .done,
+                            detail: "No \(outcome.modality) trials returned"
+                        )
+                    } else {
+                        updateStep(runID: runID, at: stepIndex, state: .done)
+                    }
                 }
             }
             return results.compactMap { $0 }
@@ -1508,19 +1537,23 @@ struct TreatmentAuditorView: View {
         let nonEmptyCount = outcomes.filter { !$0.drugTrials.trials.isEmpty }.count
 
         if let stepIndex = stepIndex {
-            let state: AuditStep.State
             if !failed.isEmpty {
                 let drugList = failed.map(\.0).joined(separator: ", ")
                 let firstMessage = failed[0].1.localizedDescription
-                state = .failed(
-                    "Trial fetch failed for \(failed.count) of \(attemptedCount) drug\(attemptedCount == 1 ? "" : "s") (\(drugList)): \(firstMessage)"
+                updateStep(
+                    runID: runID, at: stepIndex,
+                    state: .failed(
+                        "Trial fetch failed for \(failed.count) of \(attemptedCount) drug\(attemptedCount == 1 ? "" : "s") (\(drugList)): \(firstMessage)"
+                    )
                 )
             } else if nonEmptyCount == 0 {
-                state = .skipped("No trials returned for any prescribed drug")
+                updateStep(
+                    runID: runID, at: stepIndex, state: .done,
+                    detail: "No trials returned for any prescribed drug"
+                )
             } else {
-                state = .done
+                updateStep(runID: runID, at: stepIndex, state: .done)
             }
-            updateStep(runID: runID, at: stepIndex, state: state)
         }
 
         return outcomes.map(\.drugTrials)
@@ -1596,6 +1629,14 @@ struct AuditStep: Identifiable, Hashable {
     let id = UUID()
     let label: String
     let state: State
+    /// Optional informational note paired with the state. Used primarily
+    /// with `.done` to surface "ran cleanly, here's what happened" details
+    /// (e.g. "No duplicates found", "No interactions among prescribed
+    /// drugs") without re-using `.skipped` for a step that actually ran.
+    /// `.skipped(reason)` and `.failed(message)` keep their associated
+    /// values for backward compatibility; this field augments them when
+    /// also set.
+    var detail: String? = nil
 
     enum State: Hashable {
         case running
@@ -1616,7 +1657,7 @@ private struct AuditStepList: View {
                     Text(step.label)
                         .appFont(.caption)
                         .foregroundColor(.primary)
-                    if let detail = stateDetail(step.state) {
+                    if let detail = renderedDetail(step) {
                         Text("— \(detail)")
                             .appFont(.caption2)
                             .foregroundColor(.secondary)
@@ -1649,8 +1690,13 @@ private struct AuditStepList: View {
         }
     }
 
-    private func stateDetail(_ state: AuditStep.State) -> String? {
-        switch state {
+    /// Pull the human-readable note for a step from either the explicit
+    /// `detail` field (preferred — used with `.done` for "ran cleanly,
+    /// here's what happened" annotations) or fall back to the
+    /// associated value on `.skipped` / `.failed`.
+    private func renderedDetail(_ step: AuditStep) -> String? {
+        if let detail = step.detail, !detail.isEmpty { return detail }
+        switch step.state {
         case .skipped(let reason): return reason
         case .failed(let message): return message
         case .running, .done: return nil

@@ -320,19 +320,24 @@ private struct WireStep: Encodable {
 
     init(step: AuditStep) {
         self.label = step.label
+        // The explicit `step.detail` field wins when set — used with .done
+        // for "ran cleanly, here's what happened" annotations. Falls back
+        // to the associated value on .skipped / .failed when no explicit
+        // detail was supplied. Mirrors `AuditStepList.renderedDetail(_:)`.
+        let preferred = step.detail?.isEmpty == false ? step.detail : nil
         switch step.state {
         case .running:
             self.state = "running"
-            self.detail = nil
+            self.detail = preferred
         case .done:
             self.state = "done"
-            self.detail = nil
+            self.detail = preferred
         case .skipped(let reason):
             self.state = "skipped"
-            self.detail = reason
+            self.detail = preferred ?? reason
         case .failed(let message):
             self.state = "failed"
-            self.detail = message
+            self.detail = preferred ?? message
         }
     }
 }
