@@ -4213,11 +4213,8 @@ def v2_treatment_auditor_report_pdf():
         try:
             html = build_html(body)
             pdf_bytes = render_pdf(html)
-        except ValueError as e:
-            # build_html raises ValueError for missing-required-field cases.
-            # The string is constructed from literal text, not user input,
-            # so it is safe to return.
-            return jsonify({'success': False, 'error': str(e)}), 400
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid report payload: missing required fields.'}), 400
 
         filename = default_filename(body)
         return Response(
