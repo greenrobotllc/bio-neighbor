@@ -4206,8 +4206,30 @@ def v2_treatment_auditor_report_pdf():
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
-        if not isinstance(body.get('plan'), dict):
+        plan = body.get('plan')
+        if not isinstance(plan, dict):
             return jsonify({'success': False, 'error': 'Request body must include a "plan" object.'}), 400
+
+        # Shape-validate the collections build_html iterates so a mistyped
+        # client payload (e.g. drugs=<single object> or steps=<string>)
+        # produces a 400 with a clear field name rather than a generic 500
+        # from the iteration TypeError. Literal field-name strings only —
+        # no body content flows into the response, matching the CodeQL
+        # constraints noted on the drug-interactions route above.
+        def _err(msg):
+            return jsonify({'success': False, 'error': msg}), 400
+
+        for field in ('drugs', 'symptoms'):
+            v = plan.get(field)
+            if v is not None and not isinstance(v, list):
+                return _err(f'Field "plan.{field}" must be an array.')
+        for field in ('steps', 'source_summaries'):
+            v = body.get(field)
+            if v is not None and not isinstance(v, list):
+                return _err(f'Field "{field}" must be an array.')
+        pdq = body.get('pdq_summary')
+        if pdq is not None and not isinstance(pdq, dict):
+            return _err('Field "pdq_summary" must be an object.')
 
         from treatment_auditor_report import build_html, render_pdf, default_filename
         try:

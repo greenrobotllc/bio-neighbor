@@ -105,7 +105,7 @@ Without this step the audit still runs, but the interactions section gracefully 
 
 ## Architecture
 
-BioNeighbor separates **frontend** and **backend logic** while remaining fully offline. There are two frontends:
+BioNeighbor separates **frontend** and **backend logic** while remaining fully offline. There are two frontends and one backend:
 
 1. **GUI (macOS only):** SwiftUI application under `macos_app/`.
    - Allows users to browse molecules, diseases, and drugs
