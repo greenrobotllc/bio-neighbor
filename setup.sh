@@ -13,7 +13,15 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # WeasyPrint (treatment-auditor PDF reports) needs Pango/cairo from Homebrew.
-if command -v brew &> /dev/null; then
+# This script is macOS-specific; bail out clearly rather than silently
+# continuing without Pango (PDF rendering would later fail with an opaque
+# library-load error otherwise).
+if [[ "$OSTYPE" == darwin* ]]; then
+    if ! command -v brew &> /dev/null; then
+        echo "❌ Homebrew is required on macOS for Pango/cairo (WeasyPrint PDF rendering)."
+        echo "   Install Homebrew from https://brew.sh and re-run this script."
+        exit 1
+    fi
     if ! brew list pango &> /dev/null; then
         echo "📦 Installing Pango/cairo for PDF rendering (WeasyPrint)..."
         brew install pango

@@ -49,7 +49,11 @@ The drug-drug interaction section of the Treatment Auditor is backed by **DDInte
 **To load:**
 
 ```bash
+# macOS / Linux
 source venv/bin/activate
+# Windows (PowerShell)
+.\venv\Scripts\Activate.ps1
+
 python backend/load_ddinter_interactions.py        # downloads + ingests into SQLite
 python backend/load_ddinter_interactions.py --refresh   # force re-download
 ```

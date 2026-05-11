@@ -1807,7 +1807,13 @@ private struct DrugInteractionsCallout: View {
     }
 
     private var hasSevere: Bool {
-        interactions.contains { $0.severity?.lowercased() == "severe" }
+        // DDInter labels its top severity tier "Major"; some legacy fixtures
+        // use "Severe". Treat both as the top-risk band so the red callout
+        // styling actually applies to real DDInter rows.
+        interactions.contains {
+            let sev = $0.severity?.lowercased()
+            return sev == "severe" || sev == "major"
+        }
     }
 
     private var calloutColor: Color {
@@ -1822,7 +1828,10 @@ private struct DrugInteractionsCallout: View {
         if interactions.isEmpty {
             return "Drug-drug interactions: none found"
         }
-        let severeCount = interactions.filter { $0.severity?.lowercased() == "severe" }.count
+        let severeCount = interactions.filter {
+            let sev = $0.severity?.lowercased()
+            return sev == "severe" || sev == "major"
+        }.count
         if severeCount > 0 {
             return "Drug-drug interactions (\(interactions.count) found, \(severeCount) severe)"
         }
@@ -1857,7 +1866,7 @@ private struct DrugInteractionsCallout: View {
 
     private func severityColor(_ severity: String) -> Color {
         switch severity.lowercased() {
-        case "severe": return .red
+        case "severe", "major": return .red
         case "moderate": return .orange
         case "minor": return .yellow
         default: return .secondary

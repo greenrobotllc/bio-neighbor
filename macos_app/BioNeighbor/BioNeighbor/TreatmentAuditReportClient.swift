@@ -116,6 +116,30 @@ enum TreatmentAuditReportClient {
                 userInfo: [NSLocalizedDescriptionKey: "PDF render failed: \(message)"]
             )
         }
+        // Defensive: a 200 from a misconfigured proxy (or a backend regression
+        // that returns JSON with a 200) would otherwise be written verbatim
+        // to the user's chosen .pdf path. Confirm by Content-Type or PDF magic
+        // before persisting.
+        let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        let pdfMagic: [UInt8] = [0x25, 0x50, 0x44, 0x46, 0x2D] // "%PDF-"
+        let hasPDFMagic = data.count >= pdfMagic.count
+            && [UInt8](data.prefix(pdfMagic.count)) == pdfMagic
+        if !contentType.contains("application/pdf") && !hasPDFMagic {
+            let message: String
+            if let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = parsed["error"] as? String {
+                message = err
+            } else {
+                let snippet = String(data: data.prefix(200), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                message = snippet.isEmpty ? "Backend returned a non-PDF response." : "Backend returned non-PDF content: \(snippet)"
+            }
+            throw NSError(
+                domain: "TreatmentAuditReportClient",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "PDF render failed: \(message)"]
+            )
+        }
         try data.write(to: outputURL, options: .atomic)
     }
 

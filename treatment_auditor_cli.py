@@ -564,10 +564,17 @@ def _step_drug_interactions(backend: str, drugs: List[Dict[str, Any]], progress:
         progress.end("failed", err)
         return {"ok": False, "error": err}
     interactions = body.get("interactions") or []
-    progress.end("ok", f"{len(interactions)} interactions")
+    drugbank_loaded = bool(body.get("drugbank_loaded"))
+    if drugbank_loaded:
+        progress.end("ok", f"{len(interactions)} interactions")
+    else:
+        # Without DDInter loaded the response is "data unavailable", not
+        # "no interactions found". Logging "0 interactions" would conflate
+        # the two for the pipeline log readers.
+        progress.end("skipped", "DDInter not loaded")
     return {
         "ok": True,
-        "drugbank_loaded": bool(body.get("drugbank_loaded")),
+        "drugbank_loaded": drugbank_loaded,
         "matched": body.get("matched") or [],
         "interactions": interactions,
         "unmatched": body.get("unmatched") or [],
@@ -1463,6 +1470,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             condition=cancer_condition,
         )
 
+    # Synthesis prompts and the report payload should reflect the deduped
+    # drug list (after RxNorm collapsed brand→generic duplicates), otherwise
+    # the LLM sees Herceptin AND Trastuzumab listed separately even though
+    # they collapse to one ingredient. The user-visible audit trail of what
+    # was merged is preserved via merge_notes in the report payload.
+    effective_plan = dict(plan)
+    effective_plan["drugs"] = list(deduped)
+
     result: Dict[str, Any] = {"plan": plan, "steps": steps}
 
     source_summaries: Optional[List[Dict[str, str]]] = None
@@ -1472,11 +1487,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Multi-pass synthesis needs the wire-format payload (PDQ + flattened
         # modality / drug trials) to drive its per-source pass, so we build
         # the payload once now and reuse it for the optional --pdf POST.
-        payload_for_synth = _build_report_payload(plan, steps, progress.entries)
+        payload_for_synth = _build_report_payload(effective_plan, steps, progress.entries)
         source_summaries, final_audit, synthesis_error = _run_synthesis_pipeline(
             args.ollama_endpoint,
             args.ollama_model,
-            plan,
+            effective_plan,
             payload_for_synth,
             progress,
         )
@@ -1505,7 +1520,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         progress.start("render PDF")
         try:
             payload = _build_report_payload(
-                plan,
+                effective_plan,
                 steps,
                 progress.entries,
                 source_summaries=source_summaries,

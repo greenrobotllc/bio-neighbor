@@ -732,7 +732,10 @@ def _references_section(report: Dict[str, Any]) -> str:
             "</li>"
         )
 
-    if report.get("drug_interactions"):
+    # Mirror _interactions_block: DDInter is cited both when interactions are
+    # rendered AND when the "data unavailable" hint is shown (which itself
+    # references DDInter).
+    if report.get("drug_interactions") or not report.get("drug_interaction_data_available", True):
         entries.append(
             "<li><strong>DDInter drug-drug interactions:</strong> "
             '<a href="https://ddinter.scbdd.com">https://ddinter.scbdd.com</a> '
@@ -744,7 +747,9 @@ def _references_section(report: Dict[str, Any]) -> str:
             '<a href="https://www.ebi.ac.uk/chembl/">https://www.ebi.ac.uk/chembl/</a> '
             "(<code>mechanism</code> + <code>target</code> resources).</li>"
         )
-    if report.get("faers_symptom_matches"):
+    # Mirror _faers_block: rendered when either symptom matches OR per-drug
+    # panels are present; cite FAERS in either case.
+    if report.get("faers_symptom_matches") or report.get("faers_panels"):
         entries.append(
             "<li><strong>OpenFDA FAERS adverse events:</strong> "
             '<a href="https://open.fda.gov/apis/drug/event/">https://open.fda.gov/apis/drug/event/</a></li>'

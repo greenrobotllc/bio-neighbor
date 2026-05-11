@@ -237,7 +237,11 @@ def fetch_nct_ids_for_drug(
         indications.extend(_fetch_indications_raw(parent_id) or [])
 
     if condition_keywords:
-        normalized_keywords = [k.lower() for k in condition_keywords if k]
+        normalized_keywords = [
+            stripped.lower()
+            for k in condition_keywords
+            if k and (stripped := k.strip())
+        ]
         if normalized_keywords:
             def _matches(ind: Dict) -> bool:
                 haystack = " ".join([

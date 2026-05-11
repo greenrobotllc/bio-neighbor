@@ -456,15 +456,17 @@ def fetch_modality_trials(
         base_params["query.titles"] = _quoted_or_clause(_RADIATION_TITLE_TERMS)
 
     # Stage soft-hint applied to chemo / targeted / per-drug only. Surgery
-    # is overwhelmingly an early-stage modality (Stage I-III) — adding
-    # `query.term=Stage IV` to a surgery search zeros out the result for
+    # and radiation are largely early-stage modalities — adding
+    # `query.term=Stage IV` to those searches zeros out the result for
     # advanced-stage patients, which is misleading: it implies "no
-    # surgical evidence for this patient" when the real story is "surgery
-    # isn't a primary modality at this stage." Better to surface
-    # subtype-relevant surgical trials regardless of stage and let the
-    # synthesis prompt's section 6 frame the staging implications.
+    # evidence for this patient" when the real story is "this modality
+    # isn't a primary at this stage." Better to surface subtype-relevant
+    # trials regardless of stage and let the synthesis prompt's section 6
+    # frame the staging implications. Drug/chemo/targeted searches do
+    # benefit from stage filtering since trial designs are typically
+    # stage-stratified for systemic therapies.
     stage_norm = (stage or "").strip()
-    if stage_norm and modality_key != "surgery":
+    if stage_norm and modality_key in {"chemotherapy", "targeted"}:
         base_params["query.term"] = stage_norm
 
     # Paginate so the sort picks from a deeper pool than CT.gov's default
