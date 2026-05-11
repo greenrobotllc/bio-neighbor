@@ -14,7 +14,18 @@ BioNeighbor also retains its original molecular-similarity engine (FAISS + RDKit
 
 ## Overview
 
-BioNeighbor is an open-source cancer-research toolkit centered on an **on-device AI Treatment Auditor**: describe a cancer treatment plan — disease/subtype, stage, prescribed drugs, scheduled treatments, symptoms — and the system runs a multi-pass audit pulling from NCI PDQ, ClinicalTrials.gov, RxNorm, DDInter (drug-drug interactions), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS, then synthesizes the findings via a local Ollama model and exports a printable PDF. The Auditor runs from either a SwiftUI **macOS GUI** or a **cross-platform Python CLI** (macOS, Linux, Windows); both produce identical reports. The project also retains its **original molecular-similarity engine** (FAISS + RDKit + ChEMBL) for exploring "neighbor" compounds — the collaborative-filtering-inspired feature the project takes its name from. Everything runs locally; nothing leaves your machine. Research tool only, not medical advice.  
+BioNeighbor is an open-source cancer-research toolkit centered on an **on-device AI Treatment Auditor**: describe a cancer treatment plan — disease/subtype, stage, prescribed drugs, scheduled treatments, symptoms — and the system runs a multi-pass audit across public medical data sources, synthesizes the findings via a local Ollama model, and exports a printable PDF.
+
+**Evidence sources:**
+
+- **NCI PDQ** — standard-of-care guideline text from cancer.gov
+- **ClinicalTrials.gov** — recruiting and completed trials, per-modality and per-drug
+- **RxNorm** — brand→generic name normalization
+- **DDInter** — pairwise drug-drug interactions (Major / Moderate / Minor)
+- **ChEMBL** — mechanism-of-action / target overlap between drugs
+- **openFDA FAERS** — post-market adverse-event reaction frequencies
+
+The Auditor runs from either a SwiftUI **macOS GUI** or a **cross-platform Python CLI** (macOS, Linux, Windows); both produce identical reports. The project also retains its **original molecular-similarity engine** (FAISS + RDKit + ChEMBL) for exploring "neighbor" compounds — the collaborative-filtering-inspired feature the project takes its name from. Everything runs locally; nothing leaves your machine. Research tool only, not medical advice.  
 
 BioNeighbor combines:
 - Public biochemical datasets (ChEMBL, BindingDB)  
