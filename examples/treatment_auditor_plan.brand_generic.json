@@ -1,0 +1,20 @@
+{
+  "cancer_type": "Breast",
+  "subtype": "HER2+",
+  "stage": "Stage II",
+  "stage_detail": "T2N1M0",
+  "drugs": [
+    {"name": "Herceptin"},
+    {"name": "trastuzumab"},
+    {"name": "paclitaxel"}
+  ],
+  "treatments": [
+    "Lumpectomy",
+    "Adjuvant chemotherapy"
+  ],
+  "symptoms": [
+    {"text": "neuropathy", "severity": "moderate"},
+    {"text": "fatigue", "severity": "mild"},
+    {"text": "nausea", "severity": "mild"}
+  ]
+}
