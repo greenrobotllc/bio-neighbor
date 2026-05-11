@@ -9,7 +9,7 @@ import sys
 import os
 import re
 from typing import Dict, Any, List, Optional
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 logger = logging.getLogger(__name__)
@@ -3407,13 +3407,30 @@ def v2_drug_trials(chembl_id: str):
     values per arm — surfaces the regimen-vs-regimen comparisons users care
     about.
 
+    Optional `condition` query param (comma-separated keywords) restricts
+    the ChEMBL drug_indication walk to rows whose mesh_heading / efo_term
+    contains any of the keywords. Used by the Treatment Auditor to filter
+    out off-subtype trials (e.g. only breast-cancer trials for a
+    HER2+ patient on ribociclib instead of also pulling in the BRAF-mutant
+    melanoma combo trials ribociclib has been studied in). When the filter
+    yields zero indications it falls back to unfiltered.
+
     Trials with multi-arm reported outcomes are returned first.
     Slow path: a fresh fetch hits ClinicalTrials.gov (one request per trial).
     """
     try:
         from clinical_trials import fetch_trials_for_drug
         max_trials = _int_arg('limit', default=15, lo=1, hi=30)
-        trials = fetch_trials_for_drug(chembl_id, max_trials=max_trials)
+        condition_raw = (request.args.get('condition') or '').strip()
+        condition_keywords = (
+            [tok.strip() for tok in condition_raw.split(',') if tok.strip()]
+            if condition_raw else None
+        )
+        trials = fetch_trials_for_drug(
+            chembl_id,
+            max_trials=max_trials,
+            condition_keywords=condition_keywords,
+        )
         return jsonify({
             'success': True,
             'chembl_id': chembl_id,
@@ -3814,6 +3831,8 @@ def v2_subtype_modality_trials(subtype_id: int):
     - modality (string, required): one of "radiation", "surgery",
       "chemotherapy", "targeted".
     - limit (int, optional): max trials to return (default 8, hi 20).
+    - stage (string, optional): biases CT.gov ranking toward stage-relevant
+      trials (e.g. "Stage IV", "metastatic"). Soft hint, not a hard filter.
     """
     try:
         modality = request.args.get('modality', '', type=str).strip().lower()
@@ -3824,6 +3843,7 @@ def v2_subtype_modality_trials(subtype_id: int):
             }), 400
 
         limit = _int_arg('limit', default=8, lo=1, hi=20)
+        stage = (request.args.get('stage') or '').strip() or None
 
         subtype = _load_subtype_for_lookup(subtype_id)
         if subtype is None:
@@ -3837,12 +3857,18 @@ def v2_subtype_modality_trials(subtype_id: int):
             }), 422
 
         from clinical_trials import fetch_modality_trials
-        trials = fetch_modality_trials(condition=condition, modality=modality, max_trials=limit)
+        trials = fetch_modality_trials(
+            condition=condition,
+            modality=modality,
+            max_trials=limit,
+            stage=stage,
+        )
         return jsonify({
             'success': True,
             'subtype_id': subtype_id,
             'condition': condition,
             'modality': modality,
+            'stage': stage,
             'trials': trials,
             'disclaimer': 'Research tool only - not for medical diagnosis or treatment',
         })
@@ -4005,15 +4031,18 @@ def v2_treatment_auditor_target_overlap():
 @app.route('/cancer-research/v2/treatment-auditor/drug-interactions', methods=['POST'])
 def v2_treatment_auditor_drug_interactions():
     """
-    Return pairwise DrugBank drug-drug interactions among the supplied
-    drug list (issue #47). Surfaced by the Treatment Auditor as a
-    deterministic safety callout — factual rows from DrugBank, not
-    LLM-inferred.
+    Return pairwise drug-drug interactions among the supplied drug list
+    (issue #47). Surfaced by the Treatment Auditor as a deterministic
+    safety callout — factual rows from DDInter, not LLM-inferred.
+
+    Backed by DDInter (https://ddinter.scbdd.com), CC BY-NC-SA 4.0. The
+    previous DrugBank backing was removed because DrugBank's terms forbid
+    using its data to "build products" without a commercial license.
 
     Request body (JSON):
         {
             "drugs": [
-                {"name": "warfarin", "chembl_id": "CHEMBL1464", "drugbank_id": "DB00682"},
+                {"name": "warfarin", "chembl_id": "CHEMBL1464"},
                 {"name": "aspirin",  "chembl_id": "CHEMBL25"}
             ]
         }
@@ -4021,20 +4050,23 @@ def v2_treatment_auditor_drug_interactions():
     Response:
         {
             "success": true,
-            "drugbank_loaded": true,
-            "matched": [{"input_name": "...", "drugbank_id": "...", "drugbank_name": "..."}],
+            "drugbank_loaded": true,           # legacy field name; means "DDI data available"
+            "data_source": "ddinter",
+            "matched":   [{"input_name": "...", "ddinter_id": "DDInter...", "ddinter_name": "..."}],
             "unmatched": ["..."],
             "interactions": [
                 {"drug_a_name": "...", "drug_b_name": "...",
-                 "drug_a_id": "DB...", "drug_b_id": "DB...",
-                 "description": "...", "severity": "severe|moderate|minor|null"}
+                 "drug_a_id": "DDInter...", "drug_b_id": "DDInter...",
+                 "severity": "major|moderate|minor|null",
+                 "description": null}
             ]
         }
 
-    When the DrugBank XML hasn't been loaded into the local
-    `drug_interactions` table, `drugbank_loaded` is false and the client
-    should render a "DrugBank XML not loaded" hint instead of an empty
-    "no interactions found" message — those are very different statements.
+    When DDInter hasn't been loaded into the local `drug_interactions`
+    table, `drugbank_loaded` is false and the client should render a
+    "data unavailable" hint instead of an empty "no interactions found"
+    message — those are very different statements. The field name is kept
+    for wire compatibility with previously-shipped clients.
     """
     try:
         body = request.get_json(silent=True)
@@ -4061,12 +4093,11 @@ def v2_treatment_auditor_drug_interactions():
             cleaned.append({
                 'name': name.strip(),
                 'chembl_id': _stripped_str_or_none(entry.get('chembl_id')),
-                'drugbank_id': _stripped_str_or_none(entry.get('drugbank_id')),
             })
         if not cleaned:
             return jsonify({'success': False, 'error': 'Provide at least one drug entry with a non-empty name string.'}), 400
 
-        from drugbank_interactions import get_pairwise_interactions
+        from ddinter_loader import get_pairwise_interactions
         result = get_pairwise_interactions(cleaned)
         return jsonify({
             'success': True,
@@ -4151,6 +4182,73 @@ def v2_treatment_auditor_normalize_drugs():
         })
     except Exception:
         logger.exception("v2 treatment-auditor normalize-drugs error")
+        return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
+
+
+@app.route('/cancer-research/v2/treatment-auditor/report.pdf', methods=['POST'])
+def v2_treatment_auditor_report_pdf():
+    """
+    Render a Treatment Auditor run as PDF (issue #67).
+
+    Replaces the in-Swift PDF builder so the macOS app and the Python CLI
+    share one source of truth for layout, copy, and styling. Both clients
+    POST a `ReportPayload` (the audit result they already produce) and
+    write the response bytes to disk.
+
+    Request body (JSON): see treatment_auditor_report.py for the full
+    schema. `plan` is required; every other section is optional and is
+    elided gracefully when absent.
+
+    Response: 200 application/pdf <binary>, or 400 JSON on validation
+    failure, or 500 JSON on unexpected error.
+    """
+    try:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({'success': False, 'error': 'Request body must be a JSON object.'}), 400
+        plan = body.get('plan')
+        if not isinstance(plan, dict):
+            return jsonify({'success': False, 'error': 'Request body must include a "plan" object.'}), 400
+
+        # Shape-validate the collections build_html iterates so a mistyped
+        # client payload (e.g. drugs=<single object> or steps=<string>)
+        # produces a 400 with a clear field name rather than a generic 500
+        # from the iteration TypeError. Literal field-name strings only —
+        # no body content flows into the response, matching the CodeQL
+        # constraints noted on the drug-interactions route above.
+        def _err(msg):
+            return jsonify({'success': False, 'error': msg}), 400
+
+        for field in ('drugs', 'symptoms'):
+            v = plan.get(field)
+            if v is not None and not isinstance(v, list):
+                return _err(f'Field "plan.{field}" must be an array.')
+        for field in ('steps', 'source_summaries'):
+            v = body.get(field)
+            if v is not None and not isinstance(v, list):
+                return _err(f'Field "{field}" must be an array.')
+        pdq = body.get('pdq_summary')
+        if pdq is not None and not isinstance(pdq, dict):
+            return _err('Field "pdq_summary" must be an object.')
+
+        from treatment_auditor_report import build_html, render_pdf, default_filename
+        try:
+            html = build_html(body)
+            pdf_bytes = render_pdf(html)
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid report payload: missing required fields.'}), 400
+
+        filename = default_filename(body)
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Cache-Control': 'no-store',
+            },
+        )
+    except Exception:
+        logger.exception("v2 treatment-auditor report.pdf error")
         return jsonify({'success': False, 'error': 'An internal error occurred'}), 500
 
 

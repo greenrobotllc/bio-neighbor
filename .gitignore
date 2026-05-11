@@ -77,6 +77,13 @@ data/progress/tasks.json
 backend/*.index
 backend/*.pkl
 
+# Third-party data caches — populated locally by loader scripts, never
+# redistributed. Anything inside `data/<source>_cache/` is the user's
+# own download under that source's license terms.
+data/ddinter_cache/
+data/drugbank_cache/
+data/*_cache/
+
 # Database backups (created by migrations, never tracked)
 *.bak
 *.db.bak

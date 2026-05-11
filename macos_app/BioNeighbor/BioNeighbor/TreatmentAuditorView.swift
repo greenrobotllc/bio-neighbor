@@ -77,10 +77,10 @@ struct TreatmentAuditorView: View {
     /// audit is dismissed or a new audit run starts.
     @State private var drugMergeNotes: [DrugMergeNote] = []
 
-    /// Result of the DrugBank pairwise drug-drug interaction lookup
+    /// Result of the DDInter pairwise drug-drug interaction lookup
     /// (issue #47). Drives a deterministic safety callout above the AI
-    /// output. `drugbankAvailable` distinguishes "no interactions found"
-    /// from "DrugBank XML wasn't loaded" — those need very different
+    /// output. `drugInteractionDataAvailable` distinguishes "no interactions
+    /// found" from "DDInter wasn't loaded" — those need very different
     /// UI treatment.
     @State private var drugInteractions: [DrugInteraction] = []
     @State private var drugInteractionUnmatched: [String] = []
@@ -146,7 +146,7 @@ struct TreatmentAuditorView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "info.circle")
                 .foregroundColor(.secondary)
-            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches), RxNorm (brand→generic dedupe), DrugBank (pairwise drug-drug interactions, when XML is loaded locally), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS (post-market adverse-event reporting). Tumor-mutation matching is a planned follow-up.")
+            Text("Research tool only. Not medical advice. Talk to your oncology team before changing any treatment. Sources: NCI PDQ standard-of-care text + ClinicalTrials.gov (per-drug trials and modality-specific searches), RxNorm (brand→generic dedupe), DDInter (pairwise drug-drug interactions, CC BY-NC-SA, loaded locally), ChEMBL (mechanism-of-action target overlap), and openFDA FAERS (post-market adverse-event reporting). Tumor-mutation matching is a planned follow-up.")
                 .appFont(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -729,9 +729,14 @@ struct TreatmentAuditorView: View {
             }
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
-            // 2. Modality trials (4 in parallel).
+            // 2. Modality trials (4 in parallel). The structured stage
+            // value (Stage I-IV / recurrent / metastatic) is forwarded as
+            // a soft hint so CT.gov ranks stage-relevant trials higher.
+            // Free-text stage_detail is intentionally NOT used as a query
+            // term (too noisy) but still flows into the synthesis prompt.
             let modalityTrials = await fetchModalityTrialsParallel(
                 subtypeId: subtype.id,
+                stage: stageSnapshot,
                 runID: runID
             )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
@@ -742,7 +747,7 @@ struct TreatmentAuditorView: View {
             let dedupedDrugs = await normalizeAndDedupeDrugs(drugsSnapshot, runID: runID)
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
-            // 2.6. DrugBank pairwise interactions among the deduped drugs
+            // 2.6. DDInter pairwise interactions among the deduped drugs
             //      (issue #47). Deterministic safety callout — runs in the
             //      foreground because it blocks the prompt assembly we
             //      want it included in.
@@ -766,8 +771,16 @@ struct TreatmentAuditorView: View {
             )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
-            // 3. Per-drug trials (cap 5).
-            let drugTrials = await fetchTrialsForDrugs(dedupedDrugs, runID: runID)
+            // 3. Per-drug trials (cap 5). Pass the patient's cancer type so
+            // the backend filters ChEMBL drug_indication rows to indications
+            // matching the relevant cancer — without this, ribociclib in a
+            // HER2+ breast-cancer audit would surface its BRAF-mutant
+            // melanoma trials instead of breast-cancer evidence.
+            let drugTrials = await fetchTrialsForDrugs(
+                dedupedDrugs,
+                cancerCondition: cancerType.displayName ?? cancerType.name,
+                runID: runID
+            )
             if Task.isCancelled || self.currentAuditRunID != runID { return }
 
             // 4. Build the plan that gets passed to the LLM helpers.
@@ -891,6 +904,11 @@ struct TreatmentAuditorView: View {
                     if Task.isCancelled || self.currentAuditRunID != runID { return }
                     self.auditOutput += chunk
                 }
+                // LaTeX strip after streaming completes — applying it to
+                // each chunk would risk splitting a `$\leftrightarrow$`
+                // token across chunks and missing it. UI re-renders the
+                // cleaned text once the stream is done.
+                self.auditOutput = stripLatexFromAuditText(self.auditOutput)
                 if let idx = synthesisStepIndex {
                     updateStep(runID: runID, at: idx, state: .done)
                 }
@@ -922,13 +940,15 @@ struct TreatmentAuditorView: View {
         }
     }
 
-    // MARK: - PDF export (issue #58)
+    // MARK: - PDF export (issues #58, #67)
 
     /// Save the most recent audit as a printable PDF. Opens NSSavePanel for
-    /// the destination, then renders via `TreatmentAuditReportExporter`. The
-    /// rendered PDF includes inputs, methodology (search terms, data sources,
-    /// multi-pass pipeline), per-source summaries, the final synthesis, and
-    /// references — enough for someone to repeat the audit by hand.
+    /// the destination, then renders via the backend's report.pdf endpoint
+    /// (issue #67 — the HTML+CSS builder lives in
+    /// backend/treatment_auditor_report.py so the Python CLI and the macOS
+    /// app produce visually identical output). Includes inputs, methodology,
+    /// per-source summaries, final synthesis, and references — enough for
+    /// someone to repeat the audit by hand.
     private func exportPDF(snapshot: CompletedAuditSnapshot) {
         pdfExportError = nil
 
@@ -937,7 +957,7 @@ struct TreatmentAuditorView: View {
         panel.message = "Choose where to save the printable PDF report."
         panel.allowedContentTypes = [UTType.pdf]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = TreatmentAuditReportExporter.defaultFilename(for: snapshot)
+        panel.nameFieldStringValue = TreatmentAuditReportClient.defaultFilename(for: snapshot)
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -945,7 +965,7 @@ struct TreatmentAuditorView: View {
         Task { @MainActor in
             defer { isExportingPDF = false }
             do {
-                try await TreatmentAuditReportExporter.exportPDF(snapshot: snapshot, to: url)
+                try await TreatmentAuditReportClient.renderPDF(snapshot: snapshot, to: url)
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } catch {
                 pdfExportError = "PDF export failed: \(error.localizedDescription)"
@@ -967,16 +987,30 @@ struct TreatmentAuditorView: View {
     /// indexing into has been reset by a fresh run).
     @MainActor
     @discardableResult
-    private func appendStep(runID: UUID, label: String, state: AuditStep.State) -> Int? {
+    private func appendStep(
+        runID: UUID,
+        label: String,
+        state: AuditStep.State,
+        detail: String? = nil
+    ) -> Int? {
         guard isActiveRun(runID) else { return nil }
-        auditSteps.append(AuditStep(label: label, state: state))
+        auditSteps.append(AuditStep(label: label, state: state, detail: detail))
         return auditSteps.count - 1
     }
 
     @MainActor
-    private func updateStep(runID: UUID, at index: Int, state: AuditStep.State) {
+    private func updateStep(
+        runID: UUID,
+        at index: Int,
+        state: AuditStep.State,
+        detail: String? = nil
+    ) {
         guard isActiveRun(runID), auditSteps.indices.contains(index) else { return }
-        auditSteps[index] = AuditStep(label: auditSteps[index].label, state: state)
+        auditSteps[index] = AuditStep(
+            label: auditSteps[index].label,
+            state: state,
+            detail: detail
+        )
     }
 
     /// Runs an async fetch as one progress-tracked step. `skipReason`, when
@@ -1041,7 +1075,9 @@ struct TreatmentAuditorView: View {
                 return nil
             }
             updateStep(runID: runID, at: index, state: .done)
-            return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            return stripLatexFromAuditText(
+                accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         } catch {
             updateStep(runID: runID, at: index, state: .failed(error.localizedDescription))
             return nil
@@ -1117,17 +1153,16 @@ struct TreatmentAuditorView: View {
         var notes: [DrugMergeNote] = []
         for key in groupOrder {
             let bucket = groups[key] ?? []
-            // Single-row groups pass through untouched.
-            if bucket.count == 1 {
-                deduped.append(bucket[0].0)
-                continue
-            }
-            // Multi-row group: pick a representative row. Prefer one with a
-            // ChEMBL ID so the downstream trial fetch still has a valid key.
+            guard !bucket.isEmpty else { continue }
+            // Pick a representative row. Prefer one with a ChEMBL ID so the
+            // downstream trial fetch still has a valid key.
             let representative = bucket.first(where: { $0.0.chemblId != nil })?.0 ?? bucket[0].0
-            // Display name: prefer the RxNorm ingredient name (the canonical
-            // generic) so the chip reads "Paclitaxel" instead of either of
-            // the original inputs.
+            // Display + downstream-lookup name: prefer the RxNorm ingredient
+            // name (canonical generic) so "Ribociclib Succinate" becomes
+            // "Ribociclib" — DDInter only carries the ingredient form, and
+            // openFDA returns ~340x more reports under the ingredient than
+            // under the salt. Falls back to the user's typed name when
+            // RxNorm didn't resolve.
             let ingredientName = bucket.compactMap { $0.1?.ingredientName }
                 .first(where: { !$0.isEmpty })
             let displayName = ingredientName?.capitalized ?? representative.name
@@ -1135,27 +1170,31 @@ struct TreatmentAuditorView: View {
                 name: displayName,
                 chemblId: representative.chemblId
             ))
-            notes.append(DrugMergeNote(
-                ingredientName: displayName,
-                originalNames: bucket.map { $0.0.name }
-            ))
+            // Only emit a merge note when the group actually collapsed
+            // multiple inputs — single-row groups don't need a "merged"
+            // callout in the UI even when their name was rewritten.
+            if bucket.count > 1 {
+                notes.append(DrugMergeNote(
+                    ingredientName: displayName,
+                    originalNames: bucket.map { $0.0.name }
+                ))
+            }
         }
 
         self.drugMergeNotes = notes
         if let i = stepIndex {
             let merged = drugs.count - deduped.count
-            let state: AuditStep.State
-            if merged > 0 {
-                state = .done
-            } else {
-                state = .skipped("No duplicates found")
-            }
-            updateStep(runID: runID, at: i, state: state)
+            // The dedupe always runs successfully against RxNorm; whether
+            // any pairs collapsed is informational, not a "skipped run."
+            let detail = merged > 0
+                ? "\(merged) duplicate\(merged == 1 ? "" : "s") collapsed"
+                : "No duplicates found"
+            updateStep(runID: runID, at: i, state: .done, detail: detail)
         }
         return deduped
     }
 
-    /// Fetches pairwise DrugBank drug-drug interactions for the deduped
+    /// Fetches pairwise DDInter drug-drug interactions for the deduped
     /// drug list (issue #47) and stashes the result in `drugInteractions`
     /// for the UI callout + the LLM prompt context. Best-effort: on
     /// failure we mark the step `.failed` but the audit keeps running.
@@ -1170,12 +1209,12 @@ struct TreatmentAuditorView: View {
 
         let stepIndex = appendStep(
             runID: runID,
-            label: "Checking pairwise drug interactions (DrugBank)",
+            label: "Checking pairwise drug interactions (DDInter)",
             state: .running
         )
 
-        let payload: [(name: String, chemblId: String?, drugbankId: String?)] = drugs.map {
-            ($0.name, $0.chemblId, nil)
+        let payload: [(name: String, chemblId: String?)] = drugs.map {
+            ($0.name, $0.chemblId)
         }
 
         let outcome: BackendService.DrugInteractionsOutcome
@@ -1198,15 +1237,22 @@ struct TreatmentAuditorView: View {
         self.drugInteractionDataAvailable = outcome.drugbankLoaded
 
         if let i = stepIndex {
-            let state: AuditStep.State
+            // .skipped is reserved for "couldn't run this check"; a clean
+            // run with no findings is .done with an explanatory detail so
+            // the LLM prompt and the user-facing pipeline log don't read
+            // as if we never checked.
             if !outcome.drugbankLoaded {
-                state = .skipped("DrugBank XML not loaded")
-            } else if outcome.interactions.isEmpty {
-                state = .skipped("No interactions among prescribed drugs")
-            } else {
-                state = .done
+                updateStep(runID: runID, at: i, state: .skipped("DDInter not loaded"))
+                return
             }
-            updateStep(runID: runID, at: i, state: state)
+            if outcome.interactions.isEmpty {
+                updateStep(
+                    runID: runID, at: i, state: .done,
+                    detail: "No interactions among prescribed drugs"
+                )
+                return
+            }
+            updateStep(runID: runID, at: i, state: .done)
         }
     }
 
@@ -1248,18 +1294,25 @@ struct TreatmentAuditorView: View {
         self.targetOverlaps = outcome.overlaps
 
         if let i = stepIndex {
-            let state: AuditStep.State
+            // Genuinely-skipped (no ChEMBL target data at all) gets the
+            // gray .skipped icon; clean run with no overlap is .done with
+            // an informational detail.
             if outcome.overlaps.isEmpty {
                 let coverage = outcome.targetsByDrug.filter { !$0.targets.isEmpty }.count
                 if coverage == 0 {
-                    state = .skipped("No target data found in ChEMBL for these drugs")
+                    updateStep(
+                        runID: runID, at: i,
+                        state: .skipped("No target data found in ChEMBL for these drugs")
+                    )
                 } else {
-                    state = .skipped("No target overlap among prescribed drugs")
+                    updateStep(
+                        runID: runID, at: i, state: .done,
+                        detail: "No target overlap among prescribed drugs"
+                    )
                 }
             } else {
-                state = .done
+                updateStep(runID: runID, at: i, state: .done)
             }
-            updateStep(runID: runID, at: i, state: state)
         }
     }
 
@@ -1305,13 +1358,14 @@ struct TreatmentAuditorView: View {
 
         if let i = stepIndex {
             let coverage = outcome.perDrug.filter { !$0.topEvents.isEmpty }.count
-            let state: AuditStep.State
             if coverage == 0 {
-                state = .skipped("No FAERS reports for these drugs")
+                updateStep(
+                    runID: runID, at: i, state: .done,
+                    detail: "No FAERS reports for these drugs"
+                )
             } else {
-                state = .done
+                updateStep(runID: runID, at: i, state: .done)
             }
-            updateStep(runID: runID, at: i, state: state)
         }
     }
 
@@ -1331,6 +1385,7 @@ struct TreatmentAuditorView: View {
     @MainActor
     private func fetchModalityTrialsParallel(
         subtypeId: Int,
+        stage: String?,
         runID: UUID
     ) async -> [TreatmentAuditPlan.ModalityTrials] {
         let modalities = ["radiation", "surgery", "chemotherapy", "targeted"]
@@ -1348,7 +1403,8 @@ struct TreatmentAuditorView: View {
                         let trials = try await BackendService.shared.fetchModalityTrials(
                             subtypeId: subtypeId,
                             modality: modality,
-                            limit: 8
+                            limit: 8,
+                            stage: stage
                         )
                         return (i, ModalityFetchOutcome(modality: modality, trials: trials, error: nil))
                     } catch {
@@ -1362,16 +1418,17 @@ struct TreatmentAuditorView: View {
                     condition: nil,
                     trials: outcome.trials
                 )
-                let state: AuditStep.State
-                if let err = outcome.error {
-                    state = .failed(err.localizedDescription)
-                } else if outcome.trials.isEmpty {
-                    state = .skipped("No \(outcome.modality) trials returned")
-                } else {
-                    state = .done
-                }
                 if let stepIndex = stepIndices[i] {
-                    updateStep(runID: runID, at: stepIndex, state: state)
+                    if let err = outcome.error {
+                        updateStep(runID: runID, at: stepIndex, state: .failed(err.localizedDescription))
+                    } else if outcome.trials.isEmpty {
+                        updateStep(
+                            runID: runID, at: stepIndex, state: .done,
+                            detail: "No \(outcome.modality) trials returned"
+                        )
+                    } else {
+                        updateStep(runID: runID, at: stepIndex, state: .done)
+                    }
                 }
             }
             return results.compactMap { $0 }
@@ -1402,6 +1459,7 @@ struct TreatmentAuditorView: View {
     @MainActor
     private func fetchTrialsForDrugs(
         _ drugs: [PrescribedDrug],
+        cancerCondition: String?,
         runID: UUID
     ) async -> [TreatmentAuditPlan.DrugTrials] {
         // One progress step covers the whole drug-trial fetch — per-drug
@@ -1440,7 +1498,11 @@ struct TreatmentAuditorView: View {
                         }
                         do {
                             let trials = try await BackendService.shared
-                                .fetchClinicalTrials(chemblId: chembl, limit: 10)
+                                .fetchClinicalTrials(
+                                    chemblId: chembl,
+                                    limit: 10,
+                                    condition: cancerCondition
+                                )
                             return (i, DrugFetchOutcome(
                                 drugTrials: TreatmentAuditPlan.DrugTrials(
                                     drugName: drug.name,
@@ -1482,19 +1544,23 @@ struct TreatmentAuditorView: View {
         let nonEmptyCount = outcomes.filter { !$0.drugTrials.trials.isEmpty }.count
 
         if let stepIndex = stepIndex {
-            let state: AuditStep.State
             if !failed.isEmpty {
                 let drugList = failed.map(\.0).joined(separator: ", ")
                 let firstMessage = failed[0].1.localizedDescription
-                state = .failed(
-                    "Trial fetch failed for \(failed.count) of \(attemptedCount) drug\(attemptedCount == 1 ? "" : "s") (\(drugList)): \(firstMessage)"
+                updateStep(
+                    runID: runID, at: stepIndex,
+                    state: .failed(
+                        "Trial fetch failed for \(failed.count) of \(attemptedCount) drug\(attemptedCount == 1 ? "" : "s") (\(drugList)): \(firstMessage)"
+                    )
                 )
             } else if nonEmptyCount == 0 {
-                state = .skipped("No trials returned for any prescribed drug")
+                updateStep(
+                    runID: runID, at: stepIndex, state: .done,
+                    detail: "No trials returned for any prescribed drug"
+                )
             } else {
-                state = .done
+                updateStep(runID: runID, at: stepIndex, state: .done)
             }
-            updateStep(runID: runID, at: stepIndex, state: state)
         }
 
         return outcomes.map(\.drugTrials)
@@ -1570,6 +1636,14 @@ struct AuditStep: Identifiable, Hashable {
     let id = UUID()
     let label: String
     let state: State
+    /// Optional informational note paired with the state. Used primarily
+    /// with `.done` to surface "ran cleanly, here's what happened" details
+    /// (e.g. "No duplicates found", "No interactions among prescribed
+    /// drugs") without re-using `.skipped` for a step that actually ran.
+    /// `.skipped(reason)` and `.failed(message)` keep their associated
+    /// values for backward compatibility; this field augments them when
+    /// also set.
+    var detail: String? = nil
 
     enum State: Hashable {
         case running
@@ -1590,7 +1664,7 @@ private struct AuditStepList: View {
                     Text(step.label)
                         .appFont(.caption)
                         .foregroundColor(.primary)
-                    if let detail = stateDetail(step.state) {
+                    if let detail = renderedDetail(step) {
                         Text("— \(detail)")
                             .appFont(.caption2)
                             .foregroundColor(.secondary)
@@ -1623,8 +1697,13 @@ private struct AuditStepList: View {
         }
     }
 
-    private func stateDetail(_ state: AuditStep.State) -> String? {
-        switch state {
+    /// Pull the human-readable note for a step from either the explicit
+    /// `detail` field (preferred — used with `.done` for "ran cleanly,
+    /// here's what happened" annotations) or fall back to the
+    /// associated value on `.skipped` / `.failed`.
+    private func renderedDetail(_ step: AuditStep) -> String? {
+        if let detail = step.detail, !detail.isEmpty { return detail }
+        switch step.state {
         case .skipped(let reason): return reason
         case .failed(let message): return message
         case .running, .done: return nil
@@ -1672,12 +1751,12 @@ private struct DrugMergeNotesCallout: View {
     }
 }
 
-/// Renders pairwise DrugBank drug-drug interactions as a deterministic
+/// Renders pairwise DDInter drug-drug interactions as a deterministic
 /// safety callout (issue #47). Distinct from the AI-inferred audit text
-/// — these rows are factual lookups from DrugBank, sorted severe →
-/// moderate → minor → unknown by the backend.
+/// — these rows are factual lookups from DDInter, sorted Major →
+/// Moderate → Minor → unknown by the backend.
 ///
-/// When `dataAvailable=false` the view renders a "DrugBank XML not loaded"
+/// When `dataAvailable=false` the view renders a "DDInter not loaded"
 /// hint instead of "no interactions" — those are very different
 /// statements and conflating them would be a safety hazard.
 private struct DrugInteractionsCallout: View {
@@ -1695,7 +1774,7 @@ private struct DrugInteractionsCallout: View {
             }
 
             if !dataAvailable {
-                Text("DrugBank XML hasn't been loaded into the local database, so interactions can't be checked. Run `python backend/load_drugbank_interactions.py` after dropping the DrugBank XML at `data/drugbank_cache/drugbank.xml` (free academic registration at go.drugbank.com).")
+                Text("DDInter hasn't been loaded into the local database, so interactions can't be checked. Run `python backend/load_ddinter_interactions.py` to fetch the eight ATC-class CSVs from ddinter.scbdd.com (no registration required). DDInter is licensed CC BY-NC-SA 4.0 — non-commercial use only.")
                     .appFont(.caption2)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1704,12 +1783,12 @@ private struct DrugInteractionsCallout: View {
                     interactionRow(row)
                 }
                 if !unmatched.isEmpty {
-                    Text("Couldn't match in DrugBank: \(unmatched.joined(separator: ", "))")
+                    Text("Couldn't match in DDInter: \(unmatched.joined(separator: ", "))")
                         .appFont(.caption2)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Source: DrugBank. Severity is heuristic from the description text — confirm with the prescribing clinician.")
+                Text("Source: DDInter (ddinter.scbdd.com), CC BY-NC-SA 4.0. Severity (Major / Moderate / Minor) is curated by the DDInter team — confirm with the prescribing clinician.")
                     .appFont(.caption2)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1728,7 +1807,13 @@ private struct DrugInteractionsCallout: View {
     }
 
     private var hasSevere: Bool {
-        interactions.contains { $0.severity?.lowercased() == "severe" }
+        // DDInter labels its top severity tier "Major"; some legacy fixtures
+        // use "Severe". Treat both as the top-risk band so the red callout
+        // styling actually applies to real DDInter rows.
+        interactions.contains {
+            let sev = $0.severity?.lowercased()
+            return sev == "severe" || sev == "major"
+        }
     }
 
     private var calloutColor: Color {
@@ -1743,7 +1828,10 @@ private struct DrugInteractionsCallout: View {
         if interactions.isEmpty {
             return "Drug-drug interactions: none found"
         }
-        let severeCount = interactions.filter { $0.severity?.lowercased() == "severe" }.count
+        let severeCount = interactions.filter {
+            let sev = $0.severity?.lowercased()
+            return sev == "severe" || sev == "major"
+        }.count
         if severeCount > 0 {
             return "Drug-drug interactions (\(interactions.count) found, \(severeCount) severe)"
         }
@@ -1778,7 +1866,7 @@ private struct DrugInteractionsCallout: View {
 
     private func severityColor(_ severity: String) -> Color {
         switch severity.lowercased() {
-        case "severe": return .red
+        case "severe", "major": return .red
         case "moderate": return .orange
         case "minor": return .yellow
         default: return .secondary

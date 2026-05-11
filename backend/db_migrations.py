@@ -158,7 +158,7 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
         None  # Pure additive — no rollback needed.
     ),
     11: (
-        "Add drug_interactions table for Treatment Auditor pairwise DrugBank interactions (issue #47)",
+        "Add drug_interactions table for Treatment Auditor pairwise drug-drug interactions (issue #47)",
         [
             """
             CREATE TABLE IF NOT EXISTS drug_interactions (
@@ -175,7 +175,7 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
             "CREATE INDEX IF NOT EXISTS idx_drug_interactions_a_name ON drug_interactions(LOWER(drug_a_name))",
             "CREATE INDEX IF NOT EXISTS idx_drug_interactions_b_name ON drug_interactions(LOWER(drug_b_name))",
         ],
-        None  # Empty until the user populates from DrugBank XML.
+        None  # Empty until the user populates the interaction table.
     ),
     12: (
         "Add drug_targets_cache + chembl_targets_cache for Treatment Auditor target overlap (issue #53)",
@@ -212,6 +212,33 @@ MIGRATIONS: Dict[int, Tuple[str, List[str], Optional[List[str]]]] = {
             """,
         ],
         None  # Pure additive cache table.
+    ),
+    14: (
+        "Rebuild drug_interactions for DDInter (issue #67) — adds drug_a_norm / drug_b_norm columns "
+        "for case-insensitive name matching and drops the legacy lowercase indexes the DrugBank "
+        "loader relied on. The table is wiped — the DDInter loader rehydrates it.",
+        [
+            "DROP INDEX IF EXISTS idx_drug_interactions_a_name",
+            "DROP INDEX IF EXISTS idx_drug_interactions_b_name",
+            "DROP TABLE IF EXISTS drug_interactions",
+            """
+            CREATE TABLE drug_interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                drug_a_id TEXT NOT NULL,
+                drug_a_name TEXT NOT NULL,
+                drug_a_norm TEXT NOT NULL,
+                drug_b_id TEXT NOT NULL,
+                drug_b_name TEXT NOT NULL,
+                drug_b_norm TEXT NOT NULL,
+                severity TEXT,
+                description TEXT,
+                UNIQUE(drug_a_id, drug_b_id)
+            )
+            """,
+            "CREATE INDEX idx_ddi_a_norm ON drug_interactions(drug_a_norm)",
+            "CREATE INDEX idx_ddi_b_norm ON drug_interactions(drug_b_norm)",
+        ],
+        None  # Empty until the user runs load_ddinter_interactions.py.
     ),
 }
 

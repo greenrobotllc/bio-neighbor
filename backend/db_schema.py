@@ -6,7 +6,7 @@ Defines all tables and their structure.
 from typing import Dict, List, Tuple
 
 # Schema version - increment when making schema changes
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Table definitions
 # Format: table_name -> (columns, indexes, foreign_keys)
@@ -367,19 +367,25 @@ SCHEMA: Dict[str, Dict] = {
     },
 
     'drug_interactions': {
+        # Populated by backend/load_ddinter_interactions.py from DDInter
+        # (https://ddinter.scbdd.com), CC BY-NC-SA 4.0. The norm columns
+        # hold a lowercased / punctuation-stripped form of each drug name
+        # for case-insensitive matching from the API.
         'columns': [
             ('id', 'INTEGER PRIMARY KEY AUTOINCREMENT'),
             ('drug_a_id', 'TEXT NOT NULL'),
             ('drug_a_name', 'TEXT NOT NULL'),
+            ('drug_a_norm', 'TEXT NOT NULL'),
             ('drug_b_id', 'TEXT NOT NULL'),
             ('drug_b_name', 'TEXT NOT NULL'),
-            ('description', 'TEXT'),
+            ('drug_b_norm', 'TEXT NOT NULL'),
             ('severity', 'TEXT'),
+            ('description', 'TEXT'),
         ],
         'indexes': [
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_drug_interactions_pair ON drug_interactions(drug_a_id, drug_b_id)',
-            'CREATE INDEX IF NOT EXISTS idx_drug_interactions_a_name ON drug_interactions(LOWER(drug_a_name))',
-            'CREATE INDEX IF NOT EXISTS idx_drug_interactions_b_name ON drug_interactions(LOWER(drug_b_name))',
+            'CREATE INDEX IF NOT EXISTS idx_ddi_a_norm ON drug_interactions(drug_a_norm)',
+            'CREATE INDEX IF NOT EXISTS idx_ddi_b_norm ON drug_interactions(drug_b_norm)',
         ],
         'foreign_keys': []
     },

@@ -319,7 +319,7 @@ final class OllamaService {
     /// relevant to *this* patient (right subtype, right stage, etc.) rather
     /// than summarizing the source in the abstract.
     ///
-    /// Deliberately omits the DrugBank / target-overlap / FAERS deterministic
+    /// Deliberately omits the DDInter / target-overlap / FAERS deterministic
     /// findings — those are only relevant in the final synthesis (where the
     /// model is asked to restate them verbatim). Including them per-source
     /// would (a) waste tokens on every mini-summary call and (b) tempt the
@@ -360,7 +360,7 @@ final class OllamaService {
         return lines.joined(separator: "\n")
     }
 
-    /// Pre-LLM deterministic findings (DrugBank interactions, ChEMBL
+    /// Pre-LLM deterministic findings (DDInter interactions, ChEMBL
     /// target overlap, FAERS symptom→reaction matches). Returns "" when
     /// nothing was found AND no data-availability hint is needed, so the
     /// caller can append unconditionally.
@@ -370,20 +370,30 @@ final class OllamaService {
     /// across digests.
     static func deterministicFindingsSummary(_ plan: TreatmentAuditPlan) -> String {
         var lines: [String] = []
-        // DrugBank pairwise interactions (issue #47). Surfaced as a
-        // labelled fact list so the LLM treats them as deterministic
-        // findings rather than something to infer or rewrite.
-        if !plan.drugInteractions.isEmpty {
-            lines.append("Known pairwise drug-drug interactions (DrugBank):")
+        // DDInter pairwise interactions (issue #47). Always emits a
+        // status line — three distinct states (data unavailable /
+        // checked-none-found / findings present) so the LLM has explicit
+        // input for section 4 of the synthesis. Without the
+        // "checked, none found" line the model would silently fall back
+        // to "the plan does not provide information," which falsely
+        // implies the user forgot to supply data.
+        if !plan.drugInteractionDataAvailable {
+            lines.append("Drug-drug interaction data: unavailable (DDInter not loaded server-side).")
+        } else if !plan.drugInteractions.isEmpty {
+            lines.append("Known pairwise drug-drug interactions (DDInter):")
             for row in plan.drugInteractions {
                 let sev = (row.severity?.isEmpty == false) ? row.severity! : "unknown"
                 let desc = row.description ?? ""
                 lines.append("- \(row.drugA) ↔ \(row.drugB) [severity: \(sev)]: \(desc)")
             }
-        } else if !plan.drugInteractionDataAvailable {
-            lines.append("Drug-drug interaction data: unavailable (DrugBank XML not loaded server-side).")
+        } else {
+            lines.append(
+                "Pairwise drug-drug interactions (DDInter): checked, "
+                + "no interactions found among the prescribed drugs."
+            )
         }
-        // Mechanism-of-action target overlap (issue #53).
+        // Mechanism-of-action target overlap (issue #53). Always emits a
+        // status line — same rationale as the DDInter block above.
         if !plan.targetOverlaps.isEmpty {
             lines.append("Mechanism/target overlap among prescribed drugs (ChEMBL):")
             for row in plan.targetOverlaps {
@@ -392,6 +402,11 @@ final class OllamaService {
                 let actionB = row.actionTypeB ?? "?"
                 lines.append("- \(row.drugA) (\(actionA)) and \(row.drugB) (\(actionB)) both act on \(target).")
             }
+        } else {
+            lines.append(
+                "Mechanism/target overlap (ChEMBL): checked, "
+                + "no shared targets found among the prescribed drugs."
+            )
         }
         // FAERS symptom→reaction matches (issue #46). Only surface the
         // matches — top-events tables are too noisy for the prompt and
@@ -449,7 +464,7 @@ final class OllamaService {
         lines.append(planContextSummary(plan))
         lines.append("")
 
-        // Deterministic findings (DrugBank / ChEMBL target / FAERS) live in
+        // Deterministic findings (DDInter / ChEMBL target / FAERS) live in
         // their own block so the synthesis prompt sees them ONCE — they
         // were intentionally omitted from `planContextSummary` to avoid
         // duplicating the same facts across every per-source mini-summary.
@@ -478,14 +493,16 @@ final class OllamaService {
         }
         lines.append("")
 
-        lines.append("Write a treatment-plan audit (350-550 words) addressing, in numbered sections:")
+        lines.append("Write a treatment-plan audit (400-650 words) addressing, in numbered sections:")
+        lines.append("Use plain text and Unicode characters only — do NOT emit LaTeX math (no $\\leftrightarrow$, no $\\to$, etc.). The arrow character ↔ is fine to use as-is when restating the deterministic findings.")
         lines.append("1. Efficacy signals: do the listed drugs have positive trial evidence in this subtype/stage? Cite NCT IDs.")
         lines.append("2. Alternative or adjunct regimens: across the modality summaries (radiation / surgery / chemotherapy / targeted), what trial arms showed clearly better outcomes than drug-only approaches? Compare drug-only vs drug+modality arms when the summaries surface them. Cite NCT IDs.")
         lines.append("3. Symptom & side-effect concerns: any of the patient's symptoms/side effects notably associated with the listed drugs? If the plan section above includes OpenFDA FAERS reaction matches, restate the top one or two specifically (drug, symptom→term, rank, raw counts). Frame these as post-market reporting (association, not causation) — do NOT invent counts.")
-        lines.append("4. Drug-drug interactions: if the patient plan section above includes DrugBank pairwise interactions, restate them verbatim and prioritize severe ones for the prescriber. Do NOT invent interactions — only repeat what the plan section listed. If the plan says interaction data was unavailable, say so explicitly.")
-        lines.append("5. Mechanism overlap: if the plan section above lists drugs that act on the same target, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. Do NOT invent overlaps — only speak to what was listed.")
-        lines.append("6. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
-        lines.append("7. Uncertainty: where is evidence thin? What would you ask the oncology team?")
+        lines.append("4. Drug-drug interactions: restate exactly what the deterministic findings block above says about drug-drug interactions. If it lists DDInter pairwise interactions, restate them verbatim and prioritize Major-severity ones for the prescriber. If it says 'checked, no interactions found', say that explicitly — the audit checked DDInter and no concerning pairs surfaced; do NOT say 'the plan does not provide information.' If it says interaction data was unavailable, say that. Do NOT invent interactions.")
+        lines.append("5. Mechanism overlap: restate exactly what the deterministic findings block above says about target overlap. If it lists shared targets, briefly note whether that's likely intentional combination therapy (e.g. CDK4/6 + AI in HR+ breast cancer) or potentially redundant. If it says 'checked, no shared targets found', say that explicitly — the audit checked ChEMBL and no overlap surfaced; do NOT say 'the plan does not provide information.' Do NOT invent overlaps.")
+        lines.append("6. Surgical & radiation considerations: address surgery and radiation explicitly when they are part of standard of care for this subtype/stage (use the PDQ summary as the authoritative source — surgery is primary for most early-stage solid tumours including breast, colon, and many lung cancers). Comment on: (a) whether the patient's plan includes the surgical/radiation steps PDQ identifies as standard, (b) timing and sequencing relative to the listed systemic therapy (neoadjuvant vs adjuvant), (c) lymph node assessment when applicable, and (d) any scheduled surgical or radiation treatments the patient supplied — name each one and comment on PDQ alignment. If PDQ doesn't cover surgical/radiation guidance for this cancer (hematologic / advanced metastatic / unmapped), say so. Use \"discuss with your surgical oncologist / radiation oncologist\" framing.")
+        lines.append("7. Plan gaps: drug classes AND treatment modalities the standard of care for this subtype/stage typically includes that aren't in the plan. Use the PDQ summary as the authoritative source for SOC framing. Use \"discuss with your oncology team\" language.")
+        lines.append("8. Uncertainty: where is evidence thin? What would you ask the oncology team?")
         lines.append("")
         lines.append("Then add a final \"Further reading\" block listing:")
         if let pdq = plan.pdqSummary {
@@ -596,7 +613,7 @@ struct TreatmentAuditPlan {
         let trials: [ClinicalTrial]
     }
 
-    /// One pairwise DrugBank interaction row included in the audit context
+    /// One pairwise DDInter interaction row included in the audit context
     /// (issue #47). The LLM is instructed to *acknowledge* these
     /// deterministic findings, not infer new ones.
     struct InteractionRow {
@@ -641,12 +658,12 @@ struct TreatmentAuditPlan {
     let drugTrials: [DrugTrials]
     let modalityTrials: [ModalityTrials]
     let pdqSummary: PDQSummary?
-    /// DrugBank pairwise interactions among the prescribed drugs. Empty
-    /// when DrugBank XML wasn't loaded or no pairs interact. Treated as
+    /// DDInter pairwise interactions among the prescribed drugs. Empty
+    /// when DDInter wasn't loaded or no pairs interact. Treated as
     /// deterministic facts in the prompt — the LLM should not invent new
     /// rows.
     var drugInteractions: [InteractionRow] = []
-    /// True when the DrugBank XML was loaded server-side. False means
+    /// True when DDInter was loaded server-side. False means
     /// the audit can't speak to interactions at all (different from
     /// "no interactions found").
     var drugInteractionDataAvailable: Bool = true
@@ -657,4 +674,39 @@ struct TreatmentAuditPlan {
     /// Symptom→FAERS reaction matches (issue #46) — one row per
     /// (drug, symptom) where the symptom matched a top reported term.
     var faersSymptomMatches: [FAERSSymptomMatchRow] = []
+}
+
+// MARK: - Output post-processing
+
+/// Replace common LaTeX math escapes the LLM may emit despite being told
+/// not to. Some local models (notably gemma) reflexively wrap arrows in
+/// LaTeX (`$\leftrightarrow$`) when they see Unicode arrows in the prompt
+/// context, even after explicit instruction. The audit report renders
+/// Markdown-ish prose — LaTeX renders as literal `$\foo$` garbage.
+/// Targeted replacements rather than regex so we don't munge legitimate
+/// dollar amounts or `\X` escapes.
+func stripLatexFromAuditText(_ text: String) -> String {
+    let replacements: [(String, String)] = [
+        ("$\\leftrightarrow$", "↔"),
+        ("$\\Leftrightarrow$", "↔"),
+        ("$\\rightarrow$", "→"),
+        ("$\\Rightarrow$", "→"),
+        ("$\\to$", "→"),
+        ("$\\leftarrow$", "←"),
+        ("$\\Leftarrow$", "←"),
+        ("$\\sim$", "~"),
+        ("$\\approx$", "≈"),
+        ("$\\le$", "≤"),
+        ("$\\ge$", "≥"),
+        ("$\\pm$", "±"),
+        ("$\\times$", "×"),
+        ("$\\alpha$", "α"),
+        ("$\\beta$", "β"),
+        ("$\\mu$", "μ"),
+    ]
+    var out = text
+    for (tex, unicode) in replacements {
+        out = out.replacingOccurrences(of: tex, with: unicode)
+    }
+    return out
 }
