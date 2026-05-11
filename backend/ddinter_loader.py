@@ -147,18 +147,45 @@ def populate_interactions_table(
     `{parsed, inserted, skipped}` for the loader CLI to print.
 
     Wipe-and-reload — partial updates would let stale rows linger when
-    DDInter drops/renames a pair between releases."""
+    DDInter drops/renames a pair between releases.
+
+    The reload is atomic: rows are staged into `drug_interactions_tmp`,
+    and the live `drug_interactions` table is only touched at the end
+    inside a single transaction that runs DELETE + INSERT-FROM-SELECT.
+    If anything fails before that commit, the live table is unchanged
+    and `is_interactions_loaded()` keeps reporting the prior state."""
     if cache_dir is not None:
         global DDINTER_CACHE_DIR
         DDINTER_CACHE_DIR = cache_dir
 
     paths = [_fetch_csv(c, force_refresh=force_refresh) for c in DDINTER_ATC_CLASSES]
 
+    tmp_table = TABLE_NAME + "_tmp"
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA busy_timeout = 5000")
     try:
+        # DDL setup first so the upcoming DML transaction isn't broken up
+        # by implicit commits triggered by CREATE/DROP. After this block
+        # no transaction is open; the first executemany() below opens the
+        # single implicit transaction that holds the entire load + swap.
         ensure_interactions_table(conn)
-        conn.execute(f"DELETE FROM {TABLE_NAME}")
+        conn.execute(f"DROP TABLE IF EXISTS {tmp_table}")
+        conn.execute(
+            f"""
+            CREATE TABLE {tmp_table} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                drug_a_id TEXT NOT NULL,
+                drug_a_name TEXT NOT NULL,
+                drug_a_norm TEXT NOT NULL,
+                drug_b_id TEXT NOT NULL,
+                drug_b_name TEXT NOT NULL,
+                drug_b_norm TEXT NOT NULL,
+                severity TEXT,
+                description TEXT,
+                UNIQUE(drug_a_id, drug_b_id)
+            )
+            """
+        )
         conn.commit()
 
         parsed = 0
@@ -170,7 +197,16 @@ def populate_interactions_table(
         seen: Set[Tuple[str, str]] = set()
         batch: List[Tuple] = []
         BATCH_SIZE = 5000
+        insert_sql = (
+            f"INSERT OR IGNORE INTO {tmp_table} "
+            "(drug_a_id, drug_a_name, drug_a_norm, "
+            "drug_b_id, drug_b_name, drug_b_norm, "
+            "severity, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
 
+        # Single implicit transaction from the first executemany() through
+        # the final conn.commit() below. No intermediate commits, so
+        # TABLE_NAME stays untouched until the atomic swap lands.
         for path in paths:
             for row in parse_ddinter_csv(path):
                 parsed += 1
@@ -198,14 +234,7 @@ def populate_interactions_table(
                 inserted += 1
 
                 if len(batch) >= BATCH_SIZE:
-                    cur.executemany(
-                        f"INSERT OR IGNORE INTO {TABLE_NAME} "
-                        "(drug_a_id, drug_a_name, drug_a_norm, "
-                        "drug_b_id, drug_b_name, drug_b_norm, "
-                        "severity, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        batch,
-                    )
-                    conn.commit()
+                    cur.executemany(insert_sql, batch)
                     batch.clear()
 
                 if parsed % progress_every == 0:
@@ -215,16 +244,47 @@ def populate_interactions_table(
                     )
 
         if batch:
-            cur.executemany(
-                f"INSERT OR IGNORE INTO {TABLE_NAME} "
-                "(drug_a_id, drug_a_name, drug_a_norm, "
-                "drug_b_id, drug_b_name, drug_b_norm, "
-                "severity, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                batch,
-            )
-            conn.commit()
+            cur.executemany(insert_sql, batch)
+
+        # Atomic swap inside the same open transaction: DELETE on
+        # TABLE_NAME runs only here, then INSERT-FROM-SELECT pulls the
+        # staged rows across, then conn.commit() flips visibility in one
+        # step. Readers see the prior rows until commit and the new rows
+        # the instant after — never a half-loaded state.
+        cur.execute(f"DELETE FROM {TABLE_NAME}")
+        cur.execute(
+            f"INSERT INTO {TABLE_NAME} "
+            "(drug_a_id, drug_a_name, drug_a_norm, "
+            " drug_b_id, drug_b_name, drug_b_norm, "
+            " severity, description) "
+            "SELECT drug_a_id, drug_a_name, drug_a_norm, "
+            "       drug_b_id, drug_b_name, drug_b_norm, "
+            "       severity, description "
+            f"FROM {tmp_table}"
+        )
+        conn.commit()
+
+        # Cleanup outside the transactional region. If this fails the
+        # load is still complete; the next run's DROP IF EXISTS clears
+        # the stale staging table.
+        conn.execute(f"DROP TABLE IF EXISTS {tmp_table}")
+        conn.commit()
 
         return {"parsed": parsed, "inserted": inserted, "skipped": skipped}
+    except Exception:
+        # Pre-swap failure: nothing was committed against TABLE_NAME, so
+        # the live table is unchanged. Best-effort tmp cleanup so the
+        # next attempt starts clean.
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {tmp_table}")
+            conn.commit()
+        except sqlite3.Error:
+            logger.exception("DDInter loader: failed to drop temp table during error cleanup")
+        raise
     finally:
         conn.close()
 
