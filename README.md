@@ -238,7 +238,14 @@ This analogy allows CF-inspired models to prioritize molecules based on structur
 
 3. **Activate the virtual environment:**
    ```bash
+   # macOS / Linux
    source venv/bin/activate
+
+   # Windows (PowerShell)
+   .\venv\Scripts\Activate.ps1
+
+   # Windows (cmd.exe)
+   venv\Scripts\activate.bat
    ```
 
 4. **Initialize database schema (first time only):**

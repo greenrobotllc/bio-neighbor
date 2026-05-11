@@ -90,12 +90,20 @@ def ensure_interactions_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _fetch_csv(atc_class: str, *, force_refresh: bool = False) -> Path:
+def _fetch_csv(
+    atc_class: str,
+    *,
+    cache_root: Optional[Path] = None,
+    force_refresh: bool = False,
+) -> Path:
     """Download one ATC-class CSV into the cache and return its path. Cache
-    hits skip the network unless `force_refresh` is True."""
-    DDINTER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    hits skip the network unless `force_refresh` is True. `cache_root`
+    overrides the module-level default for this call only (tests pass a
+    tempdir here)."""
+    root = cache_root if cache_root is not None else DDINTER_CACHE_DIR
+    root.mkdir(parents=True, exist_ok=True)
     filename = f"ddinter_downloads_code_{atc_class}.csv"
-    cached = DDINTER_CACHE_DIR / filename
+    cached = root / filename
     if cached.exists() and not force_refresh:
         logger.info("DDInter cache hit: %s", cached)
         return cached
@@ -154,11 +162,15 @@ def populate_interactions_table(
     inside a single transaction that runs DELETE + INSERT-FROM-SELECT.
     If anything fails before that commit, the live table is unchanged
     and `is_interactions_loaded()` keeps reporting the prior state."""
-    if cache_dir is not None:
-        global DDINTER_CACHE_DIR
-        DDINTER_CACHE_DIR = cache_dir
+    # Resolve cache root once, locally — don't mutate the module-level
+    # DDINTER_CACHE_DIR (that override would leak to every subsequent
+    # caller of _fetch_csv in this process).
+    cache_root = cache_dir if cache_dir is not None else DDINTER_CACHE_DIR
 
-    paths = [_fetch_csv(c, force_refresh=force_refresh) for c in DDINTER_ATC_CLASSES]
+    paths = [
+        _fetch_csv(c, cache_root=cache_root, force_refresh=force_refresh)
+        for c in DDINTER_ATC_CLASSES
+    ]
 
     tmp_table = TABLE_NAME + "_tmp"
     conn = sqlite3.connect(DB_PATH)
