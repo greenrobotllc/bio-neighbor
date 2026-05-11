@@ -4,9 +4,11 @@
   <img src="images/bioneighbor_icon_256.png" alt="BioNeighbor App Icon" width="128" height="128">
 </div>
 
-BioNeighbor: A molecular similarity engine inspired by collaborative filtering — find "neighbor" molecules to existing drugs and bioactive compounds.
+**BioNeighbor** is an open-source, on-device cancer-research toolkit. Turn a cancer treatment plan into a citation-grounded second opinion — locally, privately, in plain language.
 
-**Discover structurally and functionally similar molecules to explore biochemical pathways and improve drug efficacy.**
+**Treatment Auditor:** synthesize six public medical databases (NCI PDQ, ClinicalTrials.gov, DDInter, ChEMBL, RxNorm, OpenFDA FAERS) into a printable PDF audit, powered by **Gemma 4** running on your own machine. No cloud, no telemetry, no patient data leaves the device.
+
+BioNeighbor also retains its original molecular-similarity engine (FAISS + RDKit + ChEMBL) — the collaborative-filtering-inspired feature the project takes its name from — for exploring "neighbor" compounds to known drugs.
 
 ---
 
