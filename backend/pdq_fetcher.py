@@ -152,22 +152,21 @@ def _extract_sections(html: str) -> List[Dict]:
 
 
 def _normalize_marker_keywords(marker: str) -> List[str]:
-    """HER2+ → ['her2+', 'her2-positive', 'her2'].
-    HER2- → ['her2-', 'her2-negative', 'her2'].
-    Captures both the raw form and the prose form PDQ uses in headings."""
+    """HER2+ → ['her2+', 'her2-positive'].
+    HER2- → ['her2-', 'her2-negative'].
+    HER2  → ['her2'].
+
+    When polarity is known the bare base ('her2') is intentionally omitted —
+    otherwise it substring-matches the opposite-polarity heading
+    ('HER2-Positive') and HER2-low variants in a HER2-negative audit."""
     base = marker.strip().lower()
     if not base:
         return []
-    keywords = {base}
     if base.endswith("+"):
-        keywords.add(base[:-1] + "-positive")
-        keywords.add(base[:-1])
-    elif base.endswith("-"):
-        keywords.add(base[:-1] + "-negative")
-        keywords.add(base[:-1])
-    else:
-        keywords.add(base)
-    return [k for k in keywords if k]
+        return [base, base[:-1] + "-positive"]
+    if base.endswith("-"):
+        return [base, base[:-1] + "-negative"]
+    return [base]
 
 
 def _score_section(
@@ -179,6 +178,9 @@ def _score_section(
     """Returns (score, always_include).
 
     Heuristic, kept readable:
+      - 0    title names a polarity that conflicts with a patient marker
+              (e.g. 'HER2-Positive' or 'HER2-Low' when patient is HER2-).
+              Section is dropped from consideration entirely.
       - +10  title matches a stage keyword
       - +5   title matches a marker (HER2+ → 'her2-positive')
       - +5   title matches a stage_detail token
@@ -187,6 +189,9 @@ def _score_section(
     """
     title_lc = section["title"].lower()
     text_lc = section.get("text", "").lower()
+
+    if _section_marker_conflict(title_lc, markers):
+        return 0, False
 
     always = any(frag in title_lc for frag in _ALWAYS_INCLUDE_TITLE_FRAGMENTS)
     score = 2 if always else 0
@@ -215,11 +220,54 @@ def _score_section(
 
     for marker in markers:
         for kw in _normalize_marker_keywords(marker):
-            if kw and kw in title_lc:
+            if kw and _marker_match(kw, title_lc):
                 score += 5
                 break
 
     return score, always
+
+
+# For a polarity-known patient marker (X+ or X-), section titles naming the
+# opposite polarity are clinically about a different patient population.
+# '-low' is treated as conflicting for BOTH polarities: HER2-low is a distinct
+# therapeutic category (e.g. trastuzumab deruxtecan eligibility) that overlaps
+# with but is not the same as either classical HER2-negative or HER2-positive,
+# so PDQ sections titled "HER2-Low" should be picked up only when the patient
+# is explicitly marked as such (not currently in the taxonomy).
+_CONFLICTING_SUFFIXES = {
+    "+": ["-", "-negative", "-low", "-intermediate", "-equivocal"],
+    "-": ["+", "-positive", "-low", "-intermediate", "-equivocal"],
+}
+
+
+def _section_marker_conflict(title_lc: str, markers: List[str]) -> bool:
+    """True if the section title explicitly names a polarity that conflicts
+    with any of the patient's polarity-specific markers."""
+    for marker in markers or []:
+        base = marker.strip().lower()
+        if not base or base[-1] not in ("+", "-"):
+            continue
+        polarity = base[-1]
+        prefix = base[:-1]
+        if not prefix:
+            continue
+        for suffix in _CONFLICTING_SUFFIXES[polarity]:
+            if _marker_match(prefix + suffix, title_lc):
+                return True
+    return False
+
+
+def _marker_match(keyword: str, title_lc: str) -> bool:
+    """Word-boundary-aware substring check.
+
+    Plain `in` lets 'her2-' match 'her2-positive' / 'her2-low' (wrong
+    polarity). Anchor on word-character boundaries: the keyword itself may
+    contain '+', '-', '/', etc., but it must not be immediately adjacent to
+    a word character on either side. This blocks 'her2-' inside
+    'her2-positive' (next char 'p' is a word char) while allowing
+    'brca1/2' to match 'brca1/2-mutated' (next char '-' is a separator)."""
+    pattern = rf"(?<!\w){re.escape(keyword)}(?!\w)"
+    return re.search(pattern, title_lc) is not None
 
 
 def fetch_pdq_summary(
